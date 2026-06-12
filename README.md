@@ -70,25 +70,21 @@ git subtree pull --prefix=.agents/skills https://github.com/Musasaby/multi-ai-ag
 
 ## 開発者向け(本リポジトリの開発)
 
-本リポジトリを直接開発する際、skill を `.claude/skills/` 配下に個別にリンクすることで、編集を即座に反映できます。
+本リポジトリの `.claude` は `.agents` へのジャンクション(標準形)です。
+skill の編集はリポジトリルート直下の各ディレクトリ(`agent-workflow/` 等)が正本です。
 
-### Windows (PowerShell)
+### 注意: `.claude/skills` 経由での反映遅延
 
-```powershell
-New-Item -ItemType Directory -Path .claude\skills -Force
-foreach ($s in 'agent-workflow','agent-task-plan','agent-dispatch','agent-review-commit','agents-md-setup','workflow-update') {
-  New-Item -ItemType Junction -Path ".claude\skills\$s" -Target "$PWD\$s"
-}
-```
+ルート直下で skill を編集しても、subtree 同期(`git subtree pull` または `workflow-update` skill)で squash merge するまで、`.claude/skills` 経由の Claude Code 等には反映されません。
 
-### macOS / Linux
+**即時反映が必要な場合**は以下のいずれかを行ってください:
 
-```bash
-mkdir -p .claude/skills
-for s in agent-workflow agent-task-plan agent-dispatch agent-review-commit agents-md-setup workflow-update; do
-  ln -s "$PWD/$s" ".claude/skills/$s"
-done
-```
+1. **subtree 同期を実行する**: `workflow-update` skill を実行するか、手動で `git subtree pull` を実行します
+2. **一時的に `.agents/skills/<name>/` へ手動コピーする**: 編集した skill ディレクトリを `.agents/skills/<name>/` に一時コピー(または手動で個別ジャンクションを作成)します。ただし、subtree 同期時にマージ作業が必要になる可能性があるため、テスト用途に限定してください
+
+### 旧構成からの移行
+
+以前の「`.claude/skills` 配下に各 skill への個別ジャンクション/シンボリックリンクを作成する」方式は、現在の「`.claude` 全体を `.agents` へのジャンクションとする」標準形に統一されています。
 
 ### ワークフロー設定
 
@@ -96,4 +92,23 @@ done
 
 ```bash
 cp _templates/workflow/config.json .agents/workflow/config.json
+```
+
+## サンドボックス環境での実行注意点
+
+Codex 等のサンドボックス環境で子エージェント CLI(opencode 等)を実行する際、CLI がホームディレクトリ(`~/.config` 等)への書込を必要とする場合があります。
+
+制限環境では `EEXIST: file already exists, mkdir '~/.config/opencode'` 等のエラーで CLI が起動失敗する場合があります。対処の詳細は `agent-dispatch/SKILL.md` の「トラブルシューティング」節を参照してください。
+
+簡易対処として、子エージェント CLI 起動時に `XDG_CONFIG_HOME` をプロジェクト内の書き込み可能なディレクトリに向ける方法があります。
+
+```powershell
+# PowerShell の例
+$env:XDG_CONFIG_HOME = ".agents/workflow/.config"
+$null | opencode run $prompt
+```
+
+```bash
+# POSIX シェルの例
+XDG_CONFIG_HOME=.agents/workflow/.config opencode run "$prompt" < /dev/null
 ```
