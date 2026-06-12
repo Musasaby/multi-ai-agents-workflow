@@ -32,7 +32,7 @@ description: GitHub IssueのIDまたは計画ドキュメントのパスを引�
 
 ### 3. ファイル生成
 
-`.agents/workflow/README.md` に記載のフォーマットに従って生成する:
+`.agents/workflow/README.md` に記載のフォーマットに従って生成する(`.agents/workflow/README.md` が存在しない場合は `.agents/skills/_templates/workflow/README.md`（配布元リポジトリではルートの `_templates/workflow/README.md`）を参照する。本来は `/agents-md-setup` の再実行で `.agents/workflow/README.md` が配置されるため、利用先で欠落している場合はセットアップ手順を見直すこと):
 
 - `.agents/workflow/tasks.md` — タスク定義の正本(子エージェントも参照する)
 - `.agents/workflow/state.json` — 全タスクを `"status": "pending"`, `"retries": 0`, `"commit": null` で初期化。`source` に計画ソース、`branch` に現在のブランチを記録
