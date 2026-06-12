@@ -19,7 +19,7 @@ Claude Code 固有のパス(`CLAUDE.md`, `.claude/`)からはリンク経由で�
   ```powershell
   New-Item -ItemType Directory -Force .agents/workflow/.config/opencode/log
   ```
-- `.agents/workflow/config.json` または `.agents/workflow/README.md` が無い場合、それぞれ `_templates/workflow/config.json` / `_templates/workflow/README.md` からコピーする。**既存のファイルは上書きしない**
+- `.agents/workflow/config.json` または `.agents/workflow/README.md` が無い場合、それぞれ `_templates/workflow/config.json` / `_templates/workflow/README.md` からコピーする(skill ディレクトリから見たパスは `../_templates/workflow/config.json` / `../_templates/workflow/README.md`、利用先では `.agents/skills/_templates/workflow/config.json` / `.agents/skills/_templates/workflow/README.md`)。**既存のファイルは上書きしない**
 
 ### 2. CLAUDE.md ラッパーの作成
 
