@@ -89,6 +89,8 @@ skill の編集はリポジトリルート直下の各ディレクトリ(`agent-
 ### `.agents/skills/` への手動同期(配布元リポジトリ固有の手順)
 
 > **なぜ `git subtree pull` が使えないか**: 本リポジトリは自分自身を `.agents/skills/` に subtree として取り込む構成のため、同一ブランチからの `git subtree pull` はマージが no-op になり、prefix 側のファイルが更新されません。
+>
+> **なぜ `git subtree split` も使えないか**: `split --prefix=.agents/skills` は subtree メタデータにより**最後に取り込んだ時点の元コミット**を返すため、それ以降のルートの変更が反映されません。本リポジトリはルート全体が配布物そのものなので、`HEAD` のルートツリーを直接展開します。
 
 ルートのskill編集を `.agents/skills/` に反映する正しい手順:
 
@@ -96,21 +98,17 @@ skill の編集はリポジトリルート直下の各ディレクトリ(`agent-
 # 1. ルートの変更をコミット済みであることを確認
 git status --porcelain  # クリーンであること
 
-# 2. squash コミットを生成(ツリーのスナップショット)
-$squash = git subtree split --prefix=.agents/skills HEAD
-# → コミットハッシュ(例: 1a0aa4c)が出力される
-
-# 3. 現在の .agents/skills を削除してステージ
+# 2. 現在の .agents/skills を削除してステージ
 git rm -rq .agents/skills
 
-# 4. squash ツリーを .agents/skills に展開
-git read-tree --prefix=.agents/skills/ $squash
+# 3. HEAD のルートツリーを .agents/skills に展開
+git read-tree --prefix=.agents/skills/ HEAD
 git checkout-index -af
 
-# 5. 自己再帰ディレクトリを除去(.agents/skills/.agents が混入するため)
-git rm -rq .agents/skills/.agents
+# 4. 自己再帰ディレクトリを除去(.agents/skills/.agents が混入するため。staged のため -f が必要)
+git rm -rqf .agents/skills/.agents
 
-# 6. コミット
+# 5. コミット
 git commit -m "chore: .agents/skills を最新のskillに同期"
 ```
 
