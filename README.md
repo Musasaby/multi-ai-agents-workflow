@@ -77,40 +77,28 @@ git subtree pull --prefix=.agents/skills https://github.com/Musasaby/multi-ai-ag
 本リポジトリの `.claude` は `.agents` へのジャンクション(標準形)です。
 skill の編集はリポジトリルート直下の各ディレクトリ(`agent-workflow/` 等)が正本です。
 
-### 注意: `.claude/skills` 経由での反映遅延
+### `.agents/skills/` への同期(配布元リポジトリ固有の手順)
 
-ルート直下で skill を編集しても、subtree 同期(`git subtree pull` または `workflow-update` skill)で squash merge するまで、`.claude/skills` 経由の Claude Code 等には反映されません。
-
-**即時反映が必要な場合**は以下のいずれかを行ってください:
-
-1. **subtree 同期を実行する**(後述): ルートの変更をコミット後、下記の手動同期手順で `.agents/skills/` に反映します
-2. **一時的に `.agents/skills/<name>/` へ手動コピーする**: 編集した skill ディレクトリを `.agents/skills/<name>/` に一時コピーします。ただし、subtree 同期時にコンフリクトが起きる可能性があるため、テスト用途に限定してください
-
-### `.agents/skills/` への手動同期(配布元リポジトリ固有の手順)
-
-> **なぜ `git subtree pull` が使えないか**: 本リポジトリは自分自身を `.agents/skills/` に subtree として取り込む構成のため、同一ブランチからの `git subtree pull` はマージが no-op になり、prefix 側のファイルが更新されません。
->
-> **なぜ `git subtree split` も使えないか**: `split --prefix=.agents/skills` は subtree メタデータにより**最後に取り込んだ時点の元コミット**を返すため、それ以降のルートの変更が反映されません。本リポジトリはルート全体が配布物そのものなので、`HEAD` のルートツリーを直接展開します。
-
-ルートのskill編集を `.agents/skills/` に反映する正しい手順:
+本リポジトリでは `.agents/` 配下は**未追跡**(ローカル実行状態。`.gitignore` で除外)です。
+ルート直下で skill を編集したら、`.claude/skills` 経由の Claude Code 等に反映するため、
+以下のコピーで `.agents/skills/` を同期します(git 操作・コミットは不要):
 
 ```powershell
-# 1. ルートの変更をコミット済みであることを確認
-git status --porcelain  # クリーンであること
-
-# 2. 現在の .agents/skills を削除してステージ
-git rm -rq .agents/skills
-
-# 3. HEAD のルートツリーを .agents/skills に展開
-git read-tree --prefix=.agents/skills/ HEAD
-git checkout-index -af
-
-# 4. 自己再帰ディレクトリを除去(.agents/skills/.agents が混入するため。staged のため -f が必要)
-git rm -rqf .agents/skills/.agents
-
-# 5. コミット
-git commit -m "chore: .agents/skills を最新のskillに同期"
+# ルート直下の配布物を .agents/skills にコピー
+$items = 'agent-workflow','agent-task-plan','agent-dispatch','agent-review-commit',
+         'agent-comprehension-check','agents-md-setup','workflow-update','_templates'
+foreach ($i in $items) {
+  Remove-Item ".agents/skills/$i" -Recurse -Force -ErrorAction SilentlyContinue
+  Copy-Item $i ".agents/skills/$i" -Recurse
+}
+Copy-Item README.md .agents/skills/README.md -Force
 ```
+
+> **利用先との違い**: 利用先プロジェクトでは `.agents/skills/` は `git subtree` で取り込んだ
+> 追跡対象ですが、本リポジトリ(配布元)はルート全体が配布物そのもののため、
+> `.agents/` はローカル実行用のコピーとして未追跡で運用します。
+> なお `git subtree pull` は自己参照で no-op になり、`git subtree split` も最終取込時点の
+> コミットを返すだけのため、git ベースの同期は機能しません(コピー方式に統一した理由)。
 
 ### 旧構成からの移行
 
