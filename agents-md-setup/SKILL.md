@@ -1,6 +1,6 @@
 ---
 name: agents-md-setup
-description: AGENTS.md / .agents を正本としたエージェント共通設定のセットアップと検証。CLAUDE.mdのimportラッパー作成、.claudeリンクの作成、動作検証を行う。clone直後やリンク破損時に実行する。
+description: AGENTS.md / .agents を正本としたエージェント共通設定のセットアップと検証。テンプレートからのスキャフォールド、CLAUDE.mdのimportラッパー作成、.claudeリンクの作成、動作検証を行う。clone直後やリンク破損時に実行する。
 ---
 
 # AGENTS.md 正本化セットアップ
@@ -10,10 +10,12 @@ Claude Code 固有のパス(`CLAUDE.md`, `.claude/`)からはリンク経由で�
 
 ## 手順
 
-### 1. 正本の確認・作成
+### 1. 正本の確認・スキャフォールド
 
-- `AGENTS.md` がルートに存在するか確認。なければ作成する。このとき実体のある `CLAUDE.md`(import 1行でないもの)が存在すれば、その内容を `AGENTS.md` に移行する
+- `AGENTS.md` がルートに存在するか確認。なければ `_templates/AGENTS.md` から作成する(skill ディレクトリから見たパスは `../_templates/AGENTS.md`、利用先では `.agents/skills/_templates/AGENTS.md`)。このとき実体のある `CLAUDE.md`(import 1行でないもの)が存在すれば、その内容を `AGENTS.md` に移行する
+- `AGENTS.md` が既存の場合は、テンプレートの「マルチエージェントワークフロー」節を追記するかユーザーに提案する。**既存の内容を上書きしない**
 - `.agents/skills/`, `.agents/workflow/` ディレクトリの存在を確認
+- `.agents/workflow/config.json` または `.agents/workflow/README.md` が無い場合、それぞれ `_templates/workflow/config.json` / `_templates/workflow/README.md` からコピーする。**既存のファイルは上書きしない**
 
 ### 2. CLAUDE.md ラッパーの作成
 
