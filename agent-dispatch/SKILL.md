@@ -53,6 +53,10 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
   $prompt = Get-Content .agents/workflow/.dispatch-prompt.md -Raw
   # テンプレート例: opencode run "{prompt}" → opencode run $prompt
   ```
+- **stdin を必ず閉じて起動する**: 子エージェントCLIは stdin が TTY でない場合に
+  パイプ入力(EOF まで)を待ち続けることがあり、非対話環境では stdin が開いたままだと
+  無限にハングする。PowerShell では `$null | <CLI> run $prompt`、POSIX シェルでは
+  `<CLI> run "$prompt" < /dev/null` の形で起動すること
 - `run_in_background` で起動し、プロセス終了 = 完了通知として扱う
 - `config.json` の `timeout_seconds` を超えたら打ち切り、タスクを `in_progress` のまま
   ユーザーに報告する
