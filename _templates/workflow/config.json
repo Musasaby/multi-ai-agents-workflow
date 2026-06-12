@@ -5,5 +5,9 @@
   },
   "test_command": "",
   "verify_before_commit": false,
-  "max_fix_retries": 2
+  "max_fix_retries": 2,
+  "upstream": {
+    "url": "https://github.com/Musasaby/multi-ai-agents-workflow.git",
+    "branch": "main"
+  }
 }
