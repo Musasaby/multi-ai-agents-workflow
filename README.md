@@ -9,6 +9,7 @@ AIエージェント(Claude Code、OpenCode 等)による複数エージェン�
 | `agent-workflow/` | 全体オーケストレーター(中断再開対応) |
 | `agent-task-plan/` | 計画→タスク分解 |
 | `agent-dispatch/` | 子エージェントへの実装指示・テスト実行 |
+| `agent-comprehension-check/` | 回答済み質問ファイルの判定・解説(別セッション対応) |
 | `agent-review-commit/` | レビュー・修正再依頼・コミット |
 | `agents-md-setup/` | 正本化セットアップとリンク検証 |
 | `workflow-update/` | `git subtree` ベースの更新支援 |
@@ -65,50 +66,39 @@ git subtree pull --prefix=.agents/skills https://github.com/Musasaby/multi-ai-ag
 2. 各タスクを順次実行:
    a. 実装dispatch        → /agent-dispatch
    b. レビュー・コミット  → /agent-review-commit
-3. 全タスク完了 → サマリー報告
+      - config有効時、合格時に質問ファイルを生成
+3. 全タスク完了 → サマリー報告(未回答の質問一覧含む)
 ```
+
+理解確認(任意・デフォルト無効): 質問ファイルに回答後、`/agent-comprehension-check` で判定・解説を依頼(別セッション可)
 
 ## 開発者向け(本リポジトリの開発)
 
 本リポジトリの `.claude` は `.agents` へのジャンクション(標準形)です。
 skill の編集はリポジトリルート直下の各ディレクトリ(`agent-workflow/` 等)が正本です。
 
-### 注意: `.claude/skills` 経由での反映遅延
+### `.agents/skills/` への同期(配布元リポジトリ固有の手順)
 
-ルート直下で skill を編集しても、subtree 同期(`git subtree pull` または `workflow-update` skill)で squash merge するまで、`.claude/skills` 経由の Claude Code 等には反映されません。
-
-**即時反映が必要な場合**は以下のいずれかを行ってください:
-
-1. **subtree 同期を実行する**(後述): ルートの変更をコミット後、下記の手動同期手順で `.agents/skills/` に反映します
-2. **一時的に `.agents/skills/<name>/` へ手動コピーする**: 編集した skill ディレクトリを `.agents/skills/<name>/` に一時コピーします。ただし、subtree 同期時にコンフリクトが起きる可能性があるため、テスト用途に限定してください
-
-### `.agents/skills/` への手動同期(配布元リポジトリ固有の手順)
-
-> **なぜ `git subtree pull` が使えないか**: 本リポジトリは自分自身を `.agents/skills/` に subtree として取り込む構成のため、同一ブランチからの `git subtree pull` はマージが no-op になり、prefix 側のファイルが更新されません。
-
-ルートのskill編集を `.agents/skills/` に反映する正しい手順:
+本リポジトリでは `.agents/` 配下は**未追跡**(ローカル実行状態。`.gitignore` で除外)です。
+ルート直下で skill を編集したら、`.claude/skills` 経由の Claude Code 等に反映するため、
+以下のコピーで `.agents/skills/` を同期します(git 操作・コミットは不要):
 
 ```powershell
-# 1. ルートの変更をコミット済みであることを確認
-git status --porcelain  # クリーンであること
-
-# 2. squash コミットを生成(ツリーのスナップショット)
-$squash = git subtree split --prefix=.agents/skills HEAD
-# → コミットハッシュ(例: 1a0aa4c)が出力される
-
-# 3. 現在の .agents/skills を削除してステージ
-git rm -rq .agents/skills
-
-# 4. squash ツリーを .agents/skills に展開
-git read-tree --prefix=.agents/skills/ $squash
-git checkout-index -af
-
-# 5. 自己再帰ディレクトリを除去(.agents/skills/.agents が混入するため)
-git rm -rq .agents/skills/.agents
-
-# 6. コミット
-git commit -m "chore: .agents/skills を最新のskillに同期"
+# ルート直下の配布物を .agents/skills にコピー
+$items = 'agent-workflow','agent-task-plan','agent-dispatch','agent-review-commit',
+         'agent-comprehension-check','agents-md-setup','workflow-update','_templates'
+foreach ($i in $items) {
+  Remove-Item ".agents/skills/$i" -Recurse -Force -ErrorAction SilentlyContinue
+  Copy-Item $i ".agents/skills/$i" -Recurse
+}
+Copy-Item README.md .agents/skills/README.md -Force
 ```
+
+> **利用先との違い**: 利用先プロジェクトでは `.agents/skills/` は `git subtree` で取り込んだ
+> 追跡対象ですが、本リポジトリ(配布元)はルート全体が配布物そのもののため、
+> `.agents/` はローカル実行用のコピーとして未追跡で運用します。
+> なお `git subtree pull` は自己参照で no-op になり、`git subtree split` も最終取込時点の
+> コミットを返すだけのため、git ベースの同期は機能しません(コピー方式に統一した理由)。
 
 ### 旧構成からの移行
 
