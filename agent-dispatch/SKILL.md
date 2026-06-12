@@ -23,6 +23,7 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
 - `git status` で作業ツリーがクリーンであることを確認(未コミット変更があれば中断してユーザーに報告)
 - state.json の対象タスクが `pending` または `in_progress`(リトライ)であることを確認
 - 依存タスク(`依存:` 欄)がすべて `done` であることを確認
+- 子エージェントCLIの疎通確認: コマンドテンプレートの先頭コマンドに `--version` 等を付けて実行し、正常終了することを確認。失敗した場合はエラー出力を添えて中断しユーザーに報告する
 
 ### 2. プロンプト組み立て
 
@@ -75,3 +76,24 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
 検証を通過したら state.json を `in_review` に更新し、子エージェントの完了報告を
 `.agents/workflow/reports/<タスクID>-<試行回数>.md` に保存して、レビューフェーズ
 (`/agent-review-commit`)に引き継ぐ。
+
+## トラブルシューティング
+
+### EEXIST: file already exists, mkdir '~/.config/...'
+
+子エージェントCLI起動時に `EEXIST: file already exists, mkdir '~/.config/opencode'` 等のエラーが出てCLIが起動しない場合、サンドボックス環境でのホームディレクトリ書込制限が原因の可能性がある。
+
+**回避策**: 子エージェントCLIの起動時に `XDG_CONFIG_HOME` をプロジェクト内の書き込み可能なディレクトリ(例: `.agents/workflow/.config`)に向ける。
+
+```powershell
+# PowerShell の例
+$env:XDG_CONFIG_HOME = ".agents/workflow/.config"
+$null | <コマンドテンプレートの先頭コマンド> run $prompt
+```
+
+```bash
+# POSIX シェルの例
+XDG_CONFIG_HOME=.agents/workflow/.config <コマンドテンプレートの先頭コマンド> run "$prompt" < /dev/null
+```
+
+これにより、CLIがホームディレクトリ直下の設定ディレクトリを作成しようとするのを防ぎ、プロジェクト内のサンドボックスで動作する。
