@@ -27,6 +27,7 @@
 
 - 状態・設定の正本: `.agents/workflow/`(`config.json`, `tasks.md`, `state.json`)
 - 子エージェントとして実装を依頼された場合は、タスク定義(`.agents/workflow/tasks.md`)の受け入れ基準を満たし、テストを実行してから完了報告すること
+- 理解確認(任意): `comprehension_check.enabled` が true の場合、各タスク完了後に質問ファイルが生成されます。回答を記入して `/agent-comprehension-check` を実行すると判定・解説が得られます(別セッションでも可)
 
 ## セットアップ(clone直後)
 
