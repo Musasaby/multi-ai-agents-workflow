@@ -79,8 +79,36 @@ skill の編集はリポジトリルート直下の各ディレクトリ(`agent-
 
 **即時反映が必要な場合**は以下のいずれかを行ってください:
 
-1. **subtree 同期を実行する**: `workflow-update` skill を実行するか、手動で `git subtree pull` を実行します
-2. **一時的に `.agents/skills/<name>/` へ手動コピーする**: 編集した skill ディレクトリを `.agents/skills/<name>/` に一時コピー(または手動で個別ジャンクションを作成)します。ただし、subtree 同期時にマージ作業が必要になる可能性があるため、テスト用途に限定してください
+1. **subtree 同期を実行する**(後述): ルートの変更をコミット後、下記の手動同期手順で `.agents/skills/` に反映します
+2. **一時的に `.agents/skills/<name>/` へ手動コピーする**: 編集した skill ディレクトリを `.agents/skills/<name>/` に一時コピーします。ただし、subtree 同期時にコンフリクトが起きる可能性があるため、テスト用途に限定してください
+
+### `.agents/skills/` への手動同期(配布元リポジトリ固有の手順)
+
+> **なぜ `git subtree pull` が使えないか**: 本リポジトリは自分自身を `.agents/skills/` に subtree として取り込む構成のため、同一ブランチからの `git subtree pull` はマージが no-op になり、prefix 側のファイルが更新されません。
+
+ルートのskill編集を `.agents/skills/` に反映する正しい手順:
+
+```powershell
+# 1. ルートの変更をコミット済みであることを確認
+git status --porcelain  # クリーンであること
+
+# 2. squash コミットを生成(ツリーのスナップショット)
+$squash = git subtree split --prefix=.agents/skills HEAD
+# → コミットハッシュ(例: 1a0aa4c)が出力される
+
+# 3. 現在の .agents/skills を削除してステージ
+git rm -rq .agents/skills
+
+# 4. squash ツリーを .agents/skills に展開
+git read-tree --prefix=.agents/skills/ $squash
+git checkout-index -af
+
+# 5. 自己再帰ディレクトリを除去(.agents/skills/.agents が混入するため)
+git rm -rq .agents/skills/.agents
+
+# 6. コミット
+git commit -m "chore: .agents/skills を最新のskillに同期"
+```
 
 ### 旧構成からの移行
 
