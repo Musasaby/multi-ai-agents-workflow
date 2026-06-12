@@ -6,6 +6,10 @@
   "test_command": "",
   "verify_before_commit": false,
   "max_fix_retries": 2,
+  "comprehension_check": {
+    "enabled": false,
+    "questions_per_task": 3
+  },
   "upstream": {
     "url": "https://github.com/Musasaby/multi-ai-agents-workflow.git",
     "branch": "main"

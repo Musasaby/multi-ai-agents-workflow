@@ -65,3 +65,20 @@ state.json の `retries` を確認し:
    ```
 4. state.json: status を `done`、`commit` にコミットハッシュを記録
 5. Claude Code Task(表示用)も completed に更新
+
+### 6. 合格時: 理解確認質問の生成(設定有効時のみ)
+
+`config.json` の `comprehension_check.enabled` が `true` の場合のみ実施する:
+
+1. `.agents/workflow/comprehension/` ディレクトリがなければ作成する
+2. レビューで把握済みの diff・受け入れ基準・完了報告のみから質問を生成する(追加のファイル読み込みは行わない)
+3. 質問数は `comprehension_check.questions_per_task` に従う
+4. 以下の観点テンプレートからバランスよく質問を作成する:
+   - **設計判断**: なぜこの実装方針か、トレードオフ
+   - **動作の仕組み**: 変更したコードの処理フロー、エッジケース
+   - **依存の理解**: 実装で利用した既存モジュール・外部ライブラリ・フレームワーク機能について、その大まかな役割と仕組み
+   - **影響範囲**: この変更が他のどこに影響しうるか
+5. `agent-comprehension-check/SKILL.md` の質問ファイルフォーマットに従い、
+   `.agents/workflow/comprehension/<タスクID>.md` に保存する
+   - 質問ファイルに `## 解説` 見出しは含めない(未解説判定のため)
+6. 保存したファイルパスを会話に出力する
