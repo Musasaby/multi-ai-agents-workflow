@@ -57,17 +57,33 @@ catch { New-Item -ItemType Junction -Path .claude -Target (Resolve-Path .agents)
 
 `.claude` はリンクのためコミットしない。clone後はこのskillを再実行して再作成する。
 
-### 5. 検証(必須)
+### 5. ファイルベース検証(必須)
 
 以下をすべて確認し、結果を報告する:
 
 1. **リンク解決**: `(Get-Item .claude).LinkType` が `Junction` または `SymbolicLink` であり、`Target` が `.agents` を指す
-2. **ファイル参照**: `.claude/skills/` 配下に `.agents/skills/` と同じ SKILL.md が見えること(`Get-ChildItem .claude/skills -Recurse -Filter SKILL.md`)
-3. **skill認識**: ヘッドレス実行で project skill が認識されること
+2. **ファイル参照**: `.claude/skills/` 配下に `.agents/skills/` と同じ SKILL.md が見えること。以下を実行して、リンク経由で各 SKILL.md の frontmatter `name` を列挙する
+   ```powershell
+   Get-ChildItem .claude/skills -Recurse -Filter SKILL.md | ForEach-Object {
+       $name = (Select-String -Path $_.FullName -Pattern '^name: (.+)$' | Select-Object -First 1).Matches.Groups[1].Value
+       [PSCustomObject]@{ Path = $_.FullName; Name = $name }
+   }
+   ```
+   `.agents/skills/` 配下の SKILL.md と同一の `name` が列挙できればOK
+
+ファイルベース検証がすべて通っていれば、セットアップ自体は成功とみなす。
+
+### 6. CLI検証(任意・時間がある場合)
+
+ファイルベース検証が通っていればセットアップは成功であるが、時間に余裕がある場合は以下のCLI検証を行う。
+
+**注意**: `claude -p` の初回コールドスタートは環境構築のため60秒を超えうる。タイムアウト目安は3分とし、60秒で打ち切らないこと。
+
+1. **skill認識**: ヘッドレス実行で project skill が認識されること
    ```powershell
    claude -p "利用可能なskillのうち agent-workflow 系の名前だけを列挙して" --max-turns 1
    ```
    出力に `.agents/skills/` 配下のskill名が含まれればOK
-4. **import動作**: `claude -p "CLAUDE.mdから読み込まれたプロジェクト指示の見出しを列挙して" --max-turns 1` で AGENTS.md の内容(「マルチエージェントワークフロー」等の見出し)が返ること
+2. **import動作**: `claude -p "CLAUDE.mdから読み込まれたプロジェクト指示の見出しを列挙して" --max-turns 1` で AGENTS.md の内容(「マルチエージェントワークフロー」等の見出し)が返ること
 
-検証に失敗した項目があれば原因と対処をユーザーに報告し、勝手に構成を変えないこと。
+CLI検証に失敗しても、ファイルベース検証が通っていればセットアップ自体は成功とみなす。失敗した場合は原因と対処をユーザーに報告し、勝手に構成を変えないこと。
