@@ -1,0 +1,9 @@
+{
+  "child_agent": {
+    "command_template": "opencode run \"{prompt}\"",
+    "timeout_seconds": 1800
+  },
+  "test_command": "",
+  "verify_before_commit": false,
+  "max_fix_retries": 2
+}
