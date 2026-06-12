@@ -128,15 +128,16 @@ Codex 等のサンドボックス環境で子エージェント CLI(opencode 等
 
 制限環境では `EEXIST: file already exists, mkdir '~/.config/opencode'` 等のエラーで CLI が起動失敗する場合があります。対処の詳細は `agent-dispatch/SKILL.md` の「トラブルシューティング」節を参照してください。
 
-簡易対処として、子エージェント CLI 起動時に `XDG_CONFIG_HOME` をプロジェクト内の書き込み可能なディレクトリに向ける方法があります。
+簡易対処として、子エージェント CLI 起動時に `XDG_CONFIG_HOME` と `XDG_DATA_HOME` をプロジェクト内の書き込み可能なディレクトリに向ける方法があります。`/agents-md-setup` は `.agents/workflow/.config/opencode/log` を事前作成します。
 
 ```powershell
 # PowerShell の例
 $env:XDG_CONFIG_HOME = ".agents/workflow/.config"
+$env:XDG_DATA_HOME = ".agents/workflow/.config"
 $null | opencode run $prompt
 ```
 
 ```bash
 # POSIX シェルの例
-XDG_CONFIG_HOME=.agents/workflow/.config opencode run "$prompt" < /dev/null
+XDG_CONFIG_HOME=.agents/workflow/.config XDG_DATA_HOME=.agents/workflow/.config opencode run "$prompt" < /dev/null
 ```
