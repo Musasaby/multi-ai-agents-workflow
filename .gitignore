@@ -1,0 +1,9 @@
+# Agent link (agents-md-setup skillで再作成する)
+.claude
+# 個人設定
+.agents/settings.local.json
+# 本リポジトリでは .agents/ はローカル実行状態のため未追跡
+.agents/
+# 直下のAIエージェント設定は未追跡
+/AGENTS.md
+/CLAUDE.md
