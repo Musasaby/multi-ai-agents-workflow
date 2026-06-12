@@ -24,6 +24,16 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
 - state.json の対象タスクが `pending` または `in_progress`(リトライ)であることを確認
 - 依存タスク(`依存:` 欄)がすべて `done` であることを確認
 - 子エージェントCLIの疎通確認: コマンドテンプレートの先頭コマンドに `--version` 等を付けて実行し、正常終了することを確認。失敗した場合はエラー出力を添えて中断しユーザーに報告する
+  - **sandbox 環境で `~/.config` 作成が拒否される問題を回避するため、事前に `XDG_CONFIG_HOME` をプロジェクト内ディレクトリに設定して疎通確認する**:
+    ```powershell
+    # PowerShell
+    $env:XDG_CONFIG_HOME = ".agents/workflow/.config"
+    <コマンドテンプレートの先頭コマンド> --version   # バージョン番号が返れば疎通OK
+    ```
+    ```bash
+    # POSIX シェル
+    XDG_CONFIG_HOME=.agents/workflow/.config <コマンドテンプレートの先頭コマンド> --version
+    ```
 
 ### 2. プロンプト組み立て
 
@@ -54,6 +64,16 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
   $prompt = Get-Content .agents/workflow/.dispatch-prompt.md -Raw
   # テンプレート例: opencode run "{prompt}" → opencode run $prompt
   ```
+- **実行時も `XDG_CONFIG_HOME` を事前チェックと同じ値に設定する**: sandbox 環境では
+  `~/.config` への書き込みが制限されるため、CLI起動前に必ずプロジェクト内ディレクトリを向けること
+  ```powershell
+  # PowerShell
+  $env:XDG_CONFIG_HOME = ".agents/workflow/.config"
+  ```
+  ```bash
+  # POSIX シェル
+  export XDG_CONFIG_HOME=.agents/workflow/.config
+  ```
 - **stdin を必ず閉じて起動する**: 子エージェントCLIは stdin が TTY でない場合に
   パイプ入力(EOF まで)を待ち続けることがあり、非対話環境では stdin が開いたままだと
   無限にハングする。PowerShell では `$null | <CLI> run $prompt`、POSIX シェルでは
@@ -79,21 +99,15 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
 
 ## トラブルシューティング
 
-### EEXIST: file already exists, mkdir '~/.config/...'
+### `.agents/workflow/.config` ディレクトリの作成が拒否される
 
-子エージェントCLI起動時に `EEXIST: file already exists, mkdir '~/.config/opencode'` 等のエラーが出てCLIが起動しない場合、サンドボックス環境でのホームディレクトリ書込制限が原因の可能性がある。
+`sandbox` 環境で `.agents/workflow/.config` ディレクトリ自体の作成が権限不足等で拒否される場合は、以下のいずれかで対処する。
 
-**回避策**: 子エージェントCLIの起動時に `XDG_CONFIG_HOME` をプロジェクト内の書き込み可能なディレクトリ(例: `.agents/workflow/.config`)に向ける。
+- **昇格実行**: ディレクトリ作成コマンドを管理者権限または昇格したコンテキストで実行する
+- **事前作成**: `/agents-md-setup` 等のセットアップ時に、リポジトリのセットアップ権限で `.agents/workflow/.config` を事前に作成しておく
 
-```powershell
-# PowerShell の例
-$env:XDG_CONFIG_HOME = ".agents/workflow/.config"
-$null | <コマンドテンプレートの先頭コマンド> run $prompt
-```
+上記の対処後、事前チェックと実行の `XDG_CONFIG_HOME` 設定が正常に機能するようになる。
 
-```bash
-# POSIX シェルの例
-XDG_CONFIG_HOME=.agents/workflow/.config <コマンドテンプレートの先頭コマンド> run "$prompt" < /dev/null
-```
+### それでも `EEXIST` 等のエラーが出る場合
 
-これにより、CLIがホームディレクトリ直下の設定ディレクトリを作成しようとするのを防ぎ、プロジェクト内のサンドボックスで動作する。
+`XDG_CONFIG_HOME` を設定した上で、子エージェントCLI起動時に `EEXIST: file already exists, mkdir '~/.config/...'` 等のエラーが出る場合、テンプレートのエスケープや環境変数の引き渡しに問題がある可能性がある。テンプレート内で `{prompt}` 以外の部分に `~` (チルダ)が展開される等、意図しないパス解釈が起きていないか確認する。
