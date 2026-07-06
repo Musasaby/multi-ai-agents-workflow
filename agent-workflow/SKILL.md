@@ -29,7 +29,9 @@ description: マルチエージェント実装ワークフローのオーケス�
    a. 実装dispatch        → /agent-dispatch <タスクID>   (子がテスト実行まで担当)
    b. レビュー〜コミット   → /agent-review-commit <タスクID>
       - 不合格 → 子へ修正再依頼(リトライ上限あり) → b に戻る
-      - 合格   → コミット(configで有効なら理解確認質問を生成)→次のタスクへ
+      - 合格   → (verify_before_commit 有効時のみ)最終ゲート /agent-quality-gate
+                 - FAIL(blocking) → 不合格扱いで修正再依頼へ(b に戻る)
+                 - PASS → コミット(configで有効なら理解確認質問を生成)→次のタスクへ
 3. 全タスク完了 → サマリー報告(未回答の質問ファイル一覧を含む)
 ```
 

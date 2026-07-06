@@ -43,6 +43,10 @@ description: 子エージェントの実装をタスクの受け入れ基準に�
 
 ### 4. 不合格時: 修正依頼
 
+不合格の原因(コードレビュー指摘 / 品質ゲート FAIL)にかかわらず、同一タスクの
+修正依頼は state.json の同じ `retries` カウンタを消費する(上限は `max_fix_retries`)。
+修正依頼には不合格の原因種別を明記すること。
+
 state.json の `retries` を確認し:
 
 - `retries < max_fix_retries`(config.json): 指摘事項をまとめて **子エージェントに再依頼**
@@ -51,12 +55,22 @@ state.json の `retries` を確認し:
 - 上限超過: 親のサブエージェントまたは親自身で修正する。それでも受け入れ基準を
   満たせない場合は status を `failed` にし、経緯をまとめてユーザーにエスカレーションする
 
-### 5. 合格時: コミット
+### 5. 合格時: 最終検証とコミット
+
+(手順5.2 の品質ゲートで FAIL(blocking) になった場合はここから不合格に転じ、手順4へ戻る)
 
 1. 現在のブランチを確認。`main` 上なら **コミットせず中断**し、ユーザーに報告する
    (本来 `/agent-workflow` 開始時に `develop/*` ブランチにいるはず)
 2. `config.json` の `verify_before_commit` が `true` の場合のみ、最終ゲートとして
-   親が `test_command` を1回実行する。失敗したら不合格扱いで手順4へ
+   親が品質ゲートを1回実行する:
+   - `quality_gate` が定義されていれば `/agent-quality-gate` を実行する
+     (typecheck/lint/test をまとめて検証。`blocking` ステップの失敗のみ不合格)
+   - non-blocking ステップの失敗が formatter/linter の自動修正で解消できる見込みが
+     ある場合は、コミット前に `--fix` 付きで再実行してもよい(自動修正で生じた
+     差分もコミット対象に含め、報告に明記する)
+   - 未定義なら従来どおり `test_command` を1回実行する
+   - **FAIL(blocking)なら不合格扱い**で手順4へ。non-blocking の失敗は
+     コミット可だが、報告の「残課題」に品質ゲートの結果を必ず記載する
 3. conventional commits 形式でコミットする(タスク単位で1コミット):
    ```
    <type>: <タスクタイトルに基づく説明>
