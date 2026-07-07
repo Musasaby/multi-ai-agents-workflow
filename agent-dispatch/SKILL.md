@@ -86,13 +86,34 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
   パイプ入力(EOF まで)を待ち続けることがあり、非対話環境では stdin が開いたままだと
   無限にハングする。PowerShell では `$null | <CLI> run $prompt`、POSIX シェルでは
   `<CLI> run "$prompt" < /dev/null` の形で起動すること
+- **子エージェントの出力をログファイルへ逐次書き出す(ユーザーがリアルタイムで進捗を確認できるようにするため)**:
+  `.agents/workflow/logs/` ディレクトリを事前作成し(`agents-md-setup` 済みなら存在するはず。なければ作成)、
+  stdout/stderr を `.agents/workflow/logs/<タスクID>-<試行回数>.log` に書き込みながら起動する:
+  ```powershell
+  # PowerShell(例: タスクID=T1、試行回数=1)
+  New-Item -ItemType Directory -Force .agents/workflow/logs | Out-Null
+  $null | <CLI> run $prompt 2>&1 | Tee-Object -FilePath .agents/workflow/logs/T1-1.log
+  ```
+  ```bash
+  # POSIX シェル
+  mkdir -p .agents/workflow/logs
+  <CLI> run "$prompt" < /dev/null 2>&1 | tee .agents/workflow/logs/T1-1.log
+  ```
 - `run_in_background` で起動し、プロセス終了 = 完了通知として扱う
+- 起動直後、ユーザーが別ターミナル/別セッションでリアルタイム閲覧できるよう、以下のいずれかのコマンドを提示する(親エージェント自身が実行し続ける必要はない):
+  ```powershell
+  Get-Content .agents/workflow/logs/T1-1.log -Wait -Tail 20
+  ```
+  ```bash
+  tail -f .agents/workflow/logs/T1-1.log
+  ```
 - `config.json` の `timeout_seconds` を超えたら打ち切り、タスクを `in_progress` のまま
-  ユーザーに報告する
+  ユーザーに報告する(ログファイルには打ち切り時点までの出力が残るため、途中経過の確認に使える)
 
 ### 4. 結果検証
 
-子エージェントの出力(stdout)と `git status` / `git diff --stat` を突き合わせる:
+子エージェントの出力(stdout、および `.agents/workflow/logs/<タスクID>-<試行回数>.log`)と
+`git status` / `git diff --stat` を突き合わせる:
 
 - 完了報告フォーマットが出力に含まれているか
 - テスト結果が「全件パス」か。失敗が残っている・テスト結果の記載がない場合は
@@ -103,7 +124,8 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
 
 検証を通過したら state.json を `in_review` に更新し、子エージェントの完了報告を
 `.agents/workflow/reports/<タスクID>-<試行回数>.md` に保存して、レビューフェーズ
-(`/agent-review-commit`)に引き継ぐ。
+(`/agent-review-commit`)に引き継ぐ。ログファイル(`.agents/workflow/logs/<タスクID>-<試行回数>.log`)は
+削除せず残す(リトライ時の比較や事後調査に使えるため。`.gitignore` 済みでコミットはされない)。
 
 ## トラブルシューティング
 

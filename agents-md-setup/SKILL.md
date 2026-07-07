@@ -19,6 +19,10 @@ Claude Code 固有のパス(`CLAUDE.md`, `.claude/`)からはリンク経由で�
   ```powershell
   New-Item -ItemType Directory -Force .agents/workflow/.config/opencode/log
   ```
+- `.agents/workflow/logs/` ディレクトリを事前作成する(`agent-dispatch` が子エージェントの出力をリアルタイム閲覧用に書き出す先):
+  ```powershell
+  New-Item -ItemType Directory -Force .agents/workflow/logs
+  ```
 - `.agents/workflow/config.json` または `.agents/workflow/README.md` が無い場合、それぞれ `_templates/workflow/config.json` / `_templates/workflow/README.md` からコピーする(skill ディレクトリから見たパスは `../_templates/workflow/config.json` / `../_templates/workflow/README.md`、利用先では `.agents/skills/_templates/workflow/config.json` / `.agents/skills/_templates/workflow/README.md`)。**既存のファイルは上書きしない**
 
 ### 2. CLAUDE.md ラッパーの作成
@@ -59,6 +63,8 @@ catch { New-Item -ItemType Junction -Path .claude -Target (Resolve-Path .agents)
 .agents/settings.local.json
 # CLI 設定・キャッシュ (コミットしない)
 .agents/workflow/.config/
+# 子エージェントのライブログ (コミットしない)
+.agents/workflow/logs/
 ```
 
 `.claude` はリンクのためコミットしない。clone後はこのskillを再実行して再作成する。
