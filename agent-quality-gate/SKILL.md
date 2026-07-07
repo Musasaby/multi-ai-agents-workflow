@@ -40,6 +40,17 @@ typecheck・lint・test など複数の検証コマンドを**定義順に**実�
    `typecheck` → `lint` → `test` の順に**存在するものだけ**を採用する
    (`npm run <name>`。`blocking` は typecheck/test=true, lint=false を既定とする)
 3. どちらも解決できない場合は、その旨を報告して中断する(勝手にコマンドを推測しない)
+4. **実行対象が0件になった場合も同様に中断する**: スキップや `--steps` フィルタの結果、
+   実行するステップが1つも残らなかった場合は PASS とせず、「実行ステップなし」として
+   報告して中断する(テンプレートの雛形をコマンド未記入のまま package.json のない
+   プロジェクトに置いた場合などに、品質ゲートが素通りになるのを防ぐ)
+
+> **注意(npm 系以外のプロジェクト)**: 自動検出は `package.json` のみを対象とする。
+> Gradle / Cargo / Make 等のプロジェクトでは検出手段がないため、`quality_gate.steps` の
+> `command` を config.json に**必ず明記**すること(例: `"command": "./gradlew test"`)。
+> また、`test_command` と `quality_gate.steps` の test ステップの両方を定義する場合は、
+> 内容が乖離しないよう**同じコマンドに揃える**こと(子エージェントへのテスト指示は
+> `test_command`、親の最終ゲートは `quality_gate` を参照するため)。
 
 ## 手順
 
