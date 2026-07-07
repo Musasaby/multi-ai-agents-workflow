@@ -44,6 +44,11 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
 2. `AGENTS.md のルールに従うこと`
 3. **テスト実行指示(必須)**: 「実装後、テストを実行し全件パスするまで修正すること。
    テストコマンド: `<config.json の test_command、または受け入れ基準に記載のコマンド>`」
+   - 親側の最終ゲートでは `quality_gate`(typecheck/lint/test 等)も検証されるため、
+     `config.json` に `quality_gate` が定義されている場合は「以下の品質ゲートの
+     blocking ステップも通すこと」を指示に加え、**各 blocking ステップの `name` と
+     `command` をプロンプトに列挙する**(子は config.json を参照しない前提のため、
+     コマンドを明示しないと実行できない。コミット前の手戻りを減らす)
 4. 完了報告フォーマットの指定:
    ```
    ## 完了報告

@@ -9,6 +9,7 @@ AIエージェント(Claude Code、OpenCode 等)による複数エージェン�
 | `agent-workflow/` | 全体オーケストレーター(中断再開対応) |
 | `agent-task-plan/` | 計画→タスク分解 |
 | `agent-dispatch/` | 子エージェントへの実装指示・テスト実行 |
+| `agent-quality-gate/` | 品質ゲート(typecheck/lint/test)の設定駆動一括実行・合否報告 |
 | `agent-comprehension-check/` | 回答済み質問ファイルの判定・解説(別セッション対応) |
 | `agent-review-commit/` | レビュー・修正再依頼・コミット |
 | `agents-md-setup/` | 正本化セットアップとリンク検証 |
@@ -66,6 +67,8 @@ git subtree pull --prefix=.agents/skills https://github.com/Musasaby/multi-ai-ag
 2. 各タスクを順次実行:
    a. 実装dispatch        → /agent-dispatch
    b. レビュー・コミット  → /agent-review-commit
+      - 合格時、verify_before_commit 有効なら最終ゲート → /agent-quality-gate
+        (FAIL(blocking) なら修正再依頼に戻る)
       - config有効時、合格時に質問ファイルを生成
 3. 全タスク完了 → サマリー報告(未回答の質問一覧含む)
 ```

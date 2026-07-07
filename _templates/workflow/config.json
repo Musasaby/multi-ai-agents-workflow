@@ -5,6 +5,13 @@
   },
   "test_command": "",
   "verify_before_commit": false,
+  "quality_gate": {
+    "steps": [
+      { "name": "typecheck", "command": "", "blocking": true },
+      { "name": "test", "command": "", "blocking": true },
+      { "name": "lint", "command": "", "blocking": false }
+    ]
+  },
   "max_fix_retries": 2,
   "comprehension_check": {
     "enabled": false,
