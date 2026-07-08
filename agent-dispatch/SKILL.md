@@ -35,6 +35,7 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
     # POSIX シェル
     XDG_CONFIG_HOME=.agents/workflow/.config XDG_DATA_HOME=.agents/workflow/.config <コマンドテンプレートの先頭コマンド> --version
     ```
+- 初回dispatch前に、親側で quality_gate の typecheck コマンド(config.json の quality_gate.steps 内の blocking な typecheck の command)を1回実行してデーモンを起動しキャッシュを温めておく。具体例: `./gradlew compileDebugKotlin`
 
 ### 2. プロンプト組み立て
 
@@ -58,6 +59,8 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
    - 備考: <判断に迷った点、残課題>
    ```
 5. 「コミットは行わないこと(コミットは親エージェントが行う)」
+6. **増分コンパイル不整合の切り分け手順(必須)**: テストのコンパイルエラーが自分の変更と無関係に見える場合、まず `"-Pkotlin.incremental=false"` で再実行して全量コンパイルで切り分けること。それでも解消しない場合にのみ「既存エラー」と判断し、報告前に `git stash` で自変更を退避して再現確認すること。
+   - Gradle引数は全体を引用符で囲む流儀(`"-Pkey=value"`)を使用すること(PowerShellの引数分解問題の回避のため)
 
 修正依頼(リトライ)の場合は、上記に加えてレビュー指摘事項を冒頭に明記する。
 
