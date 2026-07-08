@@ -64,42 +64,42 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
 ### 3. 実行
 
 - state.json の対象タスクを `in_progress` に更新
-- テンプレートの `{prompt}` を展開してCLIを実行する。プロンプトは長文になるため、
-  シェルエスケープ問題を避けて一時ファイル経由で渡す:
+- プロンプトは長文になるため、シェルエスケープ問題を避けて一時ファイル経由で渡す。
+  `.agents/workflow/.dispatch-prompt-<タスクID>.md` にタスクプロンプトを書き込む
+- **デタッチ起動**: 子エージェントを親プロセスの管理外で起動し、親のタイムアウト制限
+  (例: OpenCode の10分上限)や親プロセス終了による子プロセスの巻き添え終了を防ぐため、
+  `Start-Process`(PowerShell) / `nohup`+`&`(POSIX) でラッパースクリプトを起動する。
+  `run_in_background` での直接起動は行わない
+- **ラッパースクリプト**(PowerShell: `.agents/workflow/.dispatch-run.ps1`)が以下の責務を担う:
+  - プロンプトを `.agents/workflow/.dispatch-prompt-<タスクID>.md` から読み込む
+  - `XDG_CONFIG_HOME` / `XDG_DATA_HOME` をプロジェクト内ディレクトリに設定
+  - stdin を閉じて CLI(`$null | <CLI> run $prompt`)を実行し、stdout/stderr を
+    `.agents/workflow/logs/<タスクID>-<試行回数>.log` に書き出す
+  - CLI 終了後、exit code と終了時刻(ISO 8601)を
+    `.agents/workflow/logs/<タスクID>-<試行回数>.done` に書き出す
+- **`.done` マーカーの仕様**:
+  - パス: `.agents/workflow/logs/<タスクID>-<試行回数>.done`
+  - 内容(2行):
+    ```
+    EXIT:<exit code(数値)。異常終了時は crashed:<エラーメッセージ>>
+    END:<ISO 8601形式の終了時刻(例: 2026-07-09T15:30:00.0000000+09:00)>
+    ```
+  - 例:
+    ```
+    EXIT:0
+    END:2026-07-09T15:30:00.0000000+09:00
+    ```
+- **デタッチ起動の実行例**:
   ```powershell
-  $prompt = Get-Content .agents/workflow/.dispatch-prompt.md -Raw
-  # テンプレート例: opencode run "{prompt}" → opencode run $prompt
-  ```
-- **実行時も `XDG_CONFIG_HOME` と `XDG_DATA_HOME` を事前チェックと同じ値に設定する**: sandbox 環境では
-  `~/.config` や `~/.local/share` への書き込みが制限されるため、CLI起動前に必ずプロジェクト内ディレクトリを向けること
-  ```powershell
-  # PowerShell
+  # PowerShell: Start-Process でラッパースクリプトを非同期起動
   $env:XDG_CONFIG_HOME = ".agents/workflow/.config"
   $env:XDG_DATA_HOME = ".agents/workflow/.config"
+  Start-Process pwsh -ArgumentList "-NoProfile -File .agents/workflow/.dispatch-run.ps1 -TaskId T1 -Attempt 1"
   ```
   ```bash
-  # POSIX シェル
-  export XDG_CONFIG_HOME=.agents/workflow/.config
-  export XDG_DATA_HOME=.agents/workflow/.config
+  # POSIX: nohup ＋ & でデタッチ起動
+  nohup .agents/workflow/.dispatch-run.sh T1 1 > /dev/null 2>&1 &
   ```
-- **stdin を必ず閉じて起動する**: 子エージェントCLIは stdin が TTY でない場合に
-  パイプ入力(EOF まで)を待ち続けることがあり、非対話環境では stdin が開いたままだと
-  無限にハングする。PowerShell では `$null | <CLI> run $prompt`、POSIX シェルでは
-  `<CLI> run "$prompt" < /dev/null` の形で起動すること
-- **子エージェントの出力をログファイルへ逐次書き出す(ユーザーがリアルタイムで進捗を確認できるようにするため)**:
-  `.agents/workflow/logs/` ディレクトリを事前作成し(`agents-md-setup` 済みなら存在するはず。なければ作成)、
-  stdout/stderr を `.agents/workflow/logs/<タスクID>-<試行回数>.log` に書き込みながら起動する:
-  ```powershell
-  # PowerShell(例: タスクID=T1、試行回数=1)
-  New-Item -ItemType Directory -Force .agents/workflow/logs | Out-Null
-  $null | <CLI> run $prompt 2>&1 | Tee-Object -FilePath .agents/workflow/logs/T1-1.log
-  ```
-  ```bash
-  # POSIX シェル
-  mkdir -p .agents/workflow/logs
-  <CLI> run "$prompt" < /dev/null 2>&1 | tee .agents/workflow/logs/T1-1.log
-  ```
-- `run_in_background` で起動し、プロセス終了 = 完了通知として扱う
 - 起動直後、ユーザーが別ターミナル/別セッションでリアルタイム閲覧できるよう、以下のいずれかのコマンドを提示する(親エージェント自身が実行し続ける必要はない):
   ```powershell
   Get-Content .agents/workflow/logs/T1-1.log -Wait -Tail 20
@@ -107,18 +107,58 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
   ```bash
   tail -f .agents/workflow/logs/T1-1.log
   ```
-- `config.json` の `timeout_seconds` を超えたら打ち切り、タスクを `in_progress` のまま
-  ユーザーに報告する(ログファイルには打ち切り時点までの出力が残るため、途中経過の確認に使える)
+- `config.json` の `child_agent.timeout_seconds` は**親側ポーリング**(§4)で管理する。
+  タイムアウトを超えた場合はタスクを `in_progress` のままユーザーに報告する
+  (ログファイルには打ち切り時点までの出力が残るため、途中経過の確認に使える)
 
-### 4. 結果検証
+### 4. 完了検知と結果検証
 
-子エージェントの出力(stdout、および `.agents/workflow/logs/<タスクID>-<試行回数>.log`)と
-`git status` / `git diff --stat` を突き合わせる:
-
-- 完了報告フォーマットが出力に含まれているか
-- テスト結果が「全件パス」か。失敗が残っている・テスト結果の記載がない場合は
-  **レビューに進まず**、その旨を指示に含めて再dispatchする(`max_fix_retries` の範囲内)
-- 変更ファイル一覧と実際の diff が大きく食い違う場合は異常としてユーザーに報告
+- **ポーリングによる完了検知**: 親は一定間隔(推奨: 30秒)で `.done` マーカーファイルの
+  存在を確認する。マーカーが存在すれば終了と判断し、マーカーの内容(exit code / 終了時刻)と
+  ログファイル末尾を確認する
+  ```powershell
+  # PowerShell: ポーリングループ例
+  $startTime = Get-Date
+  $donePath = ".agents/workflow/logs/T1-1.done"
+  $logPath = ".agents/workflow/logs/T1-1.log"
+  $timeout = (Get-Content .agents/workflow/config.json | ConvertFrom-Json).child_agent.timeout_seconds
+  while (-not (Test-Path $donePath)) {
+      $elapsed = ((Get-Date) - $startTime).TotalSeconds
+      if ($elapsed -gt $timeout) { Write-Warning "Timeout ($timeout 秒)"; break }
+      # ハング検知: ログファイルの最終更新が10分以上前なら警告
+      $log = Get-Item $logPath -ErrorAction SilentlyContinue
+      if ($log -and ((Get-Date) - $log.LastWriteTime).TotalMinutes -gt 10) {
+          Write-Warning "ログの更新が10分以上停止 - ハングの可能性"
+      }
+      Start-Sleep -Seconds 30
+  }
+  ```
+  ```bash
+  # POSIX: ポーリングループ例
+  done=".agents/workflow/logs/T1-1.done"
+  log=".agents/workflow/logs/T1-1.log"
+  timeout=$(jq -r '.child_agent.timeout_seconds' .agents/workflow/config.json)
+  start=$(date +%s)
+  while [ ! -f "$done" ]; do
+    elapsed=$(( $(date +%s) - start ))
+    [ "$elapsed" -gt "$timeout" ] && echo "Timeout ($timeout 秒)" && break
+    # ハング検知: ログファイルの最終更新が10分以上前なら警告
+    if [ -f "$log" ] && [ "$(( $(date +%s) - $(stat -c %Y "$log") ))" -gt 600 ]; then
+      echo "警告: ログの更新が10分以上停止 - ハングの可能性"
+    fi
+    sleep 30
+  done
+  ```
+- **タイムアウト管理**: `config.json` の `child_agent.timeout_seconds`(デフォルト: 3600秒)を
+  親側のポーリングループ内で監視する。タイムアウト超過時はループを抜け、タスクを
+  `in_progress` のままユーザーに報告する
+- **ハング検知**: ポーリングループ内で、ログファイルの最終更新時刻が10分以上前の場合に
+  警告を出力する。ハングの可能性があるためユーザーに報告する
+- 完了確認後、子エージェントの出力(.log ファイル)と `git status` / `git diff --stat` を突き合わせる:
+  - 完了報告フォーマットが出力に含まれているか
+  - テスト結果が「全件パス」か。失敗が残っている・テスト結果の記載がない場合は
+    **レビューに進まず**、その旨を指示に含めて再dispatchする(`max_fix_retries` の範囲内)
+  - 変更ファイル一覧と実際の diff が大きく食い違う場合は異常としてユーザーに報告
 
 ### 5. 状態更新
 
