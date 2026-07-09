@@ -10,7 +10,8 @@
       { "name": "typecheck", "command": "", "blocking": true },
       { "name": "test", "command": "", "blocking": true },
       { "name": "lint", "command": "", "blocking": false }
-    ]
+    ],
+    "child_dispatch_command": ""
   },
   "max_fix_retries": 2,
   "comprehension_check": {

@@ -13,6 +13,8 @@
 | `max_fix_retries` | レビュー不合格時の子エージェントへの再依頼上限。超過で親のサブエージェントにフォールバック | `2` |
 | `comprehension_check.enabled` | タスク合格時に理解確認質問を生成するか | `false` |
 | `comprehension_check.questions_per_task` | タスクあたりの質問数 | `3` |
+| `quality_gate.steps` | 品質ゲートのステップ定義。各要素は `name`(表示名)・`command`(実行コマンド)・`blocking`(真なら不合格時に進行停止)を持つ | `[{name:typecheck,...},{name:test,...},{name:lint,...}]` |
+| `quality_gate.child_dispatch_command` | 子エージェントへの検証指示に使う統合コマンド。空文字列でなければ blocking ステップの個別列挙に代えてこの1コマンドを子に指示する。Gradle 等のデーモンの多重コールドスタート回避に有効 | `""` |
 | `upstream.url` | upstream リポジトリの URL。`workflow-update` skill で使用 | `https://github.com/Musasaby/multi-ai-agents-workflow.git` |
 | `upstream.branch` | upstream 追従ブランチ名 | `main` |
 

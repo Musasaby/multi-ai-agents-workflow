@@ -45,11 +45,15 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
 2. `AGENTS.md のルールに従うこと`
 3. **テスト実行指示(必須)**: 「実装後、テストを実行し全件パスするまで修正すること。
    テストコマンド: `<config.json の test_command、または受け入れ基準に記載のコマンド>`」
-   - 親側の最終ゲートでは `quality_gate`(typecheck/lint/test 等)も検証されるため、
-     `config.json` に `quality_gate` が定義されている場合は「以下の品質ゲートの
-     blocking ステップも通すこと」を指示に加え、**各 blocking ステップの `name` と
-     `command` をプロンプトに列挙する**(子は config.json を参照しない前提のため、
-     コマンドを明示しないと実行できない。コミット前の手戻りを減らす)
+    - 親側の最終ゲートでは `quality_gate`(typecheck/lint/test 等)も検証されるため、
+      `config.json` に `quality_gate` が定義されている場合は「以下の品質ゲートの
+      blocking ステップも通すこと」を指示に加え、**各 blocking ステップの `name` と
+      `command` をプロンプトに列挙する**(子は config.json を参照しない前提のため、
+      コマンドを明示しないと実行できない。コミット前の手戻りを減らす)
+    - `quality_gate.child_dispatch_command` が定義されている(空文字列でない)場合は、
+      上記の blocking ステップの個別列挙に代えて、この統合コマンドを子への検証指示に使う。
+      これは Gradle 等のデーモンの多重コールドスタートを避け、dispatch 1回あたりの
+      検証時間を短縮するための設定である。定義されていない場合のみ個別列挙にフォールバックする
 4. 完了報告フォーマットの指定:
    ```
    ## 完了報告
@@ -73,6 +77,10 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
   (例: OpenCode の10分上限)や親プロセス終了による子プロセスの巻き添え終了を防ぐため、
   `Start-Process`(PowerShell) / `nohup`+`&`(POSIX) でラッパースクリプトを起動する。
   `run_in_background` での直接起動は行わない
+- **ラッパースクリプト**が存在しない場合(例: clone 直後で `/agents-md-setup` 未実行)、
+  `_templates/workflow/.dispatch-run.ps1`(または `.sh`)から `.agents/workflow/` にコピーする。
+  POSIX 環境ではコピー後に `chmod +x .agents/workflow/.dispatch-run.sh` を実行する。
+  **既存のスクリプトは上書きしない**(利用先でカスタマイズ済みの可能性があるため)。
 - **ラッパースクリプト**(PowerShell: `.agents/workflow/.dispatch-run.ps1`)が以下の責務を担う:
   - プロンプトを `.agents/workflow/.dispatch-prompt-<タスクID>.md` から読み込む
   - `XDG_CONFIG_HOME` / `XDG_DATA_HOME` をプロジェクト内ディレクトリに設定
@@ -157,6 +165,12 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
 - **タイムアウト管理**: `config.json` の `child_agent.timeout_seconds`(デフォルト: 3600秒)を
   親側のポーリングループ内で監視する。タイムアウト超過時はループを抜け、タスクを
   `in_progress` のままユーザーに報告する
+- **ポーリング実行の上限への注意**: 上記のポーリングループは親エージェントのコマンド実行上限
+  (例: OpenCode の Bash/PowerShell ツールは最大10分)を超えると途中で打ち切られる。
+  1回のポーリング実行は親ツールのコマンド上限未満(例: 8分=480秒)で区切り、
+  `.done` 未検出なら再度ポーリングコマンドを実行する。累計経過時間で `timeout_seconds` を
+  判定する。上記のサンプルコードは `timeout_seconds` が小さく1回のポーリング内で
+  完結する場合の例示であり、実際の利用時は適宜分割すること
 - **ハング検知**: ポーリングループ内で、ログファイルの最終更新時刻が10分以上前の場合に
   警告を出力する。ハングの可能性があるためユーザーに報告する
 - 完了確認後、子エージェントの出力(.log ファイル)と `git status` / `git diff --stat` を突き合わせる:

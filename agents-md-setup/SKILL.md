@@ -24,6 +24,7 @@ Claude Code 固有のパス(`CLAUDE.md`, `.claude/`)からはリンク経由で�
   New-Item -ItemType Directory -Force .agents/workflow/logs
   ```
 - `.agents/workflow/config.json` または `.agents/workflow/README.md` が無い場合、それぞれ `_templates/workflow/config.json` / `_templates/workflow/README.md` からコピーする(skill ディレクトリから見たパスは `../_templates/workflow/config.json` / `../_templates/workflow/README.md`、利用先では `.agents/skills/_templates/workflow/config.json` / `.agents/skills/_templates/workflow/README.md`)。**既存のファイルは上書きしない**
+- `.agents/workflow/.dispatch-run.ps1` または `.agents/workflow/.dispatch-run.sh` が無い場合、それぞれ `_templates/workflow/.dispatch-run.ps1` / `_templates/workflow/.dispatch-run.sh` からコピーする(パス解決は上記と同様)。**既存のファイルは上書きしない**。POSIX 環境ではコピー後に `chmod +x .agents/workflow/.dispatch-run.sh` を実行する
 
 ### 2. CLAUDE.md ラッパーの作成
 
