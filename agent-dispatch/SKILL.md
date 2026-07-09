@@ -76,6 +76,8 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
 - **ラッパースクリプト**(PowerShell: `.agents/workflow/.dispatch-run.ps1`)が以下の責務を担う:
   - プロンプトを `.agents/workflow/.dispatch-prompt-<タスクID>.md` から読み込む
   - `XDG_CONFIG_HOME` / `XDG_DATA_HOME` をプロジェクト内ディレクトリに設定
+  - **PowerShellのコンソールエンコーディングをUTF-8に設定する**(`[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` および `$OutputEncoding = [System.Text.Encoding]::UTF8` をスクリプト冒頭で実行)。
+    `Start-Process` でデタッチ起動した子コンソールはOSのシステムロケール既定コードページ(日本語Windowsでは932/Shift_JIS)を引き継ぐため、未設定だとUTF-8で出力するCLIのstdout/stderrをリダイレクトする際に文字化けする
   - stdin を閉じて CLI(`$null | <CLI> run $prompt`)を実行し、stdout/stderr を
     `.agents/workflow/logs/<タスクID>-<試行回数>.log` に書き出す
   - CLI 終了後、exit code と終了時刻(ISO 8601)を
