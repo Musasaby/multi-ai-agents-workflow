@@ -19,12 +19,25 @@ Claude Code 固有のパス(`CLAUDE.md`, `.claude/`)からはリンク経由で�
   ```powershell
   New-Item -ItemType Directory -Force .agents/workflow/.config/opencode/log
   ```
-- `.agents/workflow/logs/` ディレクトリを事前作成する(`agent-dispatch` が子エージェントの出力をリアルタイム閲覧用に書き出す先):
+- `.agents/workflow/runs/` ディレクトリを事前作成する(`agent-dispatch` が子エージェントの生成物(プロンプト・ログ・完了マーカー・報告)をタスク×試行単位で書き出す先):
   ```powershell
-  New-Item -ItemType Directory -Force .agents/workflow/logs
+  New-Item -ItemType Directory -Force .agents/workflow/runs
   ```
 - `.agents/workflow/config.json` または `.agents/workflow/README.md` が無い場合、それぞれ `_templates/workflow/config.json` / `_templates/workflow/README.md` からコピーする(skill ディレクトリから見たパスは `../_templates/workflow/config.json` / `../_templates/workflow/README.md`、利用先では `.agents/skills/_templates/workflow/config.json` / `.agents/skills/_templates/workflow/README.md`)。**既存のファイルは上書きしない**
-- `.agents/workflow/.dispatch-run.ps1` または `.agents/workflow/.dispatch-run.sh` が無い場合、それぞれ `_templates/workflow/.dispatch-run.ps1` / `_templates/workflow/.dispatch-run.sh` からコピーする(パス解決は上記と同様)。**既存のファイルは上書きしない**。POSIX 環境ではコピー後に `chmod +x .agents/workflow/.dispatch-run.sh` を実行する
+- `.agents/workflow/scripts/` が無い、または配下のスクリプトが欠けている場合、`_templates/workflow/scripts/` 配下一式(`dispatch-run.ps1/.sh`, `dispatch-prompt-gen.ps1/.sh`, `dispatch-prompt-template.md`, `state-sync.ps1/.sh`, `workflow-archive.ps1/.sh`)をコピーする(パス解決は上記と同様、利用先では `.agents/skills/_templates/workflow/scripts/`)。**個別ファイル単位で既存のものは上書きしない**(利用先でカスタマイズ済みの可能性があるため)。POSIX 環境ではコピー後に `chmod +x .agents/workflow/scripts/*.sh` を実行する
+
+#### 旧レイアウトの検出
+
+利用先に本計画(dispatchプロンプトの機械生成)以前のレイアウトが残っている場合がある。
+以下のいずれかを検出したら、新レイアウトへの更新(上記のコピー手順の実行)を
+**ユーザーに提案する**(勝手に削除・上書きはしない):
+
+- `.agents/workflow/.dispatch-run.ps1` または `.agents/workflow/.dispatch-run.sh`(ルート直下に残る旧スクリプト。新レイアウトでは `scripts/dispatch-run.ps1/.sh`)
+- `.agents/workflow/logs/` または `.agents/workflow/reports/`(新レイアウトでは `runs/<タスクID>-<試行回数>/` に統合)
+- `.agents/workflow/.dispatch-prompt-*.md`(旧・タスク単位のプロンプトファイル。新レイアウトでは `runs/<タスクID>-<試行回数>/prompt.md`)
+
+提案時は、新レイアウトのスクリプトをコピーした上で、旧ファイル・ディレクトリの削除可否を
+ユーザーに確認する(過去の実行履歴が必要な場合もあるため自動削除はしない)。
 
 ### 2. CLAUDE.md ラッパーの作成
 
@@ -64,8 +77,10 @@ catch { New-Item -ItemType Junction -Path .claude -Target (Resolve-Path .agents)
 .agents/settings.local.json
 # CLI 設定・キャッシュ (コミットしない)
 .agents/workflow/.config/
-# 子エージェントのライブログ (コミットしない)
-.agents/workflow/logs/
+# 実行単位の生成物(プロンプト・ログ・完了マーカー・報告。コミットしない)
+.agents/workflow/runs/
+# 一巡した過去サイクルの退避先(コミットしない)
+.agents/workflow/archive/
 ```
 
 `.claude` はリンクのためコミットしない。clone後はこのskillを再実行して再作成する。

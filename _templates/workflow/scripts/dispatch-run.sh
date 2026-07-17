@@ -1,17 +1,15 @@
 #!/bin/bash
 TASK_ID="${1:?TaskId required}"
 ATTEMPT="${2:-1}"
-cd "$(dirname "$0")/../.."
+cd "$(dirname "$0")/../../.."
 export XDG_CONFIG_HOME=".agents/workflow/.config"
 export XDG_DATA_HOME=".agents/workflow/.config"
-mkdir -p .agents/workflow/logs
-LOG_PATH=".agents/workflow/logs/${TASK_ID}-${ATTEMPT}.log"
-DONE_PATH=".agents/workflow/logs/${TASK_ID}-${ATTEMPT}.done"
+RUN_DIR=".agents/workflow/runs/${TASK_ID}-${ATTEMPT}"
+mkdir -p "$RUN_DIR"
+LOG_PATH="$RUN_DIR/output.log"
+DONE_PATH="$RUN_DIR/done"
 rm -f "$DONE_PATH"
-PROMPT_PATH=".agents/workflow/.dispatch-prompt-${TASK_ID}.md"
-if [ ! -f "$PROMPT_PATH" ]; then
-  PROMPT_PATH=".agents/workflow/.dispatch-prompt.md"
-fi
+PROMPT_PATH="$RUN_DIR/prompt.md"
 
 CMD_TEMPLATE=$(jq -r '.child_agent.command_template' .agents/workflow/config.json 2>/dev/null || \
   python3 -c "import json; print(json.load(open('.agents/workflow/config.json'))['child_agent']['command_template'])" 2>/dev/null || \

@@ -17,7 +17,7 @@ description: 子エージェントの実装をタスクの受け入れ基準に�
 
 - `git diff` / `git status` で変更全体を取得
 - tasks.md の該当タスク(受け入れ基準)を読む
-- `.agents/workflow/reports/` の最新の完了報告(テスト結果を含む)を読む
+- `.agents/workflow/runs/<タスクID>-<試行回数>/report.md`(最新の試行回数のもの)の完了報告(テスト結果を含む)を読む
 
 ### 2. テスト結果の検証(親は実行せず報告を検証する)
 
@@ -50,9 +50,18 @@ description: 子エージェントの実装をタスクの受け入れ基準に�
 
 state.json の `retries` を確認し:
 
-- `retries < max_fix_retries`(config.json): 指摘事項をまとめて **子エージェントに再依頼**
-  (`/agent-dispatch <タスクID>` をリトライモードで実行。修正後のテスト再実行も指示に含まれる)。
-  `retries` をインクリメントし、status を `in_progress` に戻す
+- `retries < max_fix_retries`(config.json): 指摘事項をまとめて **子エージェントに再依頼**する。
+  再依頼の前に、指摘事項リストを `runs/<タスクID>-<次の試行回数>/fix-notes.md` に
+  親が保存する(**ここだけは親のLLM出力**。要件の例外事項)。「次の試行回数」とは
+  現在の試行回数+1であり、例えば試行1が不合格なら `runs/<タスクID>-2/fix-notes.md` に
+  保存する(`/agent-dispatch <タスクID>` を `-Attempt <次の試行回数>` でリトライ実行した際、
+  生成スクリプト `dispatch-prompt-gen` がこのファイルを読み込んでプロンプト冒頭に結合する。
+  ファイルが無い状態で `-Attempt 2` 以上を実行すると exit 3 になる)。
+  指摘が複雑でテンプレートに収まらない場合は、`fix-notes.md` を作らず、親が
+  `runs/<タスクID>-<次の試行回数>/prompt.md` を直接作成して生成スクリプトをバイパスしてよい
+  (`/agent-dispatch` §2 のフォールバック手順に準ずる)。
+  その後 `/agent-dispatch <タスクID>` をリトライモードで実行する(修正後のテスト再実行も
+  指示に含まれる)。`retries` をインクリメントし、status を `in_progress` に戻す
 - 上限超過: 親のサブエージェントまたは親自身で修正する。それでも受け入れ基準を
   満たせない場合は status を `failed` にし、経緯をまとめてユーザーにエスカレーションする
 

@@ -2,18 +2,17 @@ param(
     [Parameter(Mandatory = $true)][string]$TaskId,
     [int]$Attempt = 1
 )
-Set-Location $PSScriptRoot\..\..
+Set-Location $PSScriptRoot\..\..\..
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 $env:XDG_CONFIG_HOME = ".agents/workflow/.config"
 $env:XDG_DATA_HOME = ".agents/workflow/.config"
-$logDir = ".agents/workflow/logs"
-$null = New-Item -ItemType Directory -Force $logDir
-$logPath = "$logDir/$TaskId-$Attempt.log"
-$donePath = "$logDir/$TaskId-$Attempt.done"
+$runDir = ".agents/workflow/runs/$TaskId-$Attempt"
+$null = New-Item -ItemType Directory -Force $runDir
+$logPath = "$runDir/output.log"
+$donePath = "$runDir/done"
 Remove-Item -Force -ErrorAction SilentlyContinue $donePath
-$promptPath = ".agents/workflow/.dispatch-prompt-$TaskId.md"
-if (-not (Test-Path $promptPath)) { $promptPath = ".agents/workflow/.dispatch-prompt.md" }
+$promptPath = "$runDir/prompt.md"
 $prompt = Get-Content $promptPath -Raw
 $config = Get-Content ".agents/workflow/config.json" -Raw | ConvertFrom-Json
 
