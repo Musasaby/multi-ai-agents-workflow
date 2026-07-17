@@ -53,11 +53,26 @@ git subtree pull --prefix=.agents/skills <URL> <branch> --squash
 - **勝手に解決しない**。解決はユーザーまたは別途依頼されたエージェントが行う
 - コンフリクト解決後、ユーザーに `git commit` を指示する
 
-### 5. 完了報告
+### 5. 旧レイアウトの検出
+
+`.agents/skills/` の更新後、`.agents/workflow/` に本計画(dispatchプロンプトの機械生成)
+以前のレイアウトが残っていないか確認する。以下のいずれかを検出したら、
+`agents-md-setup` skillの再実行(新レイアウトの `scripts/` 配下一式のコピー)を
+**ユーザーに提案する**(勝手に削除・上書きはしない):
+
+- `.agents/workflow/.dispatch-run.ps1` または `.agents/workflow/.dispatch-run.sh`(ルート直下に残る旧スクリプト。新レイアウトでは `scripts/dispatch-run.ps1/.sh`)
+- `.agents/workflow/logs/` または `.agents/workflow/reports/`(新レイアウトでは `runs/<タスクID>-<試行回数>/` に統合)
+- `.agents/workflow/.dispatch-prompt-*.md`(旧・タスク単位のプロンプトファイル。新レイアウトでは `runs/<タスクID>-<試行回数>/prompt.md`)
+
+`.agents/workflow/` 配下の実運用ファイル(tasks.md / state.json / config.json 等)は
+この skill では変更しない。
+
+### 6. 完了報告
 
 正常終了時またはコンフリクト発生時に以下を報告する:
 
 - 実行したコマンド
 - 更新結果(成功/コンフリクト/エラー)
 - コンフリクト時は衝突ファイル一覧
+- 旧レイアウト検出の有無、検出した場合はユーザーへの提案内容
 - 次のアクション(コミット確認、テスト実行など)
