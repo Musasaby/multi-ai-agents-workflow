@@ -141,6 +141,12 @@ exit 3 になる。
   ```bash
   tail -f .agents/workflow/runs/T1-1/output.log
   ```
+  **Claude Code を子エージェントとして使う場合**: `command_template` に
+  `--output-format stream-json --verbose` を指定すると、`dispatch-run` が
+  出力を1行ずつパースして人が読めるテキストとして `output.log` に逐次書き出す
+  (生JSONは `output.jsonl` に残る)ため、上記コマンドでの実行中閲覧が機能する。
+  デフォルトの `--output-format text` は子CLI側でバッファリングされ実行中の
+  逐次閲覧ができないため、実行中のログ閲覧が必要な場合は `stream-json` を使うこと。
 - `config.json` の `child_agent.timeout_seconds` は**親側ポーリング**(§4)で管理する。
   タイムアウトを超えた場合はタスクを `in_progress` のままユーザーに報告する
   (ログファイルには打ち切り時点までの出力が残るため、途中経過の確認に使える)
