@@ -67,7 +67,17 @@ git subtree pull --prefix=.agents/skills <URL> <branch> --squash
 `.agents/workflow/` 配下の実運用ファイル(tasks.md / state.json / config.json 等)は
 この skill では変更しない。
 
-### 6. 完了報告
+### 6. .gitignore の確認
+
+`.gitignore` に以下3項目が記載されているか確認する。欠けている場合は `agents-md-setup`
+skillの再実行(手順4の `.gitignore` 整備)を**ユーザーに提案する**(この skill 自身では
+`.gitignore` を編集しない):
+
+- `.agents/workflow/runs/`
+- `.agents/workflow/.config/`
+- `.agents/scheduled_tasks.lock`(Claude Code 本体のランタイムファイルでありコミット対象外)
+
+### 7. 完了報告
 
 正常終了時またはコンフリクト発生時に以下を報告する:
 
@@ -75,4 +85,5 @@ git subtree pull --prefix=.agents/skills <URL> <branch> --squash
 - 更新結果(成功/コンフリクト/エラー)
 - コンフリクト時は衝突ファイル一覧
 - 旧レイアウト検出の有無、検出した場合はユーザーへの提案内容
+- `.gitignore` の3項目の記載有無、欠けている場合は `agents-md-setup` 再実行の提案
 - 次のアクション(コミット確認、テスト実行など)

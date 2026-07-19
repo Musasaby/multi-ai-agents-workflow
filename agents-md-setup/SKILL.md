@@ -81,9 +81,15 @@ catch { New-Item -ItemType Junction -Path .claude -Target (Resolve-Path .agents)
 .agents/workflow/runs/
 # 一巡した過去サイクルの退避先(コミットしない)
 .agents/workflow/archive/
+# Claude Code 本体のランタイムファイル(コミット対象外)
+.agents/scheduled_tasks.lock
 ```
 
 `.claude` はリンクのためコミットしない。clone後はこのskillを再実行して再作成する。
+
+`.agents/scheduled_tasks.lock` は Claude Code 本体が生成するランタイムファイル(スケジュール実行のロック)であり、このリポジトリの成果物ではないためコミット対象外とする。
+
+**既存利用先(このskillを既に実行済みの利用先)向け**: 上記の `.gitignore` 整備は再実行時にも毎回確認する。特に `.agents/workflow/runs/`・`.agents/workflow/.config/`・`.agents/scheduled_tasks.lock` が未記載のまま放置されているケースがあるため、`workflow-update` 実行後の案内でもこの3項目の記載有無を確認するようユーザーに促すこと。
 
 ### 5. ファイルベース検証(必須)
 
