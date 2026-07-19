@@ -28,6 +28,7 @@
 - 状態・設定の正本: `.agents/workflow/`(`config.json`, `tasks.md`, `state.json`)
 - 子エージェントとして実装を依頼された場合は、タスク定義(`.agents/workflow/tasks.md`)の受け入れ基準を満たし、テストを実行してから完了報告すること
 - 理解確認(任意): `comprehension_check.enabled` が true の場合、各タスク完了後に質問ファイルが生成されます。回答を記入して `/agent-comprehension-check` を実行すると判定・解説が得られます(別セッションでも可)
+- 問題発生時の対応順序: 1) `multi-ai-agents-workflow` 由来の問題かを切り分け 2) スクリプトによる自動化などAIの性能に依存しない機械的改善を最優先で検討 3) 2 が難しい場合のみ skills/AGENTS.md 等ドキュメントの改善で対処 4) ワークフロー由来、または解決困難な場合はユーザーに報告して中断(詳細は `agent-workflow` skillの「問題発生時の対応順序」を参照)
 
 ## セットアップ(clone直後)
 

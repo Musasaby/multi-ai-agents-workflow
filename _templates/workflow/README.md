@@ -46,6 +46,26 @@
 | `upstream.url` | upstream リポジトリの URL。`workflow-update` skill で使用 | `https://github.com/Musasaby/multi-ai-agents-workflow.git` |
 | `upstream.branch` | upstream 追従ブランチ名 | `main` |
 
+Claude Code を子エージェントとして使う場合は `stream-json` 出力を指定する:
+
+```json
+"child_agent": {
+  "command_template": "claude -p \"{prompt}\" --output-format stream-json --verbose"
+}
+```
+
+`command_template` に `stream-json` という文字列が含まれる場合、`dispatch-run` は機械的に
+整形モードへ分岐する。子CLIのstdoutを1行ずつ読み、生のJSON行はそのまま
+`runs/<タスクID>-<試行回数>/output.jsonl` に追記し、パースできた行は人が読めるテキスト
+(assistantのテキスト・使用ツール名と入力要約・`result` の要旨等)に変換して
+`output.log` へ逐次書き出す(パース不能行はそのまま `output.log` に通す)。
+`output.log` は実行中に随時更新されるため `tail -f` / `Get-Content -Wait` で閲覧できる。
+
+**注意**: `--output-format text`(デフォルト)は子CLI側の出力がバッファリングされ、
+プロセス終了までの実行中の逐次閲覧ができない。実行中の途中経過を見たい場合は
+`stream-json` 形式を指定すること。`stream-json` を含まないテンプレート(OpenCode等)は
+従来どおり `output.log` への直接リダイレクトのみで、`output.jsonl` は生成されない。
+
 ## tasks.md(/agent-task-plan が生成)
 
 タスク定義の正本。子エージェントもこのファイルを参照する。フォーマット:
@@ -69,6 +89,11 @@ dispatch 時に完了報告が自動結合される対象になるため、真�
 ## state.json(/agent-task-plan が `scripts/state-sync --init` で機械生成、各skillが更新)
 
 機械可読な進捗状態。中断後の再開はこのファイルを起点にする。LLMは直接生成・編集しない。
+
+`branch` は「現在の作業ブランチ」を表す。初期生成時(`state-sync --init`)は git から
+自動取得されるが、機能グループ単位でブランチを分割する運用(`agent-workflow` skill の
+「ブランチ分割の推奨」)を取る場合、グループ境界でのブランチ切替後にこのフィールドを
+現在のブランチ名へ更新し、次のグループの進捗状態コミット(`chore: ...`)に含める。
 
 ```json
 {
