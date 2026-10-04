@@ -34,6 +34,43 @@ AIエージェント(Claude Code、OpenCode 等)による複数エージェン�
 3. `AGENTS.md` の「プロジェクト概要」をプロジェクトに合わせて書き換える
 4. `/agent-workflow <Issue ID または計画ドキュメントのパス>` でワークフローを開始
 
+### `.agents/skills/` がすでにある場合
+
+利用先に別の skill(ゲーム用の skill 集など)がすでに `.agents/skills/` にコミットされていると、
+`git subtree add --prefix=.agents/skills` は「prefix がすでに存在する」として失敗します。
+その場合は、既存の skill をいったん退避して subtree を追加し、元に戻します。戻した skill は
+配布物と同じディレクトリに共存し(配布物と名前が重ならないこと)、以後の `git subtree pull`
+(`workflow-update`)も通常どおり使えます。作業は `develop/*` ブランチで、作業ツリーが
+クリーンな状態で行ってください。
+
+```bash
+# 1. 既存の skill を退避
+git mv .agents/skills .agents/skills-tmp
+git commit -m "chore: subtree 導入のため既存の skill を一時退避する"
+# 2. 配布物を subtree で追加
+git subtree add --prefix=.agents/skills https://github.com/Musasaby/multi-ai-agents-workflow.git main --squash
+# 3. 退避した skill を戻す(配布物と同名のディレクトリがあれば、戻す前に名前を変える)
+for d in .agents/skills-tmp/*; do git mv "$d" ".agents/skills/$(basename "$d")"; done
+rmdir .agents/skills-tmp
+git commit -m "chore: 既存の skill を .agents/skills に戻す(subtree の配布物と共存)"
+```
+
+```powershell
+# 1. 既存の skill を退避
+git mv .agents/skills .agents/skills-tmp
+git commit -m "chore: subtree 導入のため既存の skill を一時退避する"
+# 2. 配布物を subtree で追加
+git subtree add --prefix=.agents/skills https://github.com/Musasaby/multi-ai-agents-workflow.git main --squash
+# 3. 退避した skill を戻す(配布物と同名のディレクトリがあれば、戻す前に名前を変える)
+Get-ChildItem .agents/skills-tmp | ForEach-Object { git mv $_.FullName ".agents/skills/$($_.Name)" }
+Remove-Item .agents/skills-tmp
+git commit -m "chore: 既存の skill を .agents/skills に戻す(subtree の配布物と共存)"
+```
+
+その後は上記の手順2以降(`/agents-md-setup` の実行など)を続けます。`.claude/skills/` に
+skill ごとの個別リンクを置く旧構成になっている場合、`/agents-md-setup` は `.claude` を
+`.agents` へのリンクに置き換えるよう提案します(既存の skill も引き続き `.claude/skills/` から見えます)。
+
 ## 更新手順
 
 `.agents/skills/` 以下の skill は `workflow-update` skill を実行するか、手動で以下を実行して更新します。
