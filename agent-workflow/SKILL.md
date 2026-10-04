@@ -45,7 +45,7 @@ description: マルチエージェント実装ワークフローのオーケス�
 ## フロー
 
 ```
-1. 計画参照・タスク分解   → /agent-task-plan <引数>     (ユーザー承認を挟む)
+1. 計画参照・タスク分解   → /agent-task-plan <引数>     (ユーザー承認を挟み、承認後に計画をコミット)
 2. 各タスクについてループ(依存順。次のタスクは next-task スクリプトで選ぶ):
    a. 実装dispatch        → /agent-dispatch <タスクID>   (子がテスト実行まで担当)
    b. レビュー〜コミット   → /agent-review-commit <タスクID>
