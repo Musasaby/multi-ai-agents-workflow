@@ -135,6 +135,11 @@ skillの再実行(手順4の `.gitignore` 整備)を**ユーザーに提案す�
 - `.agents/workflow/.config/`
 - `.agents/scheduled_tasks.lock`(Claude Code 本体のランタイムファイルでありコミット対象外)
 
+あわせて `.gitattributes` に `.agents/workflow/scripts/*.sh text eol=lf` と
+`.agents/workflow/scripts/*.py text eol=lf` が記載されているか確認する。欠けている場合は
+`agents-md-setup` skillの再実行(手順4の `.gitattributes` 整備)を**ユーザーに提案する**
+(Windows で CRLF になったスクリプトは WSL・Linux で実行できないため)。
+
 ### 8. 完了報告
 
 正常終了時またはコンフリクト発生時に以下を報告する:
@@ -145,5 +150,5 @@ skillの再実行(手順4の `.gitignore` 整備)を**ユーザーに提案す�
 - スクリプト・README の同期結果(コピーした未配置ファイル、上書きしたファイル、
   ユーザー判断で上書きしなかった差分のあるファイル)
 - 旧レイアウト検出の有無、検出した場合はユーザーへの提案内容
-- `.gitignore` の3項目の記載有無、欠けている場合は `agents-md-setup` 再実行の提案
+- `.gitignore` の3項目と `.gitattributes` の2項目の記載有無、欠けている場合は `agents-md-setup` 再実行の提案
 - 次のアクション(コミット確認、テスト実行など)

@@ -66,7 +66,7 @@ catch { New-Item -ItemType Junction -Path .claude -Target (Resolve-Path .agents)
 既に実体ディレクトリとして `.claude` が存在する場合は、中身を `.agents` にマージしてから
 置き換える(**ユーザーに確認してから**削除すること)。
 
-### 4. .gitignore の整備
+### 4. .gitignore / .gitattributes の整備
 
 以下が `.gitignore` に含まれていることを確認し、なければ追記する:
 
@@ -86,6 +86,21 @@ catch { New-Item -ItemType Junction -Path .claude -Target (Resolve-Path .agents)
 ```
 
 `.claude` はリンクのためコミットしない。clone後はこのskillを再実行して再作成する。
+
+あわせて、`.gitattributes`(無ければ作成する)に以下が含まれていることを確認し、なければ追記する:
+
+```
+# ワークフローのスクリプトは CRLF だと bash / python で実行できないため LF に固定する
+.agents/workflow/scripts/*.sh text eol=lf
+.agents/workflow/scripts/*.py text eol=lf
+```
+
+配布元の `.gitattributes` は subtree で取り込むと `.agents/skills/` 配下にしか効かず、
+`.agents/workflow/scripts/` にコピーしたスクリプトは対象外になる。Windows で `core.autocrlf=true`
+の場合、追記しないと CRLF でチェックアウトされ、WSL・Linux で実行できなくなる。
+リポジトリ内のファイルは LF で保存されているためコミットは不要。追記前にチェックアウト済みで
+作業ツリーが CRLF になっているファイルは、削除してから `git checkout -- .agents/workflow/scripts`
+で取り出し直すと LF になる(未コミットの変更が無いことを確認してから行う)。
 
 `.agents/scheduled_tasks.lock` は Claude Code 本体が生成するランタイムファイル(スケジュール実行のロック)であり、このリポジトリの成果物ではないためコミット対象外とする。
 
