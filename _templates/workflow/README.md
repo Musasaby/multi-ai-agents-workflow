@@ -179,7 +179,9 @@ exit 0 以外は dispatch を行わず、stderr の内容(exit 2 なら欠落内
 **PR モード**(`-Pr` / `--pr`): PR 作成を子に単発で依頼するプロンプトを
 `dispatch-pr-prompt-template.md` から生成し、`runs/pr-<N>-1/prompt.md` に書き出す
 (`<N>` は既存の `pr-*` の次の連番)。PR に含めるタスクは、state.json で `done` かつ
-`commit` が `git log main..HEAD` に含まれるものを自動で選ぶ。stdout に `RunId: pr-<N>` を
+`commit` が `git log origin/main..HEAD` に含まれるものを自動で選ぶ(`git fetch origin main` を
+してから比べるため、ローカルの `main` が古くても、マージ済みの無関係なコミットは混ざらない。
+origin が無い・fetch に失敗した場合は exit 1)。stdout に `RunId: pr-<N>` を
 出力するので、`dispatch-run` に `pr-<N>` と `1` を渡して起動する。作業ブランチではなく
 `main` 上で実行した場合や、対象タスクが無い場合は exit 1。
 

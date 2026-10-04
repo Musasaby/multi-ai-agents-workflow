@@ -158,7 +158,9 @@ tasks.md / state.json / runs/ / comprehension/ は自動的に `archive/<日時-
 
 1. `git status --porcelain` が空であることを確認する
 2. `dispatch-prompt-gen` の PR モードでプロンプトを生成する。対象タスク(state.json で
-   `done` かつ commit が `git log main..HEAD` に含まれるもの)は自動で選ばれる
+   `done` かつ commit が `git log origin/main..HEAD` に含まれるもの)は自動で選ばれる。スクリプトが
+   `git fetch origin main` を行い、ローカルの `main` ではなく最新の `origin/main` と比べる
+   (origin が無い・fetch に失敗した場合は exit 1)
    ```powershell
    .agents/workflow/scripts/dispatch-prompt-gen.ps1 -Pr
    ```
