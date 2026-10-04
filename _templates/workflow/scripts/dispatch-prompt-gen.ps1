@@ -49,15 +49,20 @@ foreach ($line in $sectionLines) {
     }
 }
 
-$deps = @()
-foreach ($line in $sectionLines) {
-    if ($line -match '^\s*-\s+\*\*依存\*\*:\s*(.+)') {
-        $depStr = $Matches[1].Trim()
-        if ($depStr -ne 'なし') {
-            $deps = $depStr -split '\s*,\s*' | Where-Object { $_ -match '^T\d+$' }
-        }
-        break
-    }
+# 依存欄の検証(不正なトークンは黙って捨てずにエラーにする)
+. "$PSScriptRoot/tasklib.ps1"
+$allTasks = @(Read-TaskList @(Split-TaskLines ([System.IO.File]::ReadAllText($TasksPath, [System.Text.Encoding]::UTF8))))
+$targetTask = $allTasks | Where-Object { $_.id -eq $TaskId } | Select-Object -First 1
+try {
+    $deps = @(Get-TaskDeps $targetTask)
+} catch {
+    [Console]::Error.WriteLine($_.Exception.Message)
+    exit 1
+}
+$unknownDeps = @($deps | Where-Object { $_ -notin $allTasks.id })
+if ($unknownDeps.Count -gt 0) {
+    [Console]::Error.WriteLine("${TaskId}: depends on unknown task(s) $($unknownDeps -join ', ') (not found in tasks.md)")
+    exit 1
 }
 
 if ($deps.Count -gt 0) {

@@ -80,15 +80,28 @@ if echo "$TASK_SECTION" | head -1 | grep -qE "^## ${TASK_ID}:"; then
     TASK_TITLE=$(echo "$TASK_SECTION" | head -1 | sed "s/^## ${TASK_ID}:[[:space:]]*//")
 fi
 
-# Extract dependencies
-DEPS=""
-if echo "$TASK_SECTION" | grep -qE '^\s*-\s+\*\*依存\*\*:'; then
-    DEP_LINE=$(echo "$TASK_SECTION" | grep -E '^\s*-\s+\*\*依存\*\*:' | sed 's/^[[:space:]]*-[[:space:]]*\*\*依存\*\*:[[:space:]]*//')
-    if [ "$DEP_LINE" != "なし" ]; then
-        DEPS=$(echo "$DEP_LINE" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -E '^T[0-9]+$' | tr '\n' ',')
-        DEPS="${DEPS%,}"
-    fi
-fi
+# Extract and validate dependencies (invalid tokens are an error, never silently dropped)
+DEPS=$(python3 - "$(to_py_path "$SCRIPT_DIR")" "$(to_py_path "$TASKS_PATH")" "$TASK_ID" <<'PY'
+import sys
+script_dir, tasks_path, task_id = sys.argv[1:4]
+sys.path.insert(0, script_dir)
+import tasklib
+with open(tasks_path, encoding='utf-8', newline='') as f:
+    tasks = tasklib.parse_tasks(f.read())
+ids = {t['id'] for t in tasks}
+task = next(t for t in tasks if t['id'] == task_id)
+try:
+    deps = tasklib.parse_deps(task)
+except tasklib.TaskFileError as e:
+    print(str(e), file=sys.stderr)
+    sys.exit(1)
+unknown = [d for d in deps if d not in ids]
+if unknown:
+    print(task_id + ': depends on unknown task(s) ' + ', '.join(unknown) + ' (not found in tasks.md)', file=sys.stderr)
+    sys.exit(1)
+print(','.join(deps))
+PY
+) || exit 1
 
 # --- Handoff guard ---
 if [ -n "$DEPS" ]; then

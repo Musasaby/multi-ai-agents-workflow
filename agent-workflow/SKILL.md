@@ -45,7 +45,7 @@ description: マルチエージェント実装ワークフローのオーケス�
 
 ```
 1. 計画参照・タスク分解   → /agent-task-plan <引数>     (ユーザー承認を挟む)
-2. 各タスクについてループ(依存順):
+2. 各タスクについてループ(依存順。次のタスクは next-task スクリプトで選ぶ):
    a. 実装dispatch        → /agent-dispatch <タスクID>   (子がテスト実行まで担当)
    b. レビュー〜コミット   → /agent-review-commit <タスクID>
       - 不合格 → 子へ修正再依頼(リトライ上限あり) → b に戻る
@@ -55,12 +55,27 @@ description: マルチエージェント実装ワークフローのオーケス�
 3. 全タスク完了 → サマリー報告(未回答の質問ファイル一覧を含む)
 ```
 
+### 次のタスクの選び方
+
+ループの各周回の先頭で `next-task`(PowerShell: `.agents/workflow/scripts/next-task.ps1`
+/ POSIX: `next-task.sh`)を実行し、exit code で分岐する。tasks.md の記述順や ID 順、
+state.json の並び順で次のタスクを決めない(挿入したタスクの順序が崩れるため)。
+
+- **exit 0**: stdout の `<タスクID> <status>` に従う。`pending` / `in_progress` →
+  `/agent-dispatch <タスクID>`、`in_review` → `/agent-review-commit <タスクID>`
+- **exit 3**: 全タスク `done`。手順3(サマリー報告)へ進む
+- **exit 4**: 実行できるタスクが無い(`failed` や未完了の依存で止まっている)。stderr の
+  内容を添えてユーザーにエスカレーションする
+- **exit 1**: tasks.md / state.json の不備(依存欄の不正など)。stderr の内容を添えて
+  ユーザーに報告する
+
 ## レビュー中に派生タスクが見つかった場合
 
 コードレビューで新たな作業(派生タスク)が必要と判明した場合や、ユーザーがサイクル
 途中で要件を追加した場合は、`/agent-task-plan` の**追加モード**(既存タスクを一切
 書き換えず、新IDのセクションを tasks.md 末尾に追記するモード)を使う。既存タスク一覧の
-再読・再提示は行わない。
+再読・再提示は行わない。派生タスクを既存の未着手タスクより先に実行する必要がある場合は、
+追加モードの**挿入**(`state-sync --insert <新ID> --before <後続ID>`)を使う。
 
 ## 一巡後の再実行
 

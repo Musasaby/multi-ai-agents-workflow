@@ -9,7 +9,9 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
 
 ## 引数
 
-- 第1引数: タスクID(例: `T1`)。省略時は state.json の最初の `pending` タスク
+- 第1引数: タスクID(例: `T1`)。省略時は `next-task`(PowerShell:
+  `.agents/workflow/scripts/next-task.ps1` / POSIX: `next-task.sh`)が出力するタスク
+  (state.json の並び順ではなく、依存がすべて `done` の最初の `pending` タスク)
 - `--agent-cmd "<テンプレート>"`: 子エージェントCLIのコマンドテンプレート。省略時は
   `.agents/workflow/config.json` の `child_agent.command_template` を使う。
   テンプレート内の `{prompt}` がタスクプロンプトに展開される
@@ -100,8 +102,9 @@ exit 3 になる。
   `.agents/workflow/scripts/` にコピーする。
   POSIX 環境ではコピー後に `chmod +x .agents/workflow/scripts/dispatch-run.sh` を実行する。
   **既存のスクリプトは上書きしない**(利用先でカスタマイズ済みの可能性があるため)。
-  同様に `dispatch-prompt-gen.ps1/.sh` と `dispatch-prompt-template.md` も
-  `_templates/workflow/scripts/` から `.agents/workflow/scripts/` にコピーする。
+  同様に、`_templates/workflow/scripts/` 配下の他のファイル(`dispatch-prompt-gen.ps1/.sh`、
+  `dispatch-prompt-template.md`、共通部品 `tasklib.ps1/.py` 等)のうち未配置のものも
+  `.agents/workflow/scripts/` にコピーする。
 - **ラッパースクリプト**(PowerShell: `.agents/workflow/scripts/dispatch-run.ps1`)が
   以下の責務を担う:
   - プロンプトを `.agents/workflow/runs/<タスクID>-<試行回数>/prompt.md` から読み込む

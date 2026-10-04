@@ -12,6 +12,8 @@
 │   ├── dispatch-prompt-gen.ps1 / .sh
 │   ├── dispatch-prompt-template.md
 │   ├── state-sync.ps1 / .sh
+│   ├── next-task.ps1 / .sh
+│   ├── tasklib.ps1 / tasklib.py  tasks.md 解析・依存欄検証の共通部品
 │   └── workflow-archive.ps1 / .sh
 ├── runs/<タスクID>-<試行回数>/   ← 実行単位の生成物(.gitignore対象)
 │   ├── prompt.md        生成プロンプト
@@ -82,9 +84,18 @@ Claude Code を子エージェントとして使う場合は `stream-json` 出�
 - **依存**: なし | T1, T2
 ```
 
-`- **依存**:` 行は `dispatch-prompt-gen` が正規表現でパースする機械可読フォーマットである。
-`なし` またはカンマ区切りのタスクID列(`T1, T2`)以外は書かない。依存欄に挙げたタスクは
-dispatch 時に完了報告が自動結合される対象になるため、真に前提となるタスクのみ記載する。
+`- **依存**:` 行は `state-sync` / `next-task` / `dispatch-prompt-gen` が機械的にパースする
+機械可読フォーマットである。`なし` またはカンマ区切りのタスクID列(`T1, T2`)以外は書かない。
+依存欄に挙げたタスクは dispatch 時に完了報告が自動結合される対象になるため、真に前提となる
+タスクのみ記載する。
+
+- 依存行はすべてのタスクに必須(依存が無ければ `なし`)
+- 注記(例: `T30(Prometheus 基盤。完了済み)`)は書かない。前提タスクに関する補足は**目的欄**に
+  書く。完了状態は state.json で機械的に判定するため書かない
+- 形式違反・存在しないタスクID・自分自身への依存は `state-sync` / `next-task` /
+  `dispatch-prompt-gen` がエラー(exit 1)にし、不正な値を stderr に出す(黙って捨てない)。
+  循環依存は `state-sync` と `next-task` が検出する
+- タスクの実行順は記述順・ID順ではなく依存関係で決まる(`next-task` が選ぶ)
 
 ## state.json(/agent-task-plan が `scripts/state-sync --init` で機械生成、各skillが更新)
 
@@ -144,7 +155,7 @@ tasks.md・config.json・依存タスクの完了報告(直接依存のみ)か�
 | exit | 意味 | 生成物 |
 |------|------|--------|
 | `0` | 生成成功 | `runs/<タスクID>-<試行回数>/prompt.md` を書き出す |
-| `1` | 使い方・tasks.md/state.json 不備(タスクID未検出、tasks.md/state.json が無い 等) | 書き出さない |
+| `1` | 使い方・tasks.md/state.json 不備(タスクID未検出、tasks.md/state.json が無い、依存欄の形式違反・存在しないID・自己依存 等) | 書き出さない |
 | `2` | 引き継ぎガード失敗(依存タスクが `done` でない、または依存タスクの `report.md` が見つからない) | 書き出さない(既存の古い prompt.md があれば削除する) |
 | `3` | リトライ(`-Attempt 2` 以上)なのに `fix-notes.md` が見つからない | 書き出さない |
 
@@ -189,9 +200,42 @@ JSONを直接書くことはない。
   .agents/workflow/scripts/state-sync.sh
   ```
   tasks.md に無いIDが state.json 側にある場合は警告のみ(削除は手動判断)。
+- **挿入**(既存タスクの間に新タスクを挟む。新タスクのセクションを tasks.md 末尾に追記してから実行):
+  ```powershell
+  .agents/workflow/scripts/state-sync.ps1 -Insert T8 -Before T4
+  ```
+  ```bash
+  .agents/workflow/scripts/state-sync.sh --insert T8 --before T4
+  ```
+  `--before` に指定したタスク(カンマ区切りで複数可)の依存欄に新タスクIDを追加し、
+  state.json に新タスクを `pending` で追加する。`--before` のタスクが `pending` でない場合や、
+  循環依存になる場合は拒否し、tasks.md / state.json を変更しない。
 
-exit code: `0`=成功、`1`=使い方不備(tasks.md/state.json 不在、`--init` 時の `--source` 欠落や
-state.json 既存 等)。
+どのモードでも、state.json を書く前に全タスクの依存欄を検証する(形式違反・存在しないID・
+自己依存・循環依存・依存行の欠落)。不正があれば何も書き込まずに exit 1 で終了する。
+
+exit code: `0`=成功、`1`=使い方不備・検証エラー(tasks.md/state.json 不在、`--init` 時の
+`--source` 欠落や state.json 既存、依存欄の不正、挿入先が `pending` でない 等)。
+
+### next-task — 次に処理するタスクの選択
+
+state.json の状態と tasks.md の依存関係から、次に処理するタスクを機械的に選ぶ。
+state.json の並び順ではなく依存関係を見るため、挿入したタスクも正しい順で選ばれる。
+
+1. `in_progress` / `in_review` のタスク(中断からの再開対象)があれば、その最初のもの
+2. なければ、依存タスクがすべて `done` の最初の `pending` タスク
+
+```powershell
+.agents/workflow/scripts/next-task.ps1
+```
+```bash
+.agents/workflow/scripts/next-task.sh
+```
+
+stdout に `<タスクID> <status>`(例: `T8 pending`)を出力する。
+
+exit code: `0`=該当タスクあり、`1`=tasks.md/state.json 不在・依存欄の不正、`3`=全タスク `done`、
+`4`=実行可能なタスクが無い(`failed` や未完了の依存で止まっている。原因を stderr に列挙)。
 
 ### workflow-archive — 一巡後のサイクル退避
 
