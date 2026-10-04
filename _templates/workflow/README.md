@@ -7,7 +7,7 @@
 ```
 .agents/workflow/
 ├── config.json / tasks.md / state.json / README.md   ← 正本(人が直接読むファイルのみ)
-├── scripts/                      ← 配布物(セットアップ時にコピー、既存は上書きしない)
+├── scripts/                      ← 配布物(セットアップ時にコピー、既存は上書きしない。更新は workflow-sync-scripts)
 │   ├── dispatch-run.ps1 / .sh
 │   ├── dispatch-check.ps1 / .sh
 │   ├── dispatch-prompt-gen.ps1 / .sh
@@ -18,6 +18,7 @@
 │   ├── tasklib.ps1 / tasklib.py  tasks.md 解析・依存欄検証の共通部品
 │   ├── upstream-issue.ps1 / .sh
 │   ├── upstream-issue-template.md  upstream への Issue 本文テンプレート
+│   ├── workflow-sync-scripts.ps1 / .sh
 │   └── workflow-archive.ps1 / .sh
 ├── runs/<タスクID>-<試行回数>/   ← 実行単位の生成物(.gitignore対象。PR作成の単発依頼は pr-<N>-1/)
 │   ├── prompt.md        生成プロンプト
@@ -299,6 +300,33 @@ exit code: `0`=該当タスクあり、`1`=tasks.md/state.json 不在・依存�
 本文は `upstream-issue-template.md` をもとに作る。ラベルは付けない。
 
 exit code: `0`=成功、`1`=使い方不備・`upstream.url` 未設定・GitHub 以外の URL、その他=gh の exit code。
+
+### workflow-sync-scripts — 配布テンプレートの更新を配置先に反映
+
+`scripts/` と `README.md` はセットアップ時のコピーのため、`.agents/skills/` を更新しても
+自動では更新されない。このスクリプトで配布テンプレートとの差分を検出・反映する
+(`workflow-update` skill から使う)。**必ずテンプレート側のコピー
+(`.agents/skills/_templates/workflow/scripts/`)から実行する**。
+
+```powershell
+.agents/skills/_templates/workflow/scripts/workflow-sync-scripts.ps1                 # 一覧
+.agents/skills/_templates/workflow/scripts/workflow-sync-scripts.ps1 -CopyMissing    # 未配置のみコピー
+.agents/skills/_templates/workflow/scripts/workflow-sync-scripts.ps1 -Diff scripts/dispatch-run.ps1
+.agents/skills/_templates/workflow/scripts/workflow-sync-scripts.ps1 -Overwrite scripts/dispatch-run.ps1,README.md
+```
+```bash
+bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh
+bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --copy-missing
+bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --diff scripts/dispatch-run.sh
+bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --overwrite scripts/dispatch-run.sh,README.md
+```
+
+一覧は `missing`(未配置)/ `differs`(内容が異なる)とファイル名(`scripts/<名前>` / `README.md`)を
+表示する。改行コード(CRLF/LF)・BOM だけの違いは差分とみなさない。`differs` のファイルは
+利用先でカスタマイズされている可能性があるため、差分を確認してユーザーの承認を得てから
+`--overwrite` する。
+
+exit code: `0`=成功(一覧モードでは差分なし)、`1`=使い方不備・不明なファイル名、`3`=一覧モードで差分あり。
 
 ### workflow-archive — 一巡後のサイクル退避
 

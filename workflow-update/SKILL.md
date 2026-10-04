@@ -53,7 +53,48 @@ git subtree pull --prefix=.agents/skills <URL> <branch> --squash
 - **勝手に解決しない**。解決はユーザーまたは別途依頼されたエージェントが行う
 - コンフリクト解決後、ユーザーに `git commit` を指示する
 
-### 5. 旧レイアウトの検出
+### 5. 配置済みスクリプト・README の更新
+
+`.agents/workflow/scripts/` と `.agents/workflow/README.md` は、セットアップ時に
+`_templates/workflow/` からコピーされた**複製**のため、手順3で `.agents/skills/` を更新しても
+自動では更新されない。`workflow-sync-scripts` を**テンプレート側のコピー**
+(`.agents/skills/_templates/workflow/scripts/`)から実行し、差分を反映する
+(配置先側の古いスクリプトを実行しないこと)。
+
+1. **差分の一覧**:
+   ```powershell
+   .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.ps1
+   ```
+   ```bash
+   bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh
+   ```
+   exit 0 なら差分なし(この手順は終了)。exit 3 なら `missing`(未配置)/ `differs`
+   (内容が異なる)のファイルが一覧表示される。改行コードだけの違いは差分とみなさない
+2. **未配置ファイルのコピー**(`missing` がある場合。新しく追加されたスクリプト等なので、
+   確認なしでコピーしてよい):
+   ```powershell
+   .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.ps1 -CopyMissing
+   ```
+   ```bash
+   bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --copy-missing
+   ```
+3. **差分のあるファイルの上書き**(`differs` がある場合): 利用先でカスタマイズされている
+   可能性があるため、**ユーザーの承認なしに上書きしない**。`-Diff <名前>` / `--diff <名前>` で
+   差分(配置先 → テンプレート)を確認し、ファイルごとの差分の要約(カスタマイズの痕跡が
+   あるか等)をユーザーに提示する。承認されたファイルだけを上書きする
+   ```powershell
+   .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.ps1 -Diff scripts/dispatch-run.ps1
+   .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.ps1 -Overwrite scripts/dispatch-run.ps1,README.md
+   ```
+   ```bash
+   bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --diff scripts/dispatch-run.sh
+   bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --overwrite scripts/dispatch-run.sh,README.md
+   ```
+
+`.agents/workflow/scripts/` 等がコミット対象の利用先では、反映後の変更をユーザーに
+コミットしてもらう(この skill ではコミットしない)。
+
+### 6. 旧レイアウトの検出
 
 `.agents/skills/` の更新後、`.agents/workflow/` に本計画(dispatchプロンプトの機械生成)
 以前のレイアウトが残っていないか確認する。以下のいずれかを検出したら、
@@ -67,7 +108,7 @@ git subtree pull --prefix=.agents/skills <URL> <branch> --squash
 `.agents/workflow/` 配下の実運用ファイル(tasks.md / state.json / config.json 等)は
 この skill では変更しない。
 
-### 6. .gitignore の確認
+### 7. .gitignore の確認
 
 `.gitignore` に以下3項目が記載されているか確認する。欠けている場合は `agents-md-setup`
 skillの再実行(手順4の `.gitignore` 整備)を**ユーザーに提案する**(この skill 自身では
@@ -77,13 +118,15 @@ skillの再実行(手順4の `.gitignore` 整備)を**ユーザーに提案す�
 - `.agents/workflow/.config/`
 - `.agents/scheduled_tasks.lock`(Claude Code 本体のランタイムファイルでありコミット対象外)
 
-### 7. 完了報告
+### 8. 完了報告
 
 正常終了時またはコンフリクト発生時に以下を報告する:
 
 - 実行したコマンド
 - 更新結果(成功/コンフリクト/エラー)
 - コンフリクト時は衝突ファイル一覧
+- スクリプト・README の同期結果(コピーした未配置ファイル、上書きしたファイル、
+  ユーザー判断で上書きしなかった差分のあるファイル)
 - 旧レイアウト検出の有無、検出した場合はユーザーへの提案内容
 - `.gitignore` の3項目の記載有無、欠けている場合は `agents-md-setup` 再実行の提案
 - 次のアクション(コミット確認、テスト実行など)

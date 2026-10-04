@@ -24,7 +24,7 @@ Claude Code 固有のパス(`CLAUDE.md`, `.claude/`)からはリンク経由で�
   New-Item -ItemType Directory -Force .agents/workflow/runs
   ```
 - `.agents/workflow/config.json` または `.agents/workflow/README.md` が無い場合、それぞれ `_templates/workflow/config.json` / `_templates/workflow/README.md` からコピーする(skill ディレクトリから見たパスは `../_templates/workflow/config.json` / `../_templates/workflow/README.md`、利用先では `.agents/skills/_templates/workflow/config.json` / `.agents/skills/_templates/workflow/README.md`)。**既存のファイルは上書きしない**
-- `.agents/workflow/scripts/` が無い、または配下のスクリプトが欠けている場合、`_templates/workflow/scripts/` 配下の全ファイル(`dispatch-run` / `dispatch-prompt-gen` / `state-sync` / `next-task` / `workflow-archive` 等の `.ps1/.sh`、共通部品 `tasklib.ps1/.py`、テンプレート `*.md`)をコピーする(パス解決は上記と同様、利用先では `.agents/skills/_templates/workflow/scripts/`)。**個別ファイル単位で既存のものは上書きしない**(利用先でカスタマイズ済みの可能性があるため)。POSIX 環境ではコピー後に `chmod +x .agents/workflow/scripts/*.sh` を実行する
+- `.agents/workflow/scripts/` が無い、または配下のスクリプトが欠けている場合、`_templates/workflow/scripts/` 配下の全ファイル(`dispatch-run` / `dispatch-prompt-gen` / `state-sync` / `next-task` / `workflow-archive` 等の `.ps1/.sh`、共通部品 `tasklib.ps1/.py`、テンプレート `*.md`)をコピーする(パス解決は上記と同様、利用先では `.agents/skills/_templates/workflow/scripts/`)。**個別ファイル単位で既存のものは上書きしない**(利用先でカスタマイズ済みの可能性があるため。配布元の更新を既存の配置先に反映するのは `workflow-update` skill の「配置済みスクリプト・README の更新」(`workflow-sync-scripts`)で行う)。POSIX 環境ではコピー後に `chmod +x .agents/workflow/scripts/*.sh` を実行する
 
 #### 旧レイアウトの検出
 

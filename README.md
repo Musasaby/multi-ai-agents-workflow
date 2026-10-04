@@ -42,6 +42,16 @@ AIエージェント(Claude Code、OpenCode 等)による複数エージェン�
 git subtree pull --prefix=.agents/skills https://github.com/Musasaby/multi-ai-agents-workflow.git main --squash
 ```
 
+`.agents/workflow/scripts/` と `.agents/workflow/README.md` はセットアップ時のコピーのため、
+subtree pull だけでは更新されません。手動で更新した場合は、続けて以下で差分を確認・反映してください
+(`workflow-update` skill はこの手順も実行します):
+
+```bash
+bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh                 # 差分の一覧
+bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --copy-missing  # 未配置ファイルをコピー
+bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --overwrite <名前,...>  # 差分を確認して上書き
+```
+
 ## 旧コピー方式からの移行手順
 
 以前は「ファイルをコピーして配置」する方式でした。現在は `git subtree` 方式に統一しています。
@@ -89,7 +99,7 @@ skill の編集はリポジトリルート直下の各ディレクトリ(`agent-
 ```powershell
 # ルート直下の配布物を .agents/skills にコピー
 $items = 'agent-workflow','agent-task-plan','agent-dispatch','agent-review-commit',
-         'agent-comprehension-check','agents-md-setup','workflow-update','_templates'
+         'agent-comprehension-check','agent-quality-gate','agents-md-setup','workflow-update','_templates'
 foreach ($i in $items) {
   Remove-Item ".agents/skills/$i" -Recurse -Force -ErrorAction SilentlyContinue
   Copy-Item $i ".agents/skills/$i" -Recurse
@@ -102,6 +112,23 @@ Copy-Item README.md .agents/skills/README.md -Force
 > `.agents/` はローカル実行用のコピーとして未追跡で運用します。
 > なお `git subtree pull` は自己参照で no-op になり、`git subtree split` も最終取込時点の
 > コミットを返すだけのため、git ベースの同期は機能しません(コピー方式に統一した理由)。
+
+### テスト
+
+`_templates/workflow/scripts/` のスクリプトは `tests/` のシナリオテストで検証します。
+一時ディレクトリにダミーの利用先プロジェクトを作ってスクリプトを実行するため、
+本リポジトリの `.agents/` には影響しません(gh への実アクセスもしません)。
+
+```bash
+# POSIX 版(bash + python3 + git)
+for t in tests/test-*.sh; do bash "$t" || echo "FAILED: $t"; done
+```
+```powershell
+# PowerShell 版(pwsh 7 + git)
+Get-ChildItem tests/test-*.ps1 | ForEach-Object { pwsh -NoProfile -File $_.FullName; if ($LASTEXITCODE) { "FAILED: $($_.Name)" } }
+```
+
+POSIX 版のシグナル終了のテスト(Python 経由の経路)は Linux でのみ実行されます(Windows ではスキップ)。
 
 ### 旧構成からの移行
 
