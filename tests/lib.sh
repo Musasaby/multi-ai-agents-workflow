@@ -49,12 +49,13 @@ write_tasks() {
 # write_state "T1:done" "T2:pending" ...
 write_state() {
     local json_tasks=""
-    local item id status
+    local item id status retries
     for item in "$@"; do
-        id="${item%%:*}"
-        status="${item#*:}"
+        # "T1:status" または "T1:status:retries"
+        IFS=':' read -r id status retries <<< "$item"
+        retries="${retries:-0}"
         [ -n "$json_tasks" ] && json_tasks="$json_tasks,"
-        json_tasks="$json_tasks{\"id\":\"$id\",\"title\":\"$id title\",\"status\":\"$status\",\"retries\":0,\"commit\":null}"
+        json_tasks="$json_tasks{\"id\":\"$id\",\"title\":\"$id title\",\"status\":\"$status\",\"retries\":$retries,\"commit\":null}"
     done
     printf '{"source":"test","branch":"main","updated_at":"2026-01-01T00:00:00+09:00","tasks":[%s]}\n' "$json_tasks" \
         > "$PROJ/.agents/workflow/state.json"

@@ -15,6 +15,7 @@
 │   ├── dispatch-pr-prompt-template.md   PR作成の単発依頼用(dispatch-prompt-gen --pr)
 │   ├── state-sync.ps1 / .sh
 │   ├── next-task.ps1 / .sh
+│   ├── task-state.ps1 / .sh
 │   ├── tasklib.ps1 / tasklib.py  tasks.md 解析・依存欄検証の共通部品
 │   ├── upstream-issue.ps1 / .sh
 │   ├── upstream-issue-template.md  upstream への Issue 本文テンプレート
@@ -132,7 +133,7 @@ Claude Code を子エージェントとして使う場合は `stream-json` 出�
 
 `status` の遷移: `pending` → `in_progress`(dispatch) → `in_review`(子の完了報告)
 → `done`(レビュー合格・コミット済み、`commit` にハッシュを記録) / 不合格は `in_progress` に戻し `retries` をインクリメント。
-回復不能な失敗は `failed`(ユーザーへエスカレーション)。
+回復不能な失敗は `failed`(ユーザーへエスカレーション)。遷移はすべて `scripts/task-state` で行う(次節)。
 
 ## scripts/ 配下のスクリプト
 
@@ -261,6 +262,31 @@ JSONを直接書くことはない。
 
 exit code: `0`=成功、`1`=使い方不備・検証エラー(tasks.md/state.json 不在、`--init` 時の
 `--source` 欠落や state.json 既存、依存欄の不正、挿入先が `pending` でない 等)。
+
+### task-state — タスクの状態遷移
+
+state.json のタスクの状態を、許された遷移だけで更新する。LLM が state.json を手で編集しない
+ためのスクリプト。拒否した場合は state.json を変更しない。`updated_at` も更新する。
+
+| 動作 | 遷移 | 用途 |
+|------|------|------|
+| `start` | `pending` / `in_progress` → `in_progress` | dispatch(中断後の再 dispatch も可) |
+| `review` | `in_progress` → `in_review` | 子の完了報告を検証した後 |
+| `done` | `in_review` → `done` | レビュー合格・コミット後。`--commit <hash>`(PowerShell は `-Commit`)必須 |
+| `retry` | `in_review` → `in_progress`、`retries` + 1 | 修正の再依頼。`retries` が `max_fix_retries` 以上なら拒否(exit 4) |
+| `fail` | `pending` 以外 → `failed` | 回復不能(ユーザーへエスカレーション) |
+| `reset` | `failed` → `pending`(`retries` を 0、`commit` を null) | ユーザー判断でやり直す場合 |
+
+```powershell
+.agents/workflow/scripts/task-state.ps1 T1 start
+.agents/workflow/scripts/task-state.ps1 T1 done -Commit abc1234
+```
+```bash
+.agents/workflow/scripts/task-state.sh T1 start
+.agents/workflow/scripts/task-state.sh T1 done --commit abc1234
+```
+
+exit code: `0`=更新した、`1`=使い方不備・許されない遷移・タスク未検出、`4`=`retry` の上限超過。
 
 ### next-task — 次に処理するタスクの選択
 
