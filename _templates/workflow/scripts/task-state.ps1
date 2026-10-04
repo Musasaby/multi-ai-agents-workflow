@@ -33,12 +33,15 @@ $transitions = @{
     fail   = @{ from = @('in_progress', 'in_review', 'done', 'failed'); to = 'failed' }
     reset  = @{ from = @('failed'); to = 'pending' }
 }
-if (-not $transitions.ContainsKey($Action)) {
+# 大文字小文字を区別する(POSIX 版と同じ。ハッシュテーブルの ContainsKey は区別しないため)
+if ($transitions.Keys -cnotcontains $Action) {
     Fail "Unknown action '$Action' (expected: start, review, done, retry, fail, reset)"
 }
 if ($Action -eq 'done') {
     if (-not $Commit) { Fail 'done requires -Commit <hash>' }
     if ($Commit -notmatch '^[0-9a-fA-F]{7,40}$') { Fail "Invalid commit hash: '$Commit'" }
+    # git log の %H(小文字)と前方一致で照合するため、小文字に正規化して記録する
+    $Commit = $Commit.ToLowerInvariant()
 } elseif ($Commit) {
     Fail '-Commit is only valid with done'
 }
@@ -71,25 +74,18 @@ if ($Action -eq 'retry') {
     $retries++
 }
 
-# state.json を書き戻す(フィールド順を保ち、対象タスクだけ更新する)
-$tasks = @()
-foreach ($t in $state.tasks) {
-    $entry = [ordered]@{ id = $t.id; title = $t.title; status = $t.status; retries = $t.retries; commit = $t.commit }
-    if ($t.id -eq $TaskId) {
-        $entry.status = $rule.to
-        $entry.retries = $retries
-        if ($Action -eq 'done') { $entry.commit = $Commit }
-        if ($Action -eq 'reset') { $entry.retries = 0; $entry.commit = $null }
-    }
-    $tasks += $entry
+# 読み込んだオブジェクトをその場で更新して書き戻す(未知のフィールドも POSIX 版と同様に保持する)
+function Set-Field {
+    param($Object, [string]$Name, $Value)
+    if ($Object.PSObject.Properties[$Name]) { $Object.$Name = $Value }
+    else { $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value }
 }
-$out = [ordered]@{
-    source     = $state.source
-    branch     = $state.branch
-    updated_at = (Get-Date).ToString('yyyy-MM-ddTHH:mm:sszzz')
-    tasks      = $tasks
-}
-[System.IO.File]::WriteAllText((Join-Path (Get-Location) $statePath), ($out | ConvertTo-Json -Depth 10) + "`n", [System.Text.UTF8Encoding]::new($false))
+Set-Field $task 'status' $rule.to
+Set-Field $task 'retries' $retries
+if ($Action -eq 'done') { Set-Field $task 'commit' $Commit }
+if ($Action -eq 'reset') { Set-Field $task 'retries' 0; Set-Field $task 'commit' $null }
+Set-Field $state 'updated_at' (Get-Date).ToString('yyyy-MM-ddTHH:mm:sszzz')
+[System.IO.File]::WriteAllText((Join-Path (Get-Location) $statePath), ($state | ConvertTo-Json -Depth 10) + "`n", [System.Text.UTF8Encoding]::new($false))
 
 $suffix = ''
 if ($Action -eq 'retry') { $suffix = " (retries $retries)" }

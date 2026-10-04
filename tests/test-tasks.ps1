@@ -301,4 +301,12 @@ Invoke-TestCase "gen: プロジェクト固有の指示を含まない" {
     Assert-Contains (Get-PromptT1) "AGENTS.md" "points to AGENTS.md for project-specific rules"
 }
 
+Invoke-TestCase "gen: config.json が壊れていればexit 1" {
+    Set-Tasks $basicTasks
+    Set-State 'T1:pending'
+    Write-Utf8File "$script:Proj/.agents/workflow/config.json" '{ broken'
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1
+    Assert-Eq 1 $script:Code "broken config.json -> exit 1"
+}
+
 Show-Summary

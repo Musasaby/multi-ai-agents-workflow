@@ -85,6 +85,34 @@ t_other_tasks_untouched() {
     assert_eq 1 "$(state_get T2 retries)" "T2 retries kept"
 }
 
+t_preserves_unknown_fields() {
+    printf '{"source":"s","branch":"b","updated_at":"x","extra":1,"tasks":[{"id":"T1","title":"t","status":"pending","retries":0,"commit":null,"note":"keep"}]}\n' \
+        > "$PROJ/.agents/workflow/state.json"
+    run_script task-state.sh T1 start
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_contains "$(state_text)" '"note": "keep"' "unknown task field kept"
+    assert_contains "$(state_text)" '"extra": 1' "unknown top-level field kept"
+}
+
+t_commit_lowercased() {
+    write_state "T1:in_review"
+    run_script task-state.sh T1 done --commit ABC1234
+    assert_eq abc1234 "$(state_get T1 commit)" "commit hash normalized to lowercase"
+}
+
+t_null_retries() {
+    printf '{"source":"s","branch":"b","updated_at":"x","tasks":[{"id":"T1","title":"t","status":"in_review","retries":null,"commit":null}]}\n' \
+        > "$PROJ/.agents/workflow/state.json"
+    run_script task-state.sh T1 retry
+    assert_eq 0 "$CODE" "retries null treated as 0: $ERR"
+    assert_eq 1 "$(state_get T1 retries)" "retries incremented from null"
+}
+
+t_action_case_sensitive() {
+    write_state "T1:pending"
+    expect_reject 1 T1 START
+}
+
 echo "test-task-state.sh"
 test_case "start" t_start
 test_case "start: done からは拒否" t_start_from_done_rejected
@@ -95,4 +123,8 @@ test_case "retry: 上限超過は exit 4" t_retry_limit
 test_case "fail / reset" t_fail_and_reset
 test_case "不正な引数" t_invalid_args
 test_case "他のタスクは変えない" t_other_tasks_untouched
+test_case "未知のフィールドを保持" t_preserves_unknown_fields
+test_case "コミットハッシュを小文字に正規化" t_commit_lowercased
+test_case "retries が null" t_null_retries
+test_case "動作名は大文字小文字を区別" t_action_case_sensitive
 summary

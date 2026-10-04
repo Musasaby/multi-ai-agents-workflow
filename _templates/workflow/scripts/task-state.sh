@@ -73,6 +73,8 @@ if action == 'done':
         fail('done requires --commit <hash>')
     if not re.fullmatch(r'[0-9a-fA-F]{7,40}', commit):
         fail("Invalid commit hash: '" + commit + "'")
+    # git log の %H(小文字)と前方一致で照合するため、小文字に正規化して記録する
+    commit = commit.lower()
 elif commit:
     fail('--commit is only valid with done')
 
@@ -93,10 +95,11 @@ if action == 'retry':
     if os.path.exists(config_path):
         with open(config_path, encoding='utf-8') as f:
             max_retries = int(json.load(f).get('max_fix_retries', 2))
-    if int(task.get('retries', 0)) >= max_retries:
-        fail(task_id + ': retries (' + str(task.get('retries', 0)) + ') reached max_fix_retries ('
+    retries = int(task.get('retries') or 0)
+    if retries >= max_retries:
+        fail(task_id + ': retries (' + str(retries) + ') reached max_fix_retries ('
              + str(max_retries) + '); escalate instead of retrying', 4)
-    task['retries'] = int(task.get('retries', 0)) + 1
+    task['retries'] = retries + 1
 elif action == 'done':
     task['commit'] = commit
 elif action == 'reset':

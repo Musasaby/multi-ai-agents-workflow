@@ -222,7 +222,13 @@ if ($Attempt -ge 2) {
     $fixNotes = "## レビュー指摘事項(最優先で対応)`n$($fixContent.TrimEnd())"
 }
 
-$config = Get-Content $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+# config.json が無い・壊れている場合は POSIX 版と同じく exit 1 にする(空の検証指示で続行しない)
+try {
+    $config = Get-Content $ConfigPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+} catch {
+    [Console]::Error.WriteLine("config.json could not be read: $ConfigPath ($($_.Exception.Message))")
+    exit 1
+}
 # config の検証コマンド(command が空のステップは載せない)。1つも無ければ空にし、
 # テンプレート側の「受け入れ基準に書かれた確認手順」だけを子に実行させる
 $verifyLines = @()
@@ -232,7 +238,8 @@ if ($cdc) {
 } elseif ($config.quality_gate -and $config.quality_gate.steps) {
     foreach ($step in $config.quality_gate.steps) {
         $cmd = "$($step.command)".Trim()
-        if ($step.blocking -and $cmd) { $verifyLines += "- $($step.name): $cmd" }
+        $name = if ($step.name) { $step.name } else { 'check' }
+        if ($step.blocking -and $cmd) { $verifyLines += "- ${name}: $cmd" }
     }
 }
 $tc = "$($config.test_command)".Trim()

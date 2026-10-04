@@ -83,4 +83,24 @@ Invoke-TestCase "他のタスクは変えない" {
     Assert-Eq 1 (Get-StateTask T2).retries "T2 retries kept"
 }
 
+Invoke-TestCase "未知のフィールドを保持" {
+    Write-Utf8File "$script:Proj/.agents/workflow/state.json" '{"source":"s","branch":"b","updated_at":"x","extra":1,"tasks":[{"id":"T1","title":"t","status":"pending","retries":0,"commit":null,"note":"keep"}]}'
+    Invoke-Script task-state.ps1 T1 start
+    Assert-Eq 0 $script:Code "exit: $($script:Err)"
+    Assert-Eq 'keep' (Get-StateTask T1).note "unknown task field kept"
+    Assert-Eq 1 (ConvertFrom-Json (Get-StateText)).extra "unknown top-level field kept"
+    Assert-Eq 'in_progress' (Get-StateTask T1).status "status updated"
+}
+
+Invoke-TestCase "コミットハッシュを小文字に正規化" {
+    Set-State 'T1:in_review'
+    Invoke-Script task-state.ps1 T1 done -Commit ABC1234
+    Assert-Eq abc1234 (Get-StateTask T1).commit "commit hash normalized to lowercase"
+}
+
+Invoke-TestCase "動作名は大文字小文字を区別" {
+    Set-State 'T1:pending'
+    Assert-Reject 1 @('T1', 'START')
+}
+
 Show-Summary

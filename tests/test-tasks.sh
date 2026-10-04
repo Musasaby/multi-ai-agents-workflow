@@ -375,6 +375,14 @@ t_gen_no_project_specific_text() {
     assert_contains "$(prompt_t1)" "AGENTS.md" "points to AGENTS.md for project-specific rules"
 }
 
+t_gen_broken_config() {
+    basic_tasks
+    write_state "T1:pending"
+    printf '{ broken' > "$PROJ/.agents/workflow/config.json"
+    run_script dispatch-prompt-gen.sh T1
+    assert_eq 1 "$CODE" "broken config.json -> exit 1"
+}
+
 echo "test-tasks.sh"
 test_case "gen: 注記付き依存はexit 1" t_gen_annotation_rejected
 test_case "gen: 正しい形式は通る" t_gen_valid_forms_pass
@@ -406,4 +414,5 @@ test_case "gen: 不正なTaskIdはexit 1" t_gen_invalid_task_id
 test_case "gen: 空のquality_gateステップは載せない" t_gen_skips_empty_steps
 test_case "gen: 検証コマンド未設定は受け入れ基準を指示" t_gen_no_verify_command
 test_case "gen: プロジェクト固有の指示を含まない" t_gen_no_project_specific_text
+test_case "gen: config.json が壊れていればexit 1" t_gen_broken_config
 summary

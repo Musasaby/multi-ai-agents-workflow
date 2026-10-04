@@ -98,7 +98,9 @@ catch { New-Item -ItemType Junction -Path .claude -Target (Resolve-Path .agents)
 配布元の `.gitattributes` は subtree で取り込むと `.agents/skills/` 配下にしか効かず、
 `.agents/workflow/scripts/` にコピーしたスクリプトは対象外になる。Windows で `core.autocrlf=true`
 の場合、追記しないと CRLF でチェックアウトされ、WSL・Linux で実行できなくなる。
-リポジトリ内のファイルは LF で保存されているためコミットは不要。追記前にチェックアウト済みで
+スクリプト自体はリポジトリ内に LF で保存されているため、再コミットは不要(`.gitignore` と
+`.gitattributes` の追加・変更はコミットする。未コミットのままだと `agent-dispatch` の
+事前チェック(作業ツリーがクリーン)で止まる)。追記前にチェックアウト済みで
 作業ツリーが CRLF になっているファイルは、削除してから `git checkout -- .agents/workflow/scripts`
 で取り出し直すと LF になる(未コミットの変更が無いことを確認してから行う)。
 
