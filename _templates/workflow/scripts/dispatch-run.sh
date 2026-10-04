@@ -7,8 +7,19 @@ if ! [[ "$TASK_ID" =~ ^[A-Za-z0-9_-]+$ ]] || ! [[ "$ATTEMPT" =~ ^[0-9]+$ ]]; the
   exit 1
 fi
 cd "$(dirname "$0")/../../.."
-export XDG_CONFIG_HOME=".agents/workflow/.config"
-export XDG_DATA_HOME=".agents/workflow/.config"
+# child_agent.isolate_xdg が true のときだけ、子CLIの設定・データの置き場所をプロジェクト内に切り替える
+# (sandbox で ~/.config 等に書けない環境向け)。既定(未指定・false)は呼び出し元の XDG をそのまま使う。
+# 切り替えると ~/.local/share/<CLI>/auth.json 等の認証情報が見えなくなる点に注意。
+ISOLATE_XDG=false
+if command -v python3 > /dev/null 2>&1; then
+  ISOLATE_XDG=$(python3 -c "import json; print(str(bool(json.load(open('.agents/workflow/config.json', encoding='utf-8'))['child_agent'].get('isolate_xdg', False))).lower())" 2>/dev/null | tr -d '\r')
+elif grep -Eq '"isolate_xdg"[[:space:]]*:[[:space:]]*true' .agents/workflow/config.json; then
+  ISOLATE_XDG=true
+fi
+if [ "$ISOLATE_XDG" = true ]; then
+  export XDG_CONFIG_HOME=".agents/workflow/.config"
+  export XDG_DATA_HOME=".agents/workflow/.config"
+fi
 RUN_DIR=".agents/workflow/runs/${TASK_ID}-${ATTEMPT}"
 mkdir -p "$RUN_DIR"
 LOG_PATH="$RUN_DIR/output.log"

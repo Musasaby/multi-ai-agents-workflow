@@ -29,7 +29,7 @@
 │   └── report.md        完了報告
 ├── comprehension/                ← 理解確認(タスク単位)
 ├── archive/<日時-スラッグ>/      ← 一巡した過去サイクルの退避先(.gitignore対象)
-└── .config/                      ← 子エージェントCLIのXDG退避先
+└── .config/                      ← 子エージェントCLIのXDG退避先(isolate_xdg: true のときのみ使用)
 ```
 
 - `runs/` はタスク×試行ごとにディレクトリが分かれるため、リトライ時に過去の
@@ -44,6 +44,7 @@
 |------|------|-----------|
 | `child_agent.command_template` | 子エージェントCLIのコマンドテンプレート。`{prompt}` がタスクプロンプトに展開される | `opencode run "{prompt}"` |
 | `child_agent.timeout_seconds` | 子エージェント実行のタイムアウト(秒) | `1800` |
+| `child_agent.isolate_xdg` | `true` なら `dispatch-run` が子CLIの `XDG_CONFIG_HOME` / `XDG_DATA_HOME` を `.agents/workflow/.config` に切り替える(sandbox で `~/.config` 等に書けない環境向け)。切り替えると `~/.local/share/<CLI>/auth.json` 等の認証情報が見えなくなる。未指定は `false` | `false` |
 | `test_command` | 子エージェントに実行させるテストコマンド。空ならタスクごとに親が指定 | `""` |
 | `verify_before_commit` | コミット直前に親がテストコマンドを1回実行する最終ゲート | `false` |
 | `max_fix_retries` | レビュー不合格時の子エージェントへの再依頼上限。超過で親のサブエージェントにフォールバック | `2` |

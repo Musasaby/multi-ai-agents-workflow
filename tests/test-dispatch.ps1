@@ -19,6 +19,21 @@ function New-Run {
     Write-Utf8File "$script:Proj/.agents/workflow/runs/T1-1/output.log" "$Log`n"
 }
 
+function Set-Isolate {
+    param([string]$Value)
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg.child_agent.PSObject.Properties.Remove('isolate_xdg')
+    if ($Value -ne 'absent') { $cfg.child_agent | Add-Member -NotePropertyName isolate_xdg -NotePropertyValue ($Value -eq 'true') }
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+}
+
+function Get-ChildXdg {
+    $env:XDG_DATA_HOME = 'C:/caller/xdg-data'
+    try { Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1 } finally { Remove-Item Env:XDG_DATA_HOME -ErrorAction SilentlyContinue }
+    return [System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.log")
+}
+
 $report = "作業しました`n## 完了報告`n- 変更ファイル: a.txt`n- テスト結果: 全件パス"
 
 Write-Host "test-dispatch.ps1"
@@ -34,6 +49,20 @@ Invoke-TestCase "run: 非0は数値のまま" {
     Set-Child 'exit 3'
     Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
     Assert-Eq "EXIT:3" (Get-DoneExit) "done marker"
+}
+
+Invoke-TestCase "run: isolate_xdg 未指定/false は XDG を引き継ぐ" {
+    Set-Child 'Write-Output "DATA=$env:XDG_DATA_HOME"'
+    Set-Isolate absent
+    Assert-Contains (Get-ChildXdg) "DATA=C:/caller/xdg-data" "absent: caller XDG inherited"
+    Set-Isolate false
+    Assert-Contains (Get-ChildXdg) "DATA=C:/caller/xdg-data" "false: caller XDG inherited"
+}
+
+Invoke-TestCase "run: isolate_xdg true は XDG を切り替える" {
+    Set-Child 'Write-Output "DATA=$env:XDG_DATA_HOME"'
+    Set-Isolate true
+    Assert-Contains (Get-ChildXdg) "DATA=.agents/workflow/.config" "true: XDG isolated"
 }
 
 Invoke-TestCase "check: 正常" {

@@ -26,7 +26,9 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
 - state.json の対象タスクが `pending` または `in_progress`(リトライ)であることを確認
 - 依存タスク(`依存:` 欄)がすべて `done` であることを確認
 - 子エージェントCLIの疎通確認: コマンドテンプレートの先頭コマンドに `--version` 等を付けて実行し、正常終了することを確認。失敗した場合はエラー出力を添えて中断しユーザーに報告する
-  - **sandbox 環境で `~/.config` や `~/.local/share` 配下の作成が拒否される問題を回避するため、事前に `XDG_CONFIG_HOME` と `XDG_DATA_HOME` をプロジェクト内ディレクトリに設定して疎通確認する**:
+  - 疎通確認は `dispatch-run` と同じ環境で行う。`config.json` の `child_agent.isolate_xdg` が
+    `false`(既定)なら、そのまま `<コマンドテンプレートの先頭コマンド> --version` を実行する
+  - **`isolate_xdg` が `true` の場合**(sandbox 環境で `~/.config` や `~/.local/share` 配下の作成が拒否される問題を回避するため、`dispatch-run` が `XDG_CONFIG_HOME` と `XDG_DATA_HOME` をプロジェクト内ディレクトリに切り替える設定)は、同じ設定で疎通確認する。この設定では `~/.local/share/<CLI>/auth.json` 等の認証情報が見えなくなるため、認証が必要な CLI は失敗しうる:
     ```powershell
     # PowerShell
     $env:XDG_CONFIG_HOME = ".agents/workflow/.config"
@@ -108,7 +110,7 @@ exit 3 になる。
 - **ラッパースクリプト**(PowerShell: `.agents/workflow/scripts/dispatch-run.ps1`)が
   以下の責務を担う:
   - プロンプトを `.agents/workflow/runs/<タスクID>-<試行回数>/prompt.md` から読み込む
-  - `XDG_CONFIG_HOME` / `XDG_DATA_HOME` をプロジェクト内ディレクトリに設定
+  - `child_agent.isolate_xdg` が `true` のときだけ、`XDG_CONFIG_HOME` / `XDG_DATA_HOME` をプロジェクト内ディレクトリに設定する(既定の `false` では呼び出し元の設定をそのまま使い、CLI の認証情報も引き継ぐ)
   - **PowerShellのコンソールエンコーディングをUTF-8に設定する**(`[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` および `$OutputEncoding = [System.Text.Encoding]::UTF8` をスクリプト冒頭で実行)。
     `Start-Process` でデタッチ起動した子コンソールはOSのシステムロケール既定コードページ(日本語Windowsでは932/Shift_JIS)を引き継ぐため、未設定だとUTF-8で出力するCLIのstdout/stderrをリダイレクトする際に文字化けする
   - stdin を閉じて CLI(`$null | <CLI> run $prompt`)を実行し、stdout/stderr を
@@ -144,7 +146,7 @@ exit 3 になる。
   # POSIX: nohup ＋ & でデタッチ起動
   nohup .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1 &
   ```
-  (XDG環境変数の設定はラッパースクリプト内で行われるため、起動コマンド側での設定は不要)
+  (XDG環境変数の切り替えは `isolate_xdg` に従ってラッパースクリプト内で行われるため、起動コマンド側での設定は不要)
 - 起動直後、ユーザーが別ターミナル/別セッションでリアルタイム閲覧できるよう、以下のいずれかのコマンドを提示する(親エージェント自身が実行し続ける必要はない):
   ```powershell
   Get-Content .agents/workflow/runs/T1-1/output.log -Wait -Tail 20
@@ -262,12 +264,19 @@ exit 3 になる。
 
 ### `.agents/workflow/.config` 配下のディレクトリ作成が拒否される
 
-`sandbox` 環境で `.agents/workflow/.config` や `.agents/workflow/.config/opencode/log` ディレクトリの作成が権限不足等で拒否される場合は、以下のいずれかで対処する。
+(`child_agent.isolate_xdg: true` で使っている場合)`sandbox` 環境で `.agents/workflow/.config` や `.agents/workflow/.config/opencode/log` ディレクトリの作成が権限不足等で拒否される場合は、以下のいずれかで対処する。
 
 - **昇格実行**: ディレクトリ作成コマンドを管理者権限または昇格したコンテキストで実行する
 - **事前作成**: `/agents-md-setup` 等のセットアップ時に、リポジトリのセットアップ権限で `.agents/workflow/.config/opencode/log` を事前に作成しておく
 
 上記の対処後、事前チェックと実行の `XDG_CONFIG_HOME` / `XDG_DATA_HOME` 設定が正常に機能するようになる。
+
+### 子エージェントCLIが認証エラー・`Unexpected server error` で失敗する
+
+`child_agent.isolate_xdg` が `true` だと、`~/.local/share/opencode/auth.json` 等の認証情報が
+見えなくなる。sandbox 環境でなければ `isolate_xdg` を `false`(既定)にする。sandbox 環境で
+`true` が必要な場合は、`.agents/workflow/.config` 配下で CLI のログイン(例:
+`XDG_CONFIG_HOME=.agents/workflow/.config XDG_DATA_HOME=.agents/workflow/.config opencode auth login`)を行う。
 
 ### それでも `EEXIST` 等のエラーが出る場合
 

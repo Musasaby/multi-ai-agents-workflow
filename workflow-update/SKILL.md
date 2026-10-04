@@ -94,6 +94,11 @@ git subtree pull --prefix=.agents/skills <URL> <branch> --squash
 `.agents/workflow/scripts/` 等がコミット対象の利用先では、反映後の変更をユーザーに
 コミットしてもらう(この skill ではコミットしない)。
 
+**XDG 切り替えの既定変更に伴う移行**: `dispatch-run` は `child_agent.isolate_xdg` が `true` のときだけ
+子CLIの XDG をプロジェクト内(`.agents/workflow/.config`)に切り替える(以前は常に切り替えていた)。
+キーが無い既存の config.json では切り替えなくなる。sandbox 環境で切り替えが必要な利用先には、
+`config.json` の `child_agent` に `"isolate_xdg": true` を追加するよう提案する
+
 **依存欄の検証強化に伴う移行**: `state-sync` / `next-task` は全タスクの依存欄を厳密に検証する
 (依存行の欠落・注記付きの値・存在しないID・循環をエラーにする)。進行中のサイクルの
 tasks.md が旧形式(例: `- **依存**: T30(完了済み)`、依存行の無いタスク)の場合、スクリプトを

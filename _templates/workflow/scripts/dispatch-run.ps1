@@ -10,8 +10,6 @@ if ($TaskId -cnotmatch '^[A-Za-z0-9_-]+$' -or $Attempt -lt 1) {
 Set-Location $PSScriptRoot\..\..\..
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
-$env:XDG_CONFIG_HOME = ".agents/workflow/.config"
-$env:XDG_DATA_HOME = ".agents/workflow/.config"
 $runDir = ".agents/workflow/runs/$TaskId-$Attempt"
 $null = New-Item -ItemType Directory -Force $runDir
 $logPath = "$runDir/output.log"
@@ -21,6 +19,13 @@ Remove-Item -Force -ErrorAction SilentlyContinue $donePath
 $promptPath = "$runDir/prompt.md"
 $prompt = Get-Content $promptPath -Raw
 $config = Get-Content ".agents/workflow/config.json" -Raw | ConvertFrom-Json
+# child_agent.isolate_xdg が true のときだけ、子CLIの設定・データの置き場所をプロジェクト内に切り替える
+# (sandbox で ~/.config 等に書けない環境向け)。既定(未指定・false)は呼び出し元の XDG をそのまま使う。
+# 切り替えると ~/.local/share/<CLI>/auth.json 等の認証情報が見えなくなる点に注意。
+if ($config.child_agent.isolate_xdg -eq $true) {
+    $env:XDG_CONFIG_HOME = ".agents/workflow/.config"
+    $env:XDG_DATA_HOME = ".agents/workflow/.config"
+}
 
 function Split-CommandLine {
     param([string]$cmd)

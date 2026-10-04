@@ -85,6 +85,56 @@ t_run_exit_fallback() {
     assert_eq "EXIT:3" "$(done_exit)" "fallback: plain non-zero stays numeric"
 }
 
+set_isolate() { # $1 = true/false/absent
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" "$1" <<'PY'
+import json, sys
+p, v = sys.argv[1:3]
+with open(p, encoding='utf-8') as f:
+    cfg = json.load(f)
+if v == 'absent':
+    cfg['child_agent'].pop('isolate_xdg', None)
+else:
+    cfg['child_agent']['isolate_xdg'] = (v == 'true')
+with open(p, 'w', encoding='utf-8') as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+PY
+}
+
+# 子を python にする(Windows ネイティブ python から呼ぶ bash は WSL の bash になることがあり、
+# その場合は Windows 側の環境変数を引き継がないため)
+set_py_child() {
+    set_child ''
+    printf 'import os\nprint("DATA=" + os.environ.get("XDG_DATA_HOME", ""))\n' > "$PROJ/child.py"
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" <<'PY'
+import json, sys
+p = sys.argv[1]
+with open(p, encoding='utf-8') as f:
+    cfg = json.load(f)
+cfg['child_agent']['command_template'] = 'python3 ./child.py "{prompt}"'
+with open(p, 'w', encoding='utf-8') as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+PY
+}
+
+child_xdg() {
+    (cd "$PROJ" && XDG_DATA_HOME=/caller/xdg-data XDG_CONFIG_HOME=/caller/xdg-config .agents/workflow/scripts/dispatch-run.sh T1 1) > /dev/null 2>&1
+    cat "$PROJ/.agents/workflow/runs/T1-1/output.log"
+}
+
+t_run_xdg_inherited_by_default() {
+    set_py_child
+    set_isolate absent
+    assert_contains "$(child_xdg)" "caller/xdg-data" "absent: caller XDG inherited"
+    set_isolate false
+    assert_contains "$(child_xdg)" "caller/xdg-data" "false: caller XDG inherited"
+}
+
+t_run_xdg_isolated() {
+    set_py_child
+    set_isolate true
+    assert_contains "$(child_xdg)" "DATA=.agents/workflow/.config" "true: XDG isolated"
+}
+
 # ---------- dispatch-check ----------
 
 make_run() { # $1 = EXIT 値, $2 = output.log の内容
@@ -153,6 +203,8 @@ test_case "run: 通常の非0は数値のまま" t_run_exit_nonzero
 test_case "run: SIGTERMはsignal:15(python経路)" t_run_signal_python
 test_case "run: SIGTERMはsignal:15(フォールバック経路)" t_run_signal_fallback
 test_case "run: 通常の非0は数値のまま(フォールバック経路)" t_run_exit_fallback
+test_case "run: isolate_xdg 未指定/false は XDG を引き継ぐ" t_run_xdg_inherited_by_default
+test_case "run: isolate_xdg true は XDG を切り替える" t_run_xdg_isolated
 test_case "check: 正常" t_check_ok
 test_case "check: signalはexit 4" t_check_signal
 test_case "check: 非0はexit 4" t_check_nonzero
