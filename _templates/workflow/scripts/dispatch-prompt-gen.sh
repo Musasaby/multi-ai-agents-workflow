@@ -52,7 +52,7 @@ TEMPLATE_PATH_PY="$(to_py_path "$TEMPLATE_PATH")"
 PROMPT_PATH_PY="$(to_py_path "$PROMPT_PATH")"
 
 # --- PR mode: PR作成を子に単発依頼するプロンプトを生成する ---
-# 対象タスク = state.json で done かつ commit が git log <base>..HEAD に含まれるもの。
+# 対象タスク = state.json で done かつ commit が git log origin/<base>..HEAD に含まれるもの。
 # 出力先は runs/pr-<連番>-1/prompt.md。stdout に "RunId: pr-<連番>" を出す。
 if [ "$PR_MODE" = true ]; then
     BASE_BRANCH="main"
@@ -61,8 +61,19 @@ if [ "$PR_MODE" = true ]; then
         echo "PR mode must be run on a work branch (current: '${BRANCH:-detached HEAD}')" >&2
         exit 1
     fi
-    if ! git rev-parse --verify --quiet "$BASE_BRANCH" > /dev/null; then
-        echo "Base branch '$BASE_BRANCH' not found" >&2
+    # ローカルの main は古いことがあるため、origin を fetch して origin/<base> と比較する
+    # (古いと、マージ済みの無関係なコミットが対象・PR 本文の要約に混ざる)
+    BASE_REF="origin/$BASE_BRANCH"
+    if ! git remote get-url origin > /dev/null 2>&1; then
+        echo "Remote 'origin' not found (PR mode compares with $BASE_REF)" >&2
+        exit 1
+    fi
+    if ! git fetch -q origin "$BASE_BRANCH" 2>/dev/null; then
+        echo "Failed to fetch origin $BASE_BRANCH (cannot compare with the latest $BASE_REF)" >&2
+        exit 1
+    fi
+    if ! git rev-parse --verify --quiet "$BASE_REF" > /dev/null; then
+        echo "Base ref '$BASE_REF' not found" >&2
         exit 1
     fi
     if [ ! -f "$STATE_PATH" ]; then
@@ -80,13 +91,13 @@ if [ "$PR_MODE" = true ]; then
         done
     fi
     PR_RUN_DIR="$RUNS_BASE/pr-${PR_N}-1"
-    COMMITS="$(git log "$BASE_BRANCH..HEAD" --format=%H)"
+    COMMITS="$(git log "$BASE_REF..HEAD" --format=%H)"
     mkdir -p "$PR_RUN_DIR"
     python3 - "$STATE_PATH_PY" "$(to_py_path "$SCRIPT_DIR/dispatch-pr-prompt-template.md")" \
-        "$(to_py_path "$PR_RUN_DIR/prompt.md")" "$BRANCH" "$BASE_BRANCH" \
+        "$(to_py_path "$PR_RUN_DIR/prompt.md")" "$BRANCH" "$BASE_BRANCH" "$BASE_REF" \
         ".agents/workflow/runs/pr-${PR_N}-1" "$COMMITS" <<'PY' || { rmdir "$PR_RUN_DIR" 2>/dev/null; exit 1; }
 import json, sys
-state_path, template_path, prompt_path, branch, base, run_dir, commits = sys.argv[1:8]
+state_path, template_path, prompt_path, branch, base, base_ref, run_dir, commits = sys.argv[1:9]
 commits = [c for c in commits.split() if c]
 with open(state_path, encoding='utf-8') as f:
     tasks = json.load(f)['tasks']
@@ -96,12 +107,12 @@ for t in tasks:
     if t.get('status') == 'done' and c and any(h.startswith(c) for h in commits):
         selected.append('- ' + t['id'] + ': ' + t['title'] + ' (commit ' + c + ')')
 if not selected:
-    print('No done tasks whose commit is in ' + base + '..HEAD (nothing to include in the PR)', file=sys.stderr)
+    print('No done tasks whose commit is in ' + base_ref + '..HEAD (nothing to include in the PR)', file=sys.stderr)
     sys.exit(1)
 with open(template_path, encoding='utf-8') as f:
     text = f.read()
 for key, value in (('{task_list}', '\n'.join(selected)), ('{branch}', branch),
-                   ('{base_branch}', base), ('{run_dir}', run_dir)):
+                   ('{base_branch}', base), ('{base_ref}', base_ref), ('{run_dir}', run_dir)):
     text = text.replace(key, value)
 with open(prompt_path, 'w', encoding='utf-8', newline='\n') as f:
     f.write(text)
