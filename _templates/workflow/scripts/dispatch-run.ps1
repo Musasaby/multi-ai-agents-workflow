@@ -165,4 +165,9 @@ try {
 } catch {
     $endTime = (Get-Date).ToString("o")
     "EXIT:crashed:$($_.Exception.Message)`nEND:$endTime" | Out-File -Encoding utf8 $donePath
+    # ラッパー自体の異常終了(子の終了コードは done マーカーに記録済み)
+    exit 1
 }
+# 子の終了コードは done マーカーに記録する。ラッパー自体は正常に終わったので 0 を返す
+# (exit を呼ばないと、PowerShell セッション内で直接呼んだときに $LASTEXITCODE が更新されない)
+exit 0

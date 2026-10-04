@@ -263,3 +263,4 @@ $generated = $generated.Replace('{verify_instruction}', $verifyInstruction)
 
 [System.IO.File]::WriteAllText($PromptPath, $generated, [System.Text.UTF8Encoding]::new($false))
 Write-Output "Generated: $PromptPath"
+exit 0

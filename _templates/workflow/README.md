@@ -139,6 +139,8 @@ Claude Code を子エージェントとして使う場合は `stream-json` 出�
 
 いずれも `.agents/workflow/scripts/` にコピーして実行する(PowerShell版 `.ps1` / POSIX版 `.sh` の
 2系統。挙動・exit codeは揃えてある)。生成・更新対象はすべて `.agents/workflow/` 配下。
+PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動しても、PowerShell セッション内で
+`& .agents/workflow/scripts/<名前>.ps1` と直接呼んでも、`$LASTEXITCODE` で exit code を判定できる。
 
 ### dispatch-prompt-gen — dispatchプロンプトの機械生成
 
