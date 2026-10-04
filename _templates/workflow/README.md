@@ -16,6 +16,8 @@
 │   ├── state-sync.ps1 / .sh
 │   ├── next-task.ps1 / .sh
 │   ├── tasklib.ps1 / tasklib.py  tasks.md 解析・依存欄検証の共通部品
+│   ├── upstream-issue.ps1 / .sh
+│   ├── upstream-issue-template.md  upstream への Issue 本文テンプレート
 │   └── workflow-archive.ps1 / .sh
 ├── runs/<タスクID>-<試行回数>/   ← 実行単位の生成物(.gitignore対象。PR作成の単発依頼は pr-<N>-1/)
 │   ├── prompt.md        生成プロンプト
@@ -277,6 +279,26 @@ stdout に `<タスクID> <status>`(例: `T8 pending`)を出力する。
 
 exit code: `0`=該当タスクあり、`1`=tasks.md/state.json 不在・依存欄の不正、`3`=全タスク `done`、
 `4`=実行可能なタスクが無い(`failed` や未完了の依存で止まっている。原因を stderr に列挙)。
+
+### upstream-issue — ワークフロー由来の問題を配布元に起票
+
+起票先は `config.json` の `upstream.url`(https / ssh 形式の GitHub URL)から決める。
+利用先リポジトリには起票しない。起票は外部への公開を伴うため、`--create` はユーザーの
+承認を得てから実行する(手順は `agent-workflow` skill の「upstream への Issue 起票手順」)。
+
+```powershell
+.agents/workflow/scripts/upstream-issue.ps1 -Search "<キーワード>"            # 重複候補(open/closed)
+.agents/workflow/scripts/upstream-issue.ps1 -Create -Title "<件名>" -BodyFile <パス> -DryRun
+```
+```bash
+.agents/workflow/scripts/upstream-issue.sh --search "<キーワード>"
+.agents/workflow/scripts/upstream-issue.sh --create --title "<件名>" --body-file <パス> --dry-run
+```
+
+`-DryRun` / `--dry-run` は起票先リポジトリと実行する gh コマンドを表示するだけで、gh を呼ばない。
+本文は `upstream-issue-template.md` をもとに作る。ラベルは付けない。
+
+exit code: `0`=成功、`1`=使い方不備・`upstream.url` 未設定・GitHub 以外の URL、その他=gh の exit code。
 
 ### workflow-archive — 一巡後のサイクル退避
 

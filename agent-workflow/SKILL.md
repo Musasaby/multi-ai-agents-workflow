@@ -109,7 +109,40 @@ tasks.md / state.json / runs/ / comprehension/ は自動的に `archive/<日時-
 4. **エスカレーション**: 1 の切り分けの結果 `multi-ai-agents-workflow` 由来と判明した
    問題、または 2・3 でも解決が困難な問題は、ここで対応を打ち切りユーザーに報告して
    中断する。ワークフロー由来の問題を子エージェントへの再依頼や場当たり的な回避で
-   押し通さないこと
+   押し通さないこと。利用先で skill・スクリプトを勝手に直すこともしない
+   (修正は配布元で行い、`workflow-update` で取り込む)
+5. **upstream への Issue 起票**(ワークフロー由来と判明した場合): 改善提案が会話の中で
+   消えないよう、配布元リポジトリに Issue として残す。下記「upstream への Issue 起票手順」に従う
+
+### upstream への Issue 起票手順
+
+起票は外部への公開を伴うため、**ユーザーの承認を得るまで `--create` を実行しない**。
+起票先は `.agents/workflow/config.json` の `upstream.url` から `upstream-issue` スクリプトが
+決める(利用先リポジトリに誤って起票しないよう、`gh issue create` を直接実行しない)。
+
+1. **重複確認**: 現象を表すキーワードで既存 Issue(open / closed)を検索する
+   ```powershell
+   .agents/workflow/scripts/upstream-issue.ps1 -Search "<キーワード>"
+   ```
+   ```bash
+   .agents/workflow/scripts/upstream-issue.sh --search "<キーワード>"
+   ```
+   同じ問題の Issue があれば、新規起票ではなく、その Issue の URL をユーザーに示す
+   (追加情報をコメントするかどうかもユーザーに確認する)
+2. **本文の作成**: `.agents/workflow/scripts/upstream-issue-template.md` をもとに本文を作り、
+   `.agents/workflow/runs/<タスクID>-<試行回数>/upstream-issue.md` に保存する
+   (現象 / 確定していること / 除外した原因 / 推定原因 / 改善提案 / 再現情報)。
+   利用先固有のコード・機密情報・個人情報は含めない
+3. **ユーザー承認**: 起票先リポジトリ(`--dry-run` の `Repository:` 行)・件名・本文をユーザーに
+   提示し、起票してよいか確認する
+   ```powershell
+   .agents/workflow/scripts/upstream-issue.ps1 -Create -Title "<件名>" -BodyFile <本文のパス> -DryRun
+   ```
+   ```bash
+   .agents/workflow/scripts/upstream-issue.sh --create --title "<件名>" --body-file <本文のパス> --dry-run
+   ```
+4. **起票**: 承認後、`-DryRun` / `--dry-run` を外して実行し、作成された Issue の URL を
+   ユーザーに報告する。ラベルは付けない
 
 ## エスカレーション基準(ループを止めてユーザーに判断を仰ぐ)
 
