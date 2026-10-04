@@ -1,0 +1,3 @@
+# bash / python はCRLFだと動かないため、チェックアウト時もLFに固定する
+*.sh text eol=lf
+*.py text eol=lf

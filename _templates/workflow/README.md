@@ -9,6 +9,7 @@
 ├── config.json / tasks.md / state.json / README.md   ← 正本(人が直接読むファイルのみ)
 ├── scripts/                      ← 配布物(セットアップ時にコピー、既存は上書きしない)
 │   ├── dispatch-run.ps1 / .sh
+│   ├── dispatch-check.ps1 / .sh
 │   ├── dispatch-prompt-gen.ps1 / .sh
 │   ├── dispatch-prompt-template.md
 │   ├── state-sync.ps1 / .sh
@@ -20,6 +21,7 @@
 │   ├── fix-notes.md     リトライ時のレビュー指摘(親が作成)
 │   ├── output.log       子エージェントの出力
 │   ├── done             完了マーカー(EXIT/END の2行)
+│   ├── exit-signal      シグナル番号の一時ファイル(POSIX版のみ。done 書き出し時に削除)
 │   └── report.md        完了報告
 ├── comprehension/                ← 理解確認(タスク単位)
 ├── archive/<日時-スラッグ>/      ← 一巡した過去サイクルの退避先(.gitignore対象)
@@ -169,6 +171,13 @@ exit 0 以外は dispatch を行わず、stderr の内容(exit 2 なら欠落内
 `child_agent.command_template`)を stdin を閉じて実行する。stdout/stderr を
 `runs/<タスクID>-<試行回数>/output.log` に、終了後に exit code と終了時刻を
 `runs/<タスクID>-<試行回数>/done`(`EXIT:` / `END:` の2行)に書き出す。
+
+`EXIT:` の値は、数値(子CLIの exit code)・`signal:<番号>`(子がシグナルで強制終了された。
+POSIX 版のみ)・`crashed:<メッセージ>`(ラッパー自体の異常終了。PowerShell 版)のいずれか。
+POSIX 版は、Python 経由の起動では子の負の returncode を、bash で直接起動するフォールバック
+経路では 128 より大きい終了コードをシグナル終了とみなし、`signal:15` のように記録する
+(従来は SIGTERM が `EXIT:241` と記録され、通常の終了と区別できなかった)。
+Windows にはシグナルの仕組みが無いため、PowerShell 版での強制終了は通常の非0終了として記録される。
 親プロセスのタイムアウト・終了に巻き込まれないよう `Start-Process` / `nohup` 等で
 デタッチ起動する。
 
@@ -178,6 +187,23 @@ Start-Process pwsh -ArgumentList "-NoProfile -File .agents/workflow/scripts/disp
 ```bash
 nohup .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1 &
 ```
+
+### dispatch-check — 完了検知後の終了状態・成果物の判定
+
+`done` マーカーを検知したら毎回実行する。終了状態の区分(`ok` / `nonzero` / `signal` /
+`crashed`)、完了報告(`output.log` 内の `## 完了報告`)の有無、`git status --porcelain`、
+`git diff --stat`、`output.log` の末尾30行をまとめて出力する。
+
+```powershell
+.agents/workflow/scripts/dispatch-check.ps1 -TaskId T1 -Attempt 1
+```
+```bash
+.agents/workflow/scripts/dispatch-check.sh T1 1
+```
+
+exit code: `0`=正常終了かつ完了報告あり、`1`=done マーカーが無い・使い方不備、
+`4`=異常終了(非0・`signal:*`・`crashed:*`)、`5`=EXIT:0 だが完了報告が無い。
+`4` / `5` の場合はレビューに進まず、出力された成果物の有無をユーザーに報告する。
 
 ### state-sync — state.json の機械生成・追記同期
 
