@@ -94,7 +94,15 @@ exit 3 になる。
 
 ### 3. 実行
 
-- state.json の対象タスクを `in_progress` に更新
+- state.json の対象タスクを `in_progress` に更新する(state.json の状態は親が JSON を直接編集せず、必ず `task-state`(PowerShell:
+`.agents/workflow/scripts/task-state.ps1` / POSIX: `task-state.sh`)で更新する。
+  許されない遷移は exit 1 で拒否され、state.json は変わらない):
+  ```powershell
+  .agents/workflow/scripts/task-state.ps1 T1 start
+  ```
+  ```bash
+  .agents/workflow/scripts/task-state.sh T1 start
+  ```
 - **デタッチ起動**: 子エージェントを親プロセスの管理外で起動し、親のタイムアウト制限
   (例: OpenCode の10分上限)や親プロセス終了による子プロセスの巻き添え終了を防ぐため、
   `Start-Process`(PowerShell) / `nohup`+`&`(POSIX) でラッパースクリプトを起動する。
@@ -240,7 +248,7 @@ exit 3 になる。
 
 ### 5. 状態更新
 
-検証を通過したら state.json を `in_review` に更新し、子エージェントの完了報告を
+検証を通過したら `task-state <タスクID> review` で state.json を `in_review` に更新し、子エージェントの完了報告を
 `.agents/workflow/runs/<タスクID>-<試行回数>/report.md` に保存して、レビューフェーズ
 (`/agent-review-commit`)に引き継ぐ。この `report.md` は後続タスクの `dispatch-prompt-gen`
 実行時に引き継ぎ資料として機械結合されるため、削除しないこと(`runs/` は `.gitignore`

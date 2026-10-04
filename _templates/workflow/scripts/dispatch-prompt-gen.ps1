@@ -14,7 +14,7 @@ $ConfigPath = "$Root/.agents/workflow/config.json"
 $RunsBase = "$Root/.agents/workflow/runs"
 
 # --- PR mode: PR作成を子に単発依頼するプロンプトを生成する ---
-# 対象タスク = state.json で done かつ commit が git log <base>..HEAD に含まれるもの。
+# 対象タスク = state.json で done かつ commit が git log origin/<base>..HEAD に含まれるもの。
 # 出力先は runs/pr-<連番>-1/prompt.md。stdout に "RunId: pr-<連番>" を出す。
 if ($Pr) {
     $baseBranch = 'main'
@@ -23,16 +23,29 @@ if ($Pr) {
         [Console]::Error.WriteLine("PR mode must be run on a work branch (current: '$branch')")
         exit 1
     }
-    git rev-parse --verify --quiet $baseBranch *> $null
+    # ローカルの main は古いことがあるため、origin を fetch して origin/<base> と比較する
+    # (古いと、マージ済みの無関係なコミットが対象・PR 本文の要約に混ざる)
+    $baseRef = "origin/$baseBranch"
+    git remote get-url origin *> $null
     if ($LASTEXITCODE -ne 0) {
-        [Console]::Error.WriteLine("Base branch '$baseBranch' not found")
+        [Console]::Error.WriteLine("Remote 'origin' not found (PR mode compares with $baseRef)")
+        exit 1
+    }
+    git fetch -q origin $baseBranch *> $null
+    if ($LASTEXITCODE -ne 0) {
+        [Console]::Error.WriteLine("Failed to fetch origin $baseBranch (cannot compare with the latest $baseRef)")
+        exit 1
+    }
+    git rev-parse --verify --quiet $baseRef *> $null
+    if ($LASTEXITCODE -ne 0) {
+        [Console]::Error.WriteLine("Base ref '$baseRef' not found")
         exit 1
     }
     if (-not (Test-Path $StatePath)) {
         [Console]::Error.WriteLine("state.json not found: $StatePath")
         exit 1
     }
-    $commits = @(git log "$baseBranch..HEAD" --format=%H)
+    $commits = @(git log "$baseRef..HEAD" --format=%H)
     $selected = @()
     foreach ($t in (Get-Content $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json).tasks) {
         $c = $t.commit
@@ -41,7 +54,7 @@ if ($Pr) {
         }
     }
     if ($selected.Count -eq 0) {
-        [Console]::Error.WriteLine("No done tasks whose commit is in $baseBranch..HEAD (nothing to include in the PR)")
+        [Console]::Error.WriteLine("No done tasks whose commit is in $baseRef..HEAD (nothing to include in the PR)")
         exit 1
     }
     $prN = 1
@@ -57,6 +70,7 @@ if ($Pr) {
     $text = $text.Replace('{task_list}', ($selected -join "`n"))
     $text = $text.Replace('{branch}', $branch)
     $text = $text.Replace('{base_branch}', $baseBranch)
+    $text = $text.Replace('{base_ref}', $baseRef)
     $text = $text.Replace('{run_dir}', ".agents/workflow/runs/pr-$prN-1")
     [System.IO.File]::WriteAllText("$prRunDir/prompt.md", $text, [System.Text.UTF8Encoding]::new($false))
     Write-Output "Generated: $prRunDir/prompt.md"
@@ -208,30 +222,28 @@ if ($Attempt -ge 2) {
     $fixNotes = "## レビュー指摘事項(最優先で対応)`n$($fixContent.TrimEnd())"
 }
 
-$config = Get-Content $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+# config.json が無い・壊れている場合は POSIX 版と同じく exit 1 にする(空の検証指示で続行しない)
+try {
+    $config = Get-Content $ConfigPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+} catch {
+    [Console]::Error.WriteLine("config.json could not be read: $ConfigPath ($($_.Exception.Message))")
+    exit 1
+}
+# config の検証コマンド(command が空のステップは載せない)。1つも無ければ空にし、
+# テンプレート側の「受け入れ基準に書かれた確認手順」だけを子に実行させる
 $verifyLines = @()
-$hasVerify = $false
-
-if ($config.quality_gate) {
-    if ($config.quality_gate.child_dispatch_command) {
-        $verifyLines += "- $($config.quality_gate.child_dispatch_command)"
-        $hasVerify = $true
-    } elseif ($config.quality_gate.steps) {
-        foreach ($step in $config.quality_gate.steps) {
-            if ($step.blocking) {
-                $verifyLines += "- $($step.name): $($step.command)"
-                $hasVerify = $true
-            }
-        }
+$cdc = if ($config.quality_gate) { "$($config.quality_gate.child_dispatch_command)".Trim() } else { '' }
+if ($cdc) {
+    $verifyLines += "- $cdc"
+} elseif ($config.quality_gate -and $config.quality_gate.steps) {
+    foreach ($step in $config.quality_gate.steps) {
+        $cmd = "$($step.command)".Trim()
+        $name = if ($step.name) { $step.name } else { 'check' }
+        if ($step.blocking -and $cmd) { $verifyLines += "- ${name}: $cmd" }
     }
 }
-if ($config.test_command) {
-    $verifyLines += "- $($config.test_command)"
-    $hasVerify = $true
-}
-if (-not $hasVerify) {
-    $verifyLines += '(設定ファイルの test_command / quality_gate で検証コマンドを指定してください)'
-}
+$tc = "$($config.test_command)".Trim()
+if ($tc) { $verifyLines += "- $tc" }
 
 $verifyInstruction = $verifyLines -join "`n"
 

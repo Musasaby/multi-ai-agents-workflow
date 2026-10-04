@@ -15,6 +15,7 @@
 │   ├── dispatch-pr-prompt-template.md   PR作成の単発依頼用(dispatch-prompt-gen --pr)
 │   ├── state-sync.ps1 / .sh
 │   ├── next-task.ps1 / .sh
+│   ├── task-state.ps1 / .sh
 │   ├── tasklib.ps1 / tasklib.py  tasks.md 解析・依存欄検証の共通部品
 │   ├── upstream-issue.ps1 / .sh
 │   ├── upstream-issue-template.md  upstream への Issue 本文テンプレート
@@ -132,7 +133,7 @@ Claude Code を子エージェントとして使う場合は `stream-json` 出�
 
 `status` の遷移: `pending` → `in_progress`(dispatch) → `in_review`(子の完了報告)
 → `done`(レビュー合格・コミット済み、`commit` にハッシュを記録) / 不合格は `in_progress` に戻し `retries` をインクリメント。
-回復不能な失敗は `failed`(ユーザーへエスカレーション)。
+回復不能な失敗は `failed`(ユーザーへエスカレーション)。遷移はすべて `scripts/task-state` で行う(次節)。
 
 ## scripts/ 配下のスクリプト
 
@@ -145,6 +146,12 @@ tasks.md・config.json・依存タスクの完了報告(直接依存のみ)か�
 プロンプトを機械的に組み立てて `runs/<タスクID>-<試行回数>/prompt.md` に書き出す。
 定型文(実装ルール・テスト検証指示・完了報告フォーマット)は `dispatch-prompt-template.md`
 から展開する。
+
+「テスト・検証」節には、常に「タスクの受け入れ基準に書かれた確認手順・テストコマンド」を
+入れ、加えて config の検証コマンド(`quality_gate.child_dispatch_command`、または `command` が
+空でない blocking ステップ、および `test_command`)を列挙する。`command` が空のステップは載せない。
+テンプレートはプロジェクトに依存しない内容だけを持つ。ビルドツール固有の注意などは、利用先の
+`AGENTS.md` の「テスト・検証の注意(子エージェント向け)」節に書く(子への指示は AGENTS.md に従うよう求める)。
 
 ```powershell
 # PowerShell(初回 = Attempt省略で1、リトライは -Attempt <n>)
@@ -172,7 +179,9 @@ exit 0 以外は dispatch を行わず、stderr の内容(exit 2 なら欠落内
 **PR モード**(`-Pr` / `--pr`): PR 作成を子に単発で依頼するプロンプトを
 `dispatch-pr-prompt-template.md` から生成し、`runs/pr-<N>-1/prompt.md` に書き出す
 (`<N>` は既存の `pr-*` の次の連番)。PR に含めるタスクは、state.json で `done` かつ
-`commit` が `git log main..HEAD` に含まれるものを自動で選ぶ。stdout に `RunId: pr-<N>` を
+`commit` が `git log origin/main..HEAD` に含まれるものを自動で選ぶ(`git fetch origin main` を
+してから比べるため、ローカルの `main` が古くても、マージ済みの無関係なコミットは混ざらない。
+origin が無い・fetch に失敗した場合は exit 1)。stdout に `RunId: pr-<N>` を
 出力するので、`dispatch-run` に `pr-<N>` と `1` を渡して起動する。作業ブランチではなく
 `main` 上で実行した場合や、対象タスクが無い場合は exit 1。
 
@@ -261,6 +270,31 @@ JSONを直接書くことはない。
 
 exit code: `0`=成功、`1`=使い方不備・検証エラー(tasks.md/state.json 不在、`--init` 時の
 `--source` 欠落や state.json 既存、依存欄の不正、挿入先が `pending` でない 等)。
+
+### task-state — タスクの状態遷移
+
+state.json のタスクの状態を、許された遷移だけで更新する。LLM が state.json を手で編集しない
+ためのスクリプト。拒否した場合は state.json を変更しない。`updated_at` も更新する。
+
+| 動作 | 遷移 | 用途 |
+|------|------|------|
+| `start` | `pending` / `in_progress` → `in_progress` | dispatch(中断後の再 dispatch も可) |
+| `review` | `in_progress` → `in_review` | 子の完了報告を検証した後 |
+| `done` | `in_review` → `done` | レビュー合格・コミット後。`--commit <hash>`(PowerShell は `-Commit`)必須 |
+| `retry` | `in_review` → `in_progress`、`retries` + 1 | 修正の再依頼。`retries` が `max_fix_retries` 以上なら拒否(exit 4) |
+| `fail` | `pending` 以外 → `failed` | 回復不能(ユーザーへエスカレーション) |
+| `reset` | `failed` → `pending`(`retries` を 0、`commit` を null) | ユーザー判断でやり直す場合 |
+
+```powershell
+.agents/workflow/scripts/task-state.ps1 T1 start
+.agents/workflow/scripts/task-state.ps1 T1 done -Commit abc1234
+```
+```bash
+.agents/workflow/scripts/task-state.sh T1 start
+.agents/workflow/scripts/task-state.sh T1 done --commit abc1234
+```
+
+exit code: `0`=更新した、`1`=使い方不備・許されない遷移・タスク未検出、`4`=`retry` の上限超過。
 
 ### next-task — 次に処理するタスクの選択
 

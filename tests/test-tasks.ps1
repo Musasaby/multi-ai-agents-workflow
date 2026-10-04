@@ -261,4 +261,52 @@ Invoke-TestCase "gen: 不正なTaskIdはexit 1" {
     Assert-Eq 1 $script:Code "exit code"
 }
 
+function Set-VerifyConfig {
+    param([string]$StepsJson, [string]$TestCommand)
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg.quality_gate.steps = @($StepsJson | ConvertFrom-Json)
+    $cfg.test_command = $TestCommand
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+}
+function Get-PromptT1 { return [System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/prompt.md") }
+
+Invoke-TestCase "gen: 空のquality_gateステップは載せない" {
+    Set-Tasks $basicTasks
+    Set-State 'T1:pending'
+    Set-VerifyConfig '[{"name":"typecheck","command":"","blocking":true},{"name":"test","command":"npm test","blocking":true},{"name":"lint","command":"","blocking":false}]' ''
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains (Get-PromptT1) "- test: npm test" "non-empty step listed"
+    Assert-NotContains (Get-PromptT1) "typecheck" "empty step skipped"
+    Assert-Contains (Get-PromptT1) "受け入れ基準に書かれた確認手順" "acceptance criteria always included"
+}
+
+Invoke-TestCase "gen: 検証コマンド未設定は受け入れ基準を指示" {
+    Set-Tasks $basicTasks
+    Set-State 'T1:pending'
+    Set-VerifyConfig '[{"name":"typecheck","command":"","blocking":true}]' ''
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains (Get-PromptT1) "受け入れ基準に書かれた確認手順" "falls back to acceptance criteria"
+    Assert-NotContains (Get-PromptT1) "設定ファイルの" "no human-facing config message"
+}
+
+Invoke-TestCase "gen: プロジェクト固有の指示を含まない" {
+    Set-Tasks $basicTasks
+    Set-State 'T1:pending'
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1
+    Assert-NotContains (Get-PromptT1) "kotlin" "no Kotlin-specific instruction"
+    Assert-NotContains (Get-PromptT1) "Gradle" "no Gradle-specific instruction"
+    Assert-Contains (Get-PromptT1) "AGENTS.md" "points to AGENTS.md for project-specific rules"
+}
+
+Invoke-TestCase "gen: config.json が壊れていればexit 1" {
+    Set-Tasks $basicTasks
+    Set-State 'T1:pending'
+    Write-Utf8File "$script:Proj/.agents/workflow/config.json" '{ broken'
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1
+    Assert-Eq 1 $script:Code "broken config.json -> exit 1"
+}
+
 Show-Summary

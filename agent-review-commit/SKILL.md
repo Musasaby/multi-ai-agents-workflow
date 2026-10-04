@@ -48,7 +48,8 @@ description: 子エージェントの実装をタスクの受け入れ基準に�
 修正依頼は state.json の同じ `retries` カウンタを消費する(上限は `max_fix_retries`)。
 修正依頼には不合格の原因種別を明記すること。
 
-state.json の `retries` を確認し:
+state.json の `retries` を確認し(状態の更新はすべて `task-state` スクリプトで行い、
+state.json を直接編集しない):
 
 - `retries < max_fix_retries`(config.json): 指摘事項をまとめて **子エージェントに再依頼**する。
   再依頼の前に、指摘事項リストを `runs/<タスクID>-<次の試行回数>/fix-notes.md` に
@@ -60,10 +61,21 @@ state.json の `retries` を確認し:
   指摘が複雑でテンプレートに収まらない場合は、`fix-notes.md` を作らず、親が
   `runs/<タスクID>-<次の試行回数>/prompt.md` を直接作成して生成スクリプトをバイパスしてよい
   (`/agent-dispatch` §2 のフォールバック手順に準ずる)。
-  その後 `/agent-dispatch <タスクID>` をリトライモードで実行する(修正後のテスト再実行も
-  指示に含まれる)。`retries` をインクリメントし、status を `in_progress` に戻す
+  再依頼の前に `task-state <タスクID> retry` を実行する(`retries` を +1 して status を
+  `in_progress` に戻す)。その後 `/agent-dispatch <タスクID>` をリトライモードで実行する
+  (修正後のテスト再実行も指示に含まれる)
+  ```powershell
+  .agents/workflow/scripts/task-state.ps1 T1 retry
+  ```
+  ```bash
+  .agents/workflow/scripts/task-state.sh T1 retry
+  ```
+  `task-state` が **exit 4**(`retries` が `max_fix_retries` に達している)を返した場合は
+  再依頼せず、下の「上限超過」に進む
 - 上限超過: 親のサブエージェントまたは親自身で修正する。それでも受け入れ基準を
-  満たせない場合は status を `failed` にし、経緯をまとめてユーザーにエスカレーションする
+  満たせない場合は `task-state <タスクID> fail` で status を `failed` にし、経緯をまとめて
+  ユーザーにエスカレーションする(ユーザー判断でやり直す場合は `task-state <タスクID> reset`
+  で `pending` に戻す)
 
 ### 5. 合格時: 最終検証とコミット
 
@@ -88,7 +100,8 @@ state.json の `retries` を確認し:
 
    Task: <タスクID> (<計画ソース>)
    ```
-4. state.json: status を `done`、`commit` に手順5.3のコミットハッシュを記録
+4. state.json: `task-state <タスクID> done --commit <手順5.3のコミットハッシュ>`(PowerShell は
+   `-Commit <hash>`)で status を `done` にし、`commit` を記録する
 5. Claude Code Task(表示用)も completed に更新
 
 ### 6. 合格時: 理解確認質問の生成(設定有効時のみ)

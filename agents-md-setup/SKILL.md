@@ -13,7 +13,7 @@ Claude Code 固有のパス(`CLAUDE.md`, `.claude/`)からはリンク経由で�
 ### 1. 正本の確認・スキャフォールド
 
 - `AGENTS.md` がルートに存在するか確認。なければ `_templates/AGENTS.md` から作成する(skill ディレクトリから見たパスは `../_templates/AGENTS.md`、利用先では `.agents/skills/_templates/AGENTS.md`)。このとき実体のある `CLAUDE.md`(import 1行でないもの)が存在すれば、その内容を `AGENTS.md` に移行する
-- `AGENTS.md` が既存の場合は、テンプレートの「マルチエージェントワークフロー」節を追記するかユーザーに提案する。**既存の内容を上書きしない**
+- `AGENTS.md` が既存の場合は、テンプレートの「テスト・検証の注意(子エージェント向け)」節と「マルチエージェントワークフロー」節を追記するかユーザーに提案する。**既存の内容を上書きしない**
 - `.agents/skills/`, `.agents/workflow/` ディレクトリの存在を確認
 - `.agents/workflow/.config/opencode/log` ディレクトリを事前作成する(子エージェント CLI が sandbox 内から設定・ログディレクトリを作成できない環境への備え。`agent-dispatch` の `XDG_CONFIG_HOME` / `XDG_DATA_HOME` プリフライトが参照する):
   ```powershell
@@ -66,7 +66,7 @@ catch { New-Item -ItemType Junction -Path .claude -Target (Resolve-Path .agents)
 既に実体ディレクトリとして `.claude` が存在する場合は、中身を `.agents` にマージしてから
 置き換える(**ユーザーに確認してから**削除すること)。
 
-### 4. .gitignore の整備
+### 4. .gitignore / .gitattributes の整備
 
 以下が `.gitignore` に含まれていることを確認し、なければ追記する:
 
@@ -86,6 +86,23 @@ catch { New-Item -ItemType Junction -Path .claude -Target (Resolve-Path .agents)
 ```
 
 `.claude` はリンクのためコミットしない。clone後はこのskillを再実行して再作成する。
+
+あわせて、`.gitattributes`(無ければ作成する)に以下が含まれていることを確認し、なければ追記する:
+
+```
+# ワークフローのスクリプトは CRLF だと bash / python で実行できないため LF に固定する
+.agents/workflow/scripts/*.sh text eol=lf
+.agents/workflow/scripts/*.py text eol=lf
+```
+
+配布元の `.gitattributes` は subtree で取り込むと `.agents/skills/` 配下にしか効かず、
+`.agents/workflow/scripts/` にコピーしたスクリプトは対象外になる。Windows で `core.autocrlf=true`
+の場合、追記しないと CRLF でチェックアウトされ、WSL・Linux で実行できなくなる。
+スクリプト自体はリポジトリ内に LF で保存されているため、再コミットは不要(`.gitignore` と
+`.gitattributes` の追加・変更はコミットする。未コミットのままだと `agent-dispatch` の
+事前チェック(作業ツリーがクリーン)で止まる)。追記前にチェックアウト済みで
+作業ツリーが CRLF になっているファイルは、削除してから `git checkout -- .agents/workflow/scripts`
+で取り出し直すと LF になる(未コミットの変更が無いことを確認してから行う)。
 
 `.agents/scheduled_tasks.lock` は Claude Code 本体が生成するランタイムファイル(スケジュール実行のロック)であり、このリポジトリの成果物ではないためコミット対象外とする。
 

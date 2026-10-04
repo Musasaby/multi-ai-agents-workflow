@@ -20,7 +20,8 @@
 4. PR 本文を `{run_dir}/pr-body.md` に書き出す。本文は日本語で書き、以下を含める:
    - 概要(この PR で何が変わるか)
    - 含まれるタスク(上記の一覧)
-   - 変更点の要約(`git log {base_branch}..HEAD --oneline` と `git diff {base_branch}...HEAD --stat` をもとに書く)
+   - 変更点の要約(`git log {base_ref}..HEAD --oneline` と `git diff {base_ref}...HEAD --stat` をもとに書く。
+     ローカルの `{base_branch}` は古いことがあるため、必ず `{base_ref}` と比較する)
    - テスト計画(各タスクの受け入れ基準をもとにしたチェックリスト)
 5. `gh pr create --base {base_branch} --head {branch} --title "<タイトル>" --body-file {run_dir}/pr-body.md`
    で PR を作成する。タイトルは日本語で、変更内容を簡潔に表す

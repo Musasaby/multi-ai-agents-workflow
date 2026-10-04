@@ -48,8 +48,9 @@ function Get-StateText { return [System.IO.File]::ReadAllText("$script:Proj/.age
 # Set-State 'T1:done' 'T2:pending'
 function Set-State {
     $tasks = foreach ($item in $args) {
-        $id, $status = $item -split ':', 2
-        [ordered]@{ id = $id; title = "$id title"; status = $status; retries = 0; commit = $null }
+        # "T1:status" または "T1:status:retries"
+        $id, $status, $retries = $item -split ':', 3
+        [ordered]@{ id = $id; title = "$id title"; status = $status; retries = [int]("0$retries"); commit = $null }
     }
     $state = [ordered]@{ source = 'test'; branch = 'main'; updated_at = '2026-01-01T00:00:00+09:00'; tasks = @($tasks) }
     Write-Utf8File "$script:Proj/.agents/workflow/state.json" ($state | ConvertTo-Json -Depth 10)
