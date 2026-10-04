@@ -232,4 +232,33 @@ Invoke-TestCase "next: 依存欄不正はexit 1" {
     Assert-Eq 1 $script:Code "exit code"
 }
 
+Invoke-TestCase "insert: 空白区切りの-Before" {
+    Set-Tasks $basicTasks
+    Set-State 'T1:done' 'T2:done' 'T3:pending' 'T4:pending'
+    Add-T8 'T2'
+    Invoke-Script state-sync.ps1 -Insert T8 -Before "T3 T4"
+    Assert-Eq 0 $script:Code "space separated -Before: $($script:Err)"
+}
+
+Invoke-TestCase "見出しは大文字小文字を区別" {
+    Set-Tasks "## T1: a`n- **依存**: なし`n`n## t2: lower`n- **依存**: T1`n"
+    Invoke-Script state-sync.ps1 -Init -Source test
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "T1" (Get-StateIds) "lowercase heading ignored (same as sh)"
+}
+
+Invoke-TestCase "next: tasks空はexit 1" {
+    Set-Tasks $basicTasks
+    Set-State
+    Invoke-Script next-task.ps1
+    Assert-Eq 1 $script:Code "exit code"
+}
+
+Invoke-TestCase "gen: 不正なTaskIdはexit 1" {
+    Set-Tasks $basicTasks
+    Set-State 'T1:pending'
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId "../x"
+    Assert-Eq 1 $script:Code "exit code"
+}
+
 Show-Summary

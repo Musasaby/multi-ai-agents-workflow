@@ -9,6 +9,10 @@ set -uo pipefail
 TASK_ID="${1:?Usage: dispatch-check.sh <TaskId> [Attempt]}"
 ATTEMPT="${2:-1}"
 TAIL_LINES=30
+if ! [[ "$TASK_ID" =~ ^[A-Za-z0-9_-]+$ ]] || ! [[ "$ATTEMPT" =~ ^[0-9]+$ ]]; then
+    echo "Invalid TaskId/Attempt: '$TASK_ID' '$ATTEMPT'" >&2
+    exit 1
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/../../.."

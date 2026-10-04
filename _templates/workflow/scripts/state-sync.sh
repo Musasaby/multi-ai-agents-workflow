@@ -5,18 +5,27 @@ set -euo pipefail
 # system codepage and mangle non-ASCII (Japanese) text. Force UTF-8.
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
+# tasklib を import しても scripts/__pycache__ を作らない(利用先の作業ツリーを汚さないため)
+export PYTHONDONTWRITEBYTECODE=1
 
 INIT=false
 SOURCE=""
 INSERT=""
 BEFORE=""
 
+need_value() {
+    if [ "$2" -lt 2 ]; then
+        echo "$1 requires a value" >&2
+        exit 1
+    fi
+}
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --init) INIT=true; shift ;;
-        --source) SOURCE="${2:-}"; shift 2 ;;
-        --insert) INSERT="${2:-}"; shift 2 ;;
-        --before) BEFORE="${2:-}"; shift 2 ;;
+        --source) need_value "$1" $#; SOURCE="$2"; shift 2 ;;
+        --insert) need_value "$1" $#; INSERT="$2"; shift 2 ;;
+        --before) need_value "$1" $#; BEFORE="$2"; shift 2 ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
 done
@@ -77,7 +86,7 @@ else
 fi
 
 python3 - "$SCRIPT_DIR_PY" "$TASKS_PATH_PY" "$STATE_PATH_PY" "$INIT" "$SOURCE" "$BRANCH" "$INSERT" "$BEFORE" <<'PY'
-import json, sys, datetime
+import json, re, sys, datetime
 
 script_dir, tasks_path, state_path, init, source, branch, insert, before = sys.argv[1:9]
 init = init == 'true'
@@ -110,7 +119,8 @@ if insert:
     if insert in existing_status and existing_status[insert] != 'pending':
         fail("Task to insert '" + insert + "' already exists in state.json with status '"
              + existing_status[insert] + "'")
-    targets = [b.strip() for b in before.split(',') if b.strip()]
+    # "T4,T5" / "T4, T5" / "T4 T5" をすべて受け付ける(ps1 版と同じ)
+    targets = [b for b in re.split(r'[,\s]+', before) if b]
     if not targets:
         fail('--before requires at least one task ID')
     errors = []
@@ -164,7 +174,7 @@ else:
 if lines is not None:
     with open(tasks_path, 'w', encoding='utf-8', newline='') as f:
         f.write(content)
-    print('Inserted ' + insert + ' before ' + before + ' (dependency lines updated in tasks.md)')
+    print('Inserted ' + insert + ' before ' + ','.join(targets) + ' (dependency lines updated in tasks.md)')
 
 with open(state_path, 'w', encoding='utf-8', newline='\n') as f:
     json.dump(state, f, ensure_ascii=False, indent=2)

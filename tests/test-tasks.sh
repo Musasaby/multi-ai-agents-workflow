@@ -300,6 +300,36 @@ EOF
     assert_eq 1 "$CODE" "exit code"
 }
 
+t_no_pycache() {
+    basic_tasks
+    run_script state-sync.sh --init --source test
+    run_script next-task.sh
+    run_script dispatch-prompt-gen.sh T1
+    assert_file_absent "$PROJ/.agents/workflow/scripts/__pycache__" "no __pycache__ in scripts/"
+}
+
+t_insert_before_space_separated() {
+    basic_tasks
+    write_state "T1:done" "T2:done" "T3:pending" "T4:pending"
+    append_t8 "T2"
+    run_script state-sync.sh --insert T8 --before "T3 T4"
+    assert_eq 0 "$CODE" "space separated --before: $ERR"
+}
+
+t_next_empty_state() {
+    basic_tasks
+    write_state
+    run_script next-task.sh
+    assert_eq 1 "$CODE" "empty state.json tasks -> exit 1"
+}
+
+t_gen_invalid_task_id() {
+    basic_tasks
+    write_state "T1:pending"
+    run_script dispatch-prompt-gen.sh "../x"
+    assert_eq 1 "$CODE" "path-like task id rejected"
+}
+
 echo "test-tasks.sh"
 test_case "gen: 注記付き依存はexit 1" t_gen_annotation_rejected
 test_case "gen: 正しい形式は通る" t_gen_valid_forms_pass
@@ -324,4 +354,8 @@ test_case "next: 再開対象を優先" t_next_resume_first
 test_case "next: 全完了はexit 3" t_next_all_done
 test_case "next: ブロックはexit 4" t_next_blocked
 test_case "next: 依存欄不正はexit 1" t_next_invalid_deps
+test_case "__pycache__ を作らない" t_no_pycache
+test_case "insert: 空白区切りの--before" t_insert_before_space_separated
+test_case "next: tasks空はexit 1" t_next_empty_state
+test_case "gen: 不正なTaskIdはexit 1" t_gen_invalid_task_id
 summary

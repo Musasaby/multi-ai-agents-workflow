@@ -5,6 +5,8 @@ set -euo pipefail
 # system codepage and mangle non-ASCII (Japanese) text. Force UTF-8.
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
+# tasklib を import しても scripts/__pycache__ を作らない(利用先の作業ツリーを汚さないため)
+export PYTHONDONTWRITEBYTECODE=1
 
 USAGE="Usage: dispatch-prompt-gen.sh <TaskId> [Attempt] | dispatch-prompt-gen.sh --pr"
 PR_MODE=false
@@ -15,6 +17,11 @@ if [ "${1:-}" = "--pr" ]; then
 else
     TASK_ID="${1:?$USAGE}"
     ATTEMPT="${2:-1}"
+    # パスやコード片に埋め込むため、タスクIDと試行回数の形式を検証する
+    if ! [[ "$TASK_ID" =~ ^[A-Za-z0-9_-]+$ ]] || ! [[ "$ATTEMPT" =~ ^[0-9]+$ ]]; then
+        echo "Invalid TaskId/Attempt: '$TASK_ID' '$ATTEMPT' (TaskId: [A-Za-z0-9_-]+, Attempt: number)" >&2
+        exit 1
+    fi
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -157,7 +164,10 @@ import tasklib
 with open(tasks_path, encoding='utf-8', newline='') as f:
     tasks = tasklib.parse_tasks(f.read())
 ids = {t['id'] for t in tasks}
-task = next(t for t in tasks if t['id'] == task_id)
+task = next((t for t in tasks if t['id'] == task_id), None)
+if task is None:
+    print("Task '" + task_id + "' heading not recognized in tasks.md (expected '## " + task_id + ": <title>')", file=sys.stderr)
+    sys.exit(1)
 try:
     deps = tasklib.parse_deps(task)
 except tasklib.TaskFileError as e:

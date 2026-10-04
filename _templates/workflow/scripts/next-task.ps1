@@ -30,6 +30,10 @@ try {
 $stateTasks = @((Get-Content $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json).tasks)
 $status = @{}
 foreach ($t in $stateTasks) { $status[$t.id] = $t.status }
+if ($stateTasks.Count -eq 0) {
+    [Console]::Error.WriteLine('state.json has no tasks')
+    exit 1
+}
 
 foreach ($t in $stateTasks) {
     if ($t.status -in @('in_progress', 'in_review')) {

@@ -81,6 +81,14 @@ t_diff() {
     assert_contains "$OUT" "echo old" "diff shows old content"
 }
 
+t_run_from_dest_rejected() {
+    setup_user_project
+    local code
+    (cd "$PROJ" && bash .agents/workflow/scripts/workflow-sync-scripts.sh) > /dev/null 2>&1
+    code=$?
+    assert_eq 1 "$code" "running the deployed copy is rejected"
+}
+
 echo "test-sync-scripts.sh"
 test_case "一覧: missing/differs を表示しexit 3" t_list
 test_case "一覧: 一致ならexit 0" t_in_sync
@@ -89,4 +97,5 @@ test_case "--copy-missing: scripts/ 未作成" t_copy_missing_creates_dir
 test_case "--overwrite" t_overwrite
 test_case "--overwrite: 不明な名前は拒否" t_overwrite_unknown_rejected
 test_case "--diff" t_diff
+test_case "配置先のコピーからの実行は拒否" t_run_from_dest_rejected
 summary

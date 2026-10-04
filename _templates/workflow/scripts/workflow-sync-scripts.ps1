@@ -28,6 +28,12 @@ if (-not $root) {
     exit 1
 }
 $destRoot = Join-Path $root '.agents/workflow'
+# 配置先のコピー(.agents/workflow/scripts/)から実行すると比較元と比較先が同じになり、
+# 常に「差分なし」と誤報するため拒否する
+if ((Test-Path $destRoot) -and ((Resolve-Path $templateRoot).Path.TrimEnd('\', '/') -eq (Resolve-Path $destRoot).Path.TrimEnd('\', '/'))) {
+    [Console]::Error.WriteLine("Run this script from the template copy (.agents/skills/_templates/workflow/scripts/), not from .agents/workflow/scripts/")
+    exit 1
+}
 
 function Get-SyncNames {
     $names = @(Get-ChildItem -Path $templateScripts -File | Sort-Object Name | ForEach-Object { "scripts/$($_.Name)" })

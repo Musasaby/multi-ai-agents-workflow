@@ -1,7 +1,12 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)][string]$TaskId,
     [int]$Attempt = 1
 )
+# パスや埋め込みに使うため、タスクIDと試行回数の形式を検証する
+if ($TaskId -cnotmatch '^[A-Za-z0-9_-]+$' -or $Attempt -lt 1) {
+    [Console]::Error.WriteLine("Invalid TaskId/Attempt: '$TaskId' '$Attempt'")
+    exit 1
+}
 Set-Location $PSScriptRoot\..\..\..
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8

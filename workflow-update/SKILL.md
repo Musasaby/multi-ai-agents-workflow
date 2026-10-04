@@ -94,6 +94,13 @@ git subtree pull --prefix=.agents/skills <URL> <branch> --squash
 `.agents/workflow/scripts/` 等がコミット対象の利用先では、反映後の変更をユーザーに
 コミットしてもらう(この skill ではコミットしない)。
 
+**依存欄の検証強化に伴う移行**: `state-sync` / `next-task` は全タスクの依存欄を厳密に検証する
+(依存行の欠落・注記付きの値・存在しないID・循環をエラーにする)。進行中のサイクルの
+tasks.md が旧形式(例: `- **依存**: T30(完了済み)`、依存行の無いタスク)の場合、スクリプトを
+更新すると `state-sync` / `next-task` が exit 1 で止まる。更新後に `next-task` を1回実行し、
+exit 1 になった場合は stderr に列挙されたタスクの依存欄を `なし` / `T1, T2` 形式に直す
+(注記は目的欄へ移す)ようユーザーに提案する
+
 ### 6. 旧レイアウトの検出
 
 `.agents/skills/` の更新後、`.agents/workflow/` に本計画(dispatchプロンプトの機械生成)

@@ -35,6 +35,12 @@ ROOT="$(cd "$TEMPLATE_SCRIPTS" && git rev-parse --show-toplevel 2>/dev/null)" ||
     exit 1
 }
 DEST_ROOT="$ROOT/.agents/workflow"
+# 配置先のコピー(.agents/workflow/scripts/)から実行すると比較元と比較先が同じになり、
+# 常に「差分なし」と誤報するため拒否する
+if [ "$(cd "$TEMPLATE_ROOT" && pwd -P)" = "$(cd "$DEST_ROOT" 2>/dev/null && pwd -P)" ]; then
+    echo "Run this script from the template copy (.agents/skills/_templates/workflow/scripts/), not from .agents/workflow/scripts/" >&2
+    exit 1
+fi
 
 # 比較対象の名前一覧(scripts/<ファイル> と README.md)
 names() {

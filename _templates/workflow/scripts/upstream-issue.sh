@@ -18,12 +18,19 @@ TITLE=""
 BODY_FILE=""
 DRY_RUN=false
 
+need_value() {
+    if [ "$2" -lt 2 ]; then
+        echo "$1 requires a value" >&2
+        exit 1
+    fi
+}
+
 while [ $# -gt 0 ]; do
     case "$1" in
-        --search) MODE=search; QUERY="${2:-}"; shift 2 ;;
+        --search) need_value "$1" $#; MODE=search; QUERY="$2"; shift 2 ;;
         --create) MODE=create; shift ;;
-        --title) TITLE="${2:-}"; shift 2 ;;
-        --body-file) BODY_FILE="${2:-}"; shift 2 ;;
+        --title) need_value "$1" $#; TITLE="$2"; shift 2 ;;
+        --body-file) need_value "$1" $#; BODY_FILE="$2"; shift 2 ;;
         --dry-run) DRY_RUN=true; shift ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
@@ -31,9 +38,11 @@ done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # --body-file の相対パスは呼び出し時のカレントディレクトリ基準で解決する
-if [ -n "$BODY_FILE" ] && [ "${BODY_FILE#/}" = "$BODY_FILE" ]; then
-    BODY_FILE="$(pwd)/$BODY_FILE"
-fi
+# (/ 始まり・Windows のドライブレター始まり C:/ C:\ は絶対パスとして扱う)
+case "$BODY_FILE" in
+    ''|/*|[A-Za-z]:[/\\]*) ;;
+    *) BODY_FILE="$(pwd)/$BODY_FILE" ;;
+esac
 cd "$SCRIPT_DIR/../../.."
 CONFIG_PATH=".agents/workflow/config.json"
 

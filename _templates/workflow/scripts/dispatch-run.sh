@@ -1,6 +1,11 @@
 #!/bin/bash
 TASK_ID="${1:?TaskId required}"
 ATTEMPT="${2:-1}"
+# パスや埋め込みコードに使うため、タスクIDと試行回数の形式を検証する
+if ! [[ "$TASK_ID" =~ ^[A-Za-z0-9_-]+$ ]] || ! [[ "$ATTEMPT" =~ ^[0-9]+$ ]]; then
+  echo "Invalid TaskId/Attempt: '$TASK_ID' '$ATTEMPT'" >&2
+  exit 1
+fi
 cd "$(dirname "$0")/../../.."
 export XDG_CONFIG_HOME=".agents/workflow/.config"
 export XDG_DATA_HOME=".agents/workflow/.config"

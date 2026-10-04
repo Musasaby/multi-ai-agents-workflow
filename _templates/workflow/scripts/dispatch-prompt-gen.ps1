@@ -68,6 +68,11 @@ if (-not $TaskId) {
     [Console]::Error.WriteLine("Usage: dispatch-prompt-gen.ps1 -TaskId <TaskId> [-Attempt <n>] | dispatch-prompt-gen.ps1 -Pr")
     exit 1
 }
+# パスや埋め込みに使うため、タスクIDと試行回数の形式を検証する
+if ($TaskId -cnotmatch '^[A-Za-z0-9_-]+$' -or $Attempt -lt 1) {
+    [Console]::Error.WriteLine("Invalid TaskId/Attempt: '$TaskId' '$Attempt'")
+    exit 1
+}
 $RunDir = "$RunsBase/$TaskId-$Attempt"
 $PromptPath = "$RunDir/prompt.md"
 $TemplatePath = "$PSScriptRoot/dispatch-prompt-template.md"

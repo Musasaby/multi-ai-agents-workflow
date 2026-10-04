@@ -77,4 +77,13 @@ Invoke-TestCase "-Diff" {
     Assert-Contains $script:Out "Write-Output old" "diff shows old content"
 }
 
+Invoke-TestCase "配置先のコピーからの実行は拒否" {
+    Initialize-UserProject
+    Push-Location $script:Proj
+    & pwsh -NoProfile -File ".agents/workflow/scripts/workflow-sync-scripts.ps1" *> $null
+    $code = $LASTEXITCODE
+    Pop-Location
+    Assert-Eq 1 $code "exit code"
+}
+
 Show-Summary

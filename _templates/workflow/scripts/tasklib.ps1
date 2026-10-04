@@ -24,7 +24,7 @@ function Read-TaskList {
     for ($i = 0; $i -lt $Lines.Count; $i++) {
         $line = (Get-LineBody $Lines[$i]).TrimStart([char]0xFEFF)
         if ($line.StartsWith('## ')) {
-            if ($line -match '^## (T\d+):\s*(.+)') {
+            if ($line -cmatch '^## (T\d+):\s*(.+)') {
                 $current = [pscustomobject]@{ id = $Matches[1]; title = $Matches[2].Trim(); depRaw = $null; depLine = -1 }
                 $tasks[$current.id] = $current
             } else {

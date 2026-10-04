@@ -79,6 +79,21 @@ t_no_mode() {
     assert_eq 1 "$CODE" "exit code"
 }
 
+t_missing_value_no_hang() {
+    local code
+    (cd "$PROJ" && timeout 10 .agents/workflow/scripts/upstream-issue.sh --create --title) > /dev/null 2>&1
+    code=$?
+    assert_eq 1 "$code" "option without value -> exit 1 (124 = hang)"
+}
+
+t_windows_abs_body_file() {
+    printf 'x\n' > "$PROJ/body.md"
+    local abs
+    abs="$(py_path "$PROJ/body.md")"
+    run_script upstream-issue.sh --create --title t --body-file "$abs" --dry-run
+    assert_eq 0 "$CODE" "absolute body-file path accepted: $ERR"
+}
+
 echo "test-upstream-issue.sh"
 test_case "search: https" t_search_https
 test_case "search: ssh" t_search_ssh
@@ -89,4 +104,6 @@ test_case "create: dry-run" t_create_dry_run
 test_case "create: title必須" t_create_requires_title
 test_case "create: body-file必須" t_create_requires_body_file
 test_case "モード未指定はexit 1" t_no_mode
+test_case "値の欠けたオプションでハングしない" t_missing_value_no_hang
+test_case "body-file の絶対パス" t_windows_abs_body_file
 summary

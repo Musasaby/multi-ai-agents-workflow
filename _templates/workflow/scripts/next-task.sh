@@ -9,6 +9,8 @@ set -euo pipefail
 
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
+# tasklib を import しても scripts/__pycache__ を作らない(利用先の作業ツリーを汚さないため)
+export PYTHONDONTWRITEBYTECODE=1
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/../../.."
@@ -50,6 +52,9 @@ except tasklib.TaskFileError as e:
 with open(state_path, encoding='utf-8') as f:
     state_tasks = json.load(f)['tasks']
 status = {t['id']: t['status'] for t in state_tasks}
+if not state_tasks:
+    print('state.json has no tasks', file=sys.stderr)
+    sys.exit(1)
 
 for t in state_tasks:
     if t['status'] in ('in_progress', 'in_review'):
