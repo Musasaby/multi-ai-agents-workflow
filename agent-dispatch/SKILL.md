@@ -200,7 +200,7 @@ exit 3 になる。
     sleep 30
   done
   ```
-- **タイムアウト管理**: `config.json` の `child_agent.timeout_seconds`(デフォルト: 3600秒)を
+- **タイムアウト管理**: `config.json` の `child_agent.timeout_seconds`(デフォルト: 1800秒)を
   親側のポーリングループ内で監視する。タイムアウト超過時はループを抜け、タスクを
   `in_progress` のままユーザーに報告する
 - **ポーリング実行の上限への注意**: 上記のポーリングループは親エージェントのコマンド実行上限
