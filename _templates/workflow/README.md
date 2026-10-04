@@ -12,11 +12,12 @@
 │   ├── dispatch-check.ps1 / .sh
 │   ├── dispatch-prompt-gen.ps1 / .sh
 │   ├── dispatch-prompt-template.md
+│   ├── dispatch-pr-prompt-template.md   PR作成の単発依頼用(dispatch-prompt-gen --pr)
 │   ├── state-sync.ps1 / .sh
 │   ├── next-task.ps1 / .sh
 │   ├── tasklib.ps1 / tasklib.py  tasks.md 解析・依存欄検証の共通部品
 │   └── workflow-archive.ps1 / .sh
-├── runs/<タスクID>-<試行回数>/   ← 実行単位の生成物(.gitignore対象)
+├── runs/<タスクID>-<試行回数>/   ← 実行単位の生成物(.gitignore対象。PR作成の単発依頼は pr-<N>-1/)
 │   ├── prompt.md        生成プロンプト
 │   ├── fix-notes.md     リトライ時のレビュー指摘(親が作成)
 │   ├── output.log       子エージェントの出力
@@ -162,7 +163,21 @@ tasks.md・config.json・依存タスクの完了報告(直接依存のみ)か�
 | `3` | リトライ(`-Attempt 2` 以上)なのに `fix-notes.md` が見つからない | 書き出さない |
 
 exit 0 以外は dispatch を行わず、stderr の内容(exit 2 なら欠落内容の列挙)をそのまま
-ユーザーに報告する。exit 0 の場合も生成されたプロンプト全文は会話に読み込まない
+ユーザーに報告する。
+
+**PR モード**(`-Pr` / `--pr`): PR 作成を子に単発で依頼するプロンプトを
+`dispatch-pr-prompt-template.md` から生成し、`runs/pr-<N>-1/prompt.md` に書き出す
+(`<N>` は既存の `pr-*` の次の連番)。PR に含めるタスクは、state.json で `done` かつ
+`commit` が `git log main..HEAD` に含まれるものを自動で選ぶ。stdout に `RunId: pr-<N>` を
+出力するので、`dispatch-run` に `pr-<N>` と `1` を渡して起動する。作業ブランチではなく
+`main` 上で実行した場合や、対象タスクが無い場合は exit 1。
+
+```powershell
+.agents/workflow/scripts/dispatch-prompt-gen.ps1 -Pr
+```
+```bash
+.agents/workflow/scripts/dispatch-prompt-gen.sh --pr
+```exit 0 の場合も生成されたプロンプト全文は会話に読み込まない
 (読み込むと機械生成によるトークン節約が無意味になる)。
 
 ### dispatch-run — 子エージェントCLIのデタッチ実行

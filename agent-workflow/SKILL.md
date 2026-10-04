@@ -30,9 +30,10 @@ description: マルチエージェント実装ワークフローのオーケス�
 - **区切り方**: `tasks.md` 上でタスクが機能グループごとに並んでいる場合、そのグループ境界を
   ブランチ分割の候補とする(依存関係の記述だけで十分に整理できている場合は無理に
   分割しなくてよい)
-- **分割の流れ**: グループ内の全タスクが `done` になった時点で `/create-pr` で PR を作成し
-  マージする。マージ後、次のグループは最新の `main` から新しい `develop/*` ブランチを
-  作成してから着手する
+- **分割の流れ**: グループ内の全タスクが `done` になった時点で、後述の「PR作成(子への
+  単発依頼)」で PR を作成する。**マージはユーザーが行う**。親は PR URL を報告して停止し、
+  ユーザーからマージ完了の連絡を受けてから、次のグループを最新の `main` から作成した
+  新しい `develop/*` ブランチで着手する
 - **切替手順**:
   1. 切替前に `git status --porcelain` が空であることを確認する(ワークフロー状態の
      choreコミット(`agent-review-commit` skill の手順7)が完了していれば未コミット変更は残らないはず)
@@ -116,11 +117,39 @@ tasks.md / state.json / runs/ / comprehension/ は自動的に `archive/<日時-
 - 子エージェントCLIが連続して異常終了・タイムアウトする
 - タスク分解時点と前提が変わった(計画の矛盾、依存タスクの設計変更が必要 等)
 
+## PR作成(子への単発依頼)
+
+グループ完了時(「ブランチ分割の推奨」)とサイクル完了時に、PR 作成を子エージェントへ
+単発で依頼する。PR 作成はタスクではないため、tasks.md / state.json には載せない
+(タスクIDは採番しない)。親は PR のタイトル・本文を自分で書かず、gh コマンドも直接実行しない。
+
+1. `git status --porcelain` が空であることを確認する
+2. `dispatch-prompt-gen` の PR モードでプロンプトを生成する。対象タスク(state.json で
+   `done` かつ commit が `git log main..HEAD` に含まれるもの)は自動で選ばれる
+   ```powershell
+   .agents/workflow/scripts/dispatch-prompt-gen.ps1 -Pr
+   ```
+   ```bash
+   .agents/workflow/scripts/dispatch-prompt-gen.sh --pr
+   ```
+   stdout の `RunId: pr-<N>` を控える(出力先は `runs/pr-<N>-1/prompt.md`)。exit 1 の場合
+   (`main` 上で実行した、対象タスクが無い 等)は stderr を添えてユーザーに報告する
+3. `/agent-dispatch` §3 と同じ方法で、`dispatch-run` に `pr-<N>` と試行回数 `1` を渡して
+   デタッチ起動する(例: `dispatch-run.ps1 -TaskId pr-<N> -Attempt 1`)。プロンプトには、
+   push(`git push -u`)、`gh pr create --base main`、日本語のタイトル・本文、既存 PR の
+   確認、マージ禁止が含まれている
+4. `/agent-dispatch` §4 と同じ方法で完了を検知し、`dispatch-check`(`pr-<N>` / `1`)で判定する
+5. **PR の検証**: `gh pr view <作業ブランチ> --json url,state,baseRefName` を実行し、
+   PR が存在し、`baseRefName` が `main` であることを確認する。確認できなければ、
+   `output.log` の末尾を添えてユーザーに報告する
+6. PR URL をユーザーに報告して停止する(マージはユーザーが行う)
+
 ## 完了時のサマリー報告
 
 - タスクごとの結果(done/failed、コミットハッシュ、リトライ回数)
 - 残課題・子エージェントの報告にあった備考
-- 次のアクション提案(PR作成は既存の `/create-pr` フローに委ねる)
+- 次のアクション提案(PR が未作成なら「PR作成(子への単発依頼)」を実行し、PR URL を報告する。
+  マージはユーザーが行う)
 - **理解確認**: `.agents/workflow/comprehension/` に未回答の質問ファイル(`**あなたの回答**:` がコメントアウトのままのファイル)がある場合、その一覧を提示する
 - **git status のクリーン確認**: `git status --porcelain` を実行し、出力が空であることを確認する。
   空でない場合(コミット漏れ・想定外の untracked ファイルが残っている等)は、その内容を

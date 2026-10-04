@@ -1,6 +1,7 @@
 ﻿param(
-    [Parameter(Mandatory = $true)][string]$TaskId,
-    [int]$Attempt = 1
+    [string]$TaskId,
+    [int]$Attempt = 1,
+    [switch]$Pr
 )
 Set-Location $PSScriptRoot\..\..\..
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -11,6 +12,62 @@ $TasksPath = "$Root/.agents/workflow/tasks.md"
 $StatePath = "$Root/.agents/workflow/state.json"
 $ConfigPath = "$Root/.agents/workflow/config.json"
 $RunsBase = "$Root/.agents/workflow/runs"
+
+# --- PR mode: PR作成を子に単発依頼するプロンプトを生成する ---
+# 対象タスク = state.json で done かつ commit が git log <base>..HEAD に含まれるもの。
+# 出力先は runs/pr-<連番>-1/prompt.md。stdout に "RunId: pr-<連番>" を出す。
+if ($Pr) {
+    $baseBranch = 'main'
+    $branch = "$(git branch --show-current)".Trim()
+    if (-not $branch -or $branch -eq $baseBranch) {
+        [Console]::Error.WriteLine("PR mode must be run on a work branch (current: '$branch')")
+        exit 1
+    }
+    git rev-parse --verify --quiet $baseBranch *> $null
+    if ($LASTEXITCODE -ne 0) {
+        [Console]::Error.WriteLine("Base branch '$baseBranch' not found")
+        exit 1
+    }
+    if (-not (Test-Path $StatePath)) {
+        [Console]::Error.WriteLine("state.json not found: $StatePath")
+        exit 1
+    }
+    $commits = @(git log "$baseBranch..HEAD" --format=%H)
+    $selected = @()
+    foreach ($t in (Get-Content $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json).tasks) {
+        $c = $t.commit
+        if ($t.status -eq 'done' -and $c -and @($commits | Where-Object { $_.StartsWith($c) }).Count -gt 0) {
+            $selected += "- $($t.id): $($t.title) (commit $c)"
+        }
+    }
+    if ($selected.Count -eq 0) {
+        [Console]::Error.WriteLine("No done tasks whose commit is in $baseBranch..HEAD (nothing to include in the PR)")
+        exit 1
+    }
+    $prN = 1
+    if (Test-Path $RunsBase) {
+        Get-ChildItem -Path $RunsBase -Directory | Where-Object { $_.Name -match '^pr-(\d+)-1$' } | ForEach-Object {
+            $n = [int]$Matches[1]
+            if ($n -ge $prN) { $prN = $n + 1 }
+        }
+    }
+    $prRunDir = "$RunsBase/pr-$prN-1"
+    $null = New-Item -ItemType Directory -Force $prRunDir
+    $text = Get-Content "$PSScriptRoot/dispatch-pr-prompt-template.md" -Raw -Encoding UTF8
+    $text = $text.Replace('{task_list}', ($selected -join "`n"))
+    $text = $text.Replace('{branch}', $branch)
+    $text = $text.Replace('{base_branch}', $baseBranch)
+    $text = $text.Replace('{run_dir}', ".agents/workflow/runs/pr-$prN-1")
+    [System.IO.File]::WriteAllText("$prRunDir/prompt.md", $text, [System.Text.UTF8Encoding]::new($false))
+    Write-Output "Generated: $prRunDir/prompt.md"
+    Write-Output "RunId: pr-$prN"
+    exit 0
+}
+
+if (-not $TaskId) {
+    [Console]::Error.WriteLine("Usage: dispatch-prompt-gen.ps1 -TaskId <TaskId> [-Attempt <n>] | dispatch-prompt-gen.ps1 -Pr")
+    exit 1
+}
 $RunDir = "$RunsBase/$TaskId-$Attempt"
 $PromptPath = "$RunDir/prompt.md"
 $TemplatePath = "$PSScriptRoot/dispatch-prompt-template.md"

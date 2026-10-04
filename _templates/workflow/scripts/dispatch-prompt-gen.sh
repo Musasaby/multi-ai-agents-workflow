@@ -6,8 +6,16 @@ set -euo pipefail
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
 
-TASK_ID="${1:?Usage: dispatch-prompt-gen.sh <TaskId> [Attempt]}"
-ATTEMPT="${2:-1}"
+USAGE="Usage: dispatch-prompt-gen.sh <TaskId> [Attempt] | dispatch-prompt-gen.sh --pr"
+PR_MODE=false
+if [ "${1:-}" = "--pr" ]; then
+    PR_MODE=true
+    TASK_ID="pr"
+    ATTEMPT=1
+else
+    TASK_ID="${1:?$USAGE}"
+    ATTEMPT="${2:-1}"
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/../../.."
@@ -35,6 +43,66 @@ STATE_PATH_PY="$(to_py_path "$STATE_PATH")"
 CONFIG_PATH_PY="$(to_py_path "$CONFIG_PATH")"
 TEMPLATE_PATH_PY="$(to_py_path "$TEMPLATE_PATH")"
 PROMPT_PATH_PY="$(to_py_path "$PROMPT_PATH")"
+
+# --- PR mode: PR作成を子に単発依頼するプロンプトを生成する ---
+# 対象タスク = state.json で done かつ commit が git log <base>..HEAD に含まれるもの。
+# 出力先は runs/pr-<連番>-1/prompt.md。stdout に "RunId: pr-<連番>" を出す。
+if [ "$PR_MODE" = true ]; then
+    BASE_BRANCH="main"
+    BRANCH="$(git branch --show-current)"
+    if [ -z "$BRANCH" ] || [ "$BRANCH" = "$BASE_BRANCH" ]; then
+        echo "PR mode must be run on a work branch (current: '${BRANCH:-detached HEAD}')" >&2
+        exit 1
+    fi
+    if ! git rev-parse --verify --quiet "$BASE_BRANCH" > /dev/null; then
+        echo "Base branch '$BASE_BRANCH' not found" >&2
+        exit 1
+    fi
+    if [ ! -f "$STATE_PATH" ]; then
+        echo "state.json not found: $STATE_PATH" >&2
+        exit 1
+    fi
+    PR_N=1
+    if [ -d "$RUNS_BASE" ]; then
+        for d in "$RUNS_BASE"/pr-*-1; do
+            [ -d "$d" ] || continue
+            n="$(basename "$d" | sed 's/^pr-//; s/-1$//')"
+            if [ "$n" -ge "$PR_N" ] 2>/dev/null; then
+                PR_N=$((n + 1))
+            fi
+        done
+    fi
+    PR_RUN_DIR="$RUNS_BASE/pr-${PR_N}-1"
+    COMMITS="$(git log "$BASE_BRANCH..HEAD" --format=%H)"
+    mkdir -p "$PR_RUN_DIR"
+    python3 - "$STATE_PATH_PY" "$(to_py_path "$SCRIPT_DIR/dispatch-pr-prompt-template.md")" \
+        "$(to_py_path "$PR_RUN_DIR/prompt.md")" "$BRANCH" "$BASE_BRANCH" \
+        ".agents/workflow/runs/pr-${PR_N}-1" "$COMMITS" <<'PY' || { rmdir "$PR_RUN_DIR" 2>/dev/null; exit 1; }
+import json, sys
+state_path, template_path, prompt_path, branch, base, run_dir, commits = sys.argv[1:8]
+commits = [c for c in commits.split() if c]
+with open(state_path, encoding='utf-8') as f:
+    tasks = json.load(f)['tasks']
+selected = []
+for t in tasks:
+    c = t.get('commit')
+    if t.get('status') == 'done' and c and any(h.startswith(c) for h in commits):
+        selected.append('- ' + t['id'] + ': ' + t['title'] + ' (commit ' + c + ')')
+if not selected:
+    print('No done tasks whose commit is in ' + base + '..HEAD (nothing to include in the PR)', file=sys.stderr)
+    sys.exit(1)
+with open(template_path, encoding='utf-8') as f:
+    text = f.read()
+for key, value in (('{task_list}', '\n'.join(selected)), ('{branch}', branch),
+                   ('{base_branch}', base), ('{run_dir}', run_dir)):
+    text = text.replace(key, value)
+with open(prompt_path, 'w', encoding='utf-8', newline='\n') as f:
+    f.write(text)
+PY
+    echo "Generated: $PR_RUN_DIR/prompt.md"
+    echo "RunId: pr-${PR_N}"
+    exit 0
+fi
 
 # --- Extract task section from tasks.md ---
 extract_task_section() {
