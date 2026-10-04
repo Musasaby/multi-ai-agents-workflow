@@ -5,9 +5,24 @@ set -euo pipefail
 # system codepage and mangle non-ASCII (Japanese) text. Force UTF-8.
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
+# tasklib を import しても scripts/__pycache__ を作らない(利用先の作業ツリーを汚さないため)
+export PYTHONDONTWRITEBYTECODE=1
 
-TASK_ID="${1:?Usage: dispatch-prompt-gen.sh <TaskId> [Attempt]}"
-ATTEMPT="${2:-1}"
+USAGE="Usage: dispatch-prompt-gen.sh <TaskId> [Attempt] | dispatch-prompt-gen.sh --pr"
+PR_MODE=false
+if [ "${1:-}" = "--pr" ]; then
+    PR_MODE=true
+    TASK_ID="pr"
+    ATTEMPT=1
+else
+    TASK_ID="${1:?$USAGE}"
+    ATTEMPT="${2:-1}"
+    # パスやコード片に埋め込むため、タスクIDと試行回数の形式を検証する
+    if ! [[ "$TASK_ID" =~ ^[A-Za-z0-9_-]+$ ]] || ! [[ "$ATTEMPT" =~ ^[0-9]+$ ]]; then
+        echo "Invalid TaskId/Attempt: '$TASK_ID' '$ATTEMPT' (TaskId: [A-Za-z0-9_-]+, Attempt: number)" >&2
+        exit 1
+    fi
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/../../.."
@@ -35,6 +50,66 @@ STATE_PATH_PY="$(to_py_path "$STATE_PATH")"
 CONFIG_PATH_PY="$(to_py_path "$CONFIG_PATH")"
 TEMPLATE_PATH_PY="$(to_py_path "$TEMPLATE_PATH")"
 PROMPT_PATH_PY="$(to_py_path "$PROMPT_PATH")"
+
+# --- PR mode: PR作成を子に単発依頼するプロンプトを生成する ---
+# 対象タスク = state.json で done かつ commit が git log <base>..HEAD に含まれるもの。
+# 出力先は runs/pr-<連番>-1/prompt.md。stdout に "RunId: pr-<連番>" を出す。
+if [ "$PR_MODE" = true ]; then
+    BASE_BRANCH="main"
+    BRANCH="$(git branch --show-current)"
+    if [ -z "$BRANCH" ] || [ "$BRANCH" = "$BASE_BRANCH" ]; then
+        echo "PR mode must be run on a work branch (current: '${BRANCH:-detached HEAD}')" >&2
+        exit 1
+    fi
+    if ! git rev-parse --verify --quiet "$BASE_BRANCH" > /dev/null; then
+        echo "Base branch '$BASE_BRANCH' not found" >&2
+        exit 1
+    fi
+    if [ ! -f "$STATE_PATH" ]; then
+        echo "state.json not found: $STATE_PATH" >&2
+        exit 1
+    fi
+    PR_N=1
+    if [ -d "$RUNS_BASE" ]; then
+        for d in "$RUNS_BASE"/pr-*-1; do
+            [ -d "$d" ] || continue
+            n="$(basename "$d" | sed 's/^pr-//; s/-1$//')"
+            if [ "$n" -ge "$PR_N" ] 2>/dev/null; then
+                PR_N=$((n + 1))
+            fi
+        done
+    fi
+    PR_RUN_DIR="$RUNS_BASE/pr-${PR_N}-1"
+    COMMITS="$(git log "$BASE_BRANCH..HEAD" --format=%H)"
+    mkdir -p "$PR_RUN_DIR"
+    python3 - "$STATE_PATH_PY" "$(to_py_path "$SCRIPT_DIR/dispatch-pr-prompt-template.md")" \
+        "$(to_py_path "$PR_RUN_DIR/prompt.md")" "$BRANCH" "$BASE_BRANCH" \
+        ".agents/workflow/runs/pr-${PR_N}-1" "$COMMITS" <<'PY' || { rmdir "$PR_RUN_DIR" 2>/dev/null; exit 1; }
+import json, sys
+state_path, template_path, prompt_path, branch, base, run_dir, commits = sys.argv[1:8]
+commits = [c for c in commits.split() if c]
+with open(state_path, encoding='utf-8') as f:
+    tasks = json.load(f)['tasks']
+selected = []
+for t in tasks:
+    c = t.get('commit')
+    if t.get('status') == 'done' and c and any(h.startswith(c) for h in commits):
+        selected.append('- ' + t['id'] + ': ' + t['title'] + ' (commit ' + c + ')')
+if not selected:
+    print('No done tasks whose commit is in ' + base + '..HEAD (nothing to include in the PR)', file=sys.stderr)
+    sys.exit(1)
+with open(template_path, encoding='utf-8') as f:
+    text = f.read()
+for key, value in (('{task_list}', '\n'.join(selected)), ('{branch}', branch),
+                   ('{base_branch}', base), ('{run_dir}', run_dir)):
+    text = text.replace(key, value)
+with open(prompt_path, 'w', encoding='utf-8', newline='\n') as f:
+    f.write(text)
+PY
+    echo "Generated: $PR_RUN_DIR/prompt.md"
+    echo "RunId: pr-${PR_N}"
+    exit 0
+fi
 
 # --- Extract task section from tasks.md ---
 extract_task_section() {
@@ -80,15 +155,31 @@ if echo "$TASK_SECTION" | head -1 | grep -qE "^## ${TASK_ID}:"; then
     TASK_TITLE=$(echo "$TASK_SECTION" | head -1 | sed "s/^## ${TASK_ID}:[[:space:]]*//")
 fi
 
-# Extract dependencies
-DEPS=""
-if echo "$TASK_SECTION" | grep -qE '^\s*-\s+\*\*依存\*\*:'; then
-    DEP_LINE=$(echo "$TASK_SECTION" | grep -E '^\s*-\s+\*\*依存\*\*:' | sed 's/^[[:space:]]*-[[:space:]]*\*\*依存\*\*:[[:space:]]*//')
-    if [ "$DEP_LINE" != "なし" ]; then
-        DEPS=$(echo "$DEP_LINE" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -E '^T[0-9]+$' | tr '\n' ',')
-        DEPS="${DEPS%,}"
-    fi
-fi
+# Extract and validate dependencies (invalid tokens are an error, never silently dropped)
+DEPS=$(python3 - "$(to_py_path "$SCRIPT_DIR")" "$(to_py_path "$TASKS_PATH")" "$TASK_ID" <<'PY'
+import sys
+script_dir, tasks_path, task_id = sys.argv[1:4]
+sys.path.insert(0, script_dir)
+import tasklib
+with open(tasks_path, encoding='utf-8', newline='') as f:
+    tasks = tasklib.parse_tasks(f.read())
+ids = {t['id'] for t in tasks}
+task = next((t for t in tasks if t['id'] == task_id), None)
+if task is None:
+    print("Task '" + task_id + "' heading not recognized in tasks.md (expected '## " + task_id + ": <title>')", file=sys.stderr)
+    sys.exit(1)
+try:
+    deps = tasklib.parse_deps(task)
+except tasklib.TaskFileError as e:
+    print(str(e), file=sys.stderr)
+    sys.exit(1)
+unknown = [d for d in deps if d not in ids]
+if unknown:
+    print(task_id + ': depends on unknown task(s) ' + ', '.join(unknown) + ' (not found in tasks.md)', file=sys.stderr)
+    sys.exit(1)
+print(','.join(deps))
+PY
+) || exit 1
 
 # --- Handoff guard ---
 if [ -n "$DEPS" ]; then

@@ -7,21 +7,29 @@
 ```
 .agents/workflow/
 ├── config.json / tasks.md / state.json / README.md   ← 正本(人が直接読むファイルのみ)
-├── scripts/                      ← 配布物(セットアップ時にコピー、既存は上書きしない)
+├── scripts/                      ← 配布物(セットアップ時にコピー、既存は上書きしない。更新は workflow-sync-scripts)
 │   ├── dispatch-run.ps1 / .sh
+│   ├── dispatch-check.ps1 / .sh
 │   ├── dispatch-prompt-gen.ps1 / .sh
 │   ├── dispatch-prompt-template.md
+│   ├── dispatch-pr-prompt-template.md   PR作成の単発依頼用(dispatch-prompt-gen --pr)
 │   ├── state-sync.ps1 / .sh
+│   ├── next-task.ps1 / .sh
+│   ├── tasklib.ps1 / tasklib.py  tasks.md 解析・依存欄検証の共通部品
+│   ├── upstream-issue.ps1 / .sh
+│   ├── upstream-issue-template.md  upstream への Issue 本文テンプレート
+│   ├── workflow-sync-scripts.ps1 / .sh
 │   └── workflow-archive.ps1 / .sh
-├── runs/<タスクID>-<試行回数>/   ← 実行単位の生成物(.gitignore対象)
+├── runs/<タスクID>-<試行回数>/   ← 実行単位の生成物(.gitignore対象。PR作成の単発依頼は pr-<N>-1/)
 │   ├── prompt.md        生成プロンプト
 │   ├── fix-notes.md     リトライ時のレビュー指摘(親が作成)
 │   ├── output.log       子エージェントの出力
 │   ├── done             完了マーカー(EXIT/END の2行)
+│   ├── exit-signal      シグナル番号の一時ファイル(POSIX版のみ。done 書き出し時に削除)
 │   └── report.md        完了報告
 ├── comprehension/                ← 理解確認(タスク単位)
 ├── archive/<日時-スラッグ>/      ← 一巡した過去サイクルの退避先(.gitignore対象)
-└── .config/                      ← 子エージェントCLIのXDG退避先
+└── .config/                      ← 子エージェントCLIのXDG退避先(isolate_xdg: true のときのみ使用)
 ```
 
 - `runs/` はタスク×試行ごとにディレクトリが分かれるため、リトライ時に過去の
@@ -36,6 +44,7 @@
 |------|------|-----------|
 | `child_agent.command_template` | 子エージェントCLIのコマンドテンプレート。`{prompt}` がタスクプロンプトに展開される | `opencode run "{prompt}"` |
 | `child_agent.timeout_seconds` | 子エージェント実行のタイムアウト(秒) | `1800` |
+| `child_agent.isolate_xdg` | `true` なら `dispatch-run` が子CLIの `XDG_CONFIG_HOME` / `XDG_DATA_HOME` を `.agents/workflow/.config` に切り替える(sandbox で `~/.config` 等に書けない環境向け)。切り替えると `~/.local/share/<CLI>/auth.json` 等の認証情報が見えなくなる。未指定は `false` | `false` |
 | `test_command` | 子エージェントに実行させるテストコマンド。空ならタスクごとに親が指定 | `""` |
 | `verify_before_commit` | コミット直前に親がテストコマンドを1回実行する最終ゲート | `false` |
 | `max_fix_retries` | レビュー不合格時の子エージェントへの再依頼上限。超過で親のサブエージェントにフォールバック | `2` |
@@ -82,9 +91,18 @@ Claude Code を子エージェントとして使う場合は `stream-json` 出�
 - **依存**: なし | T1, T2
 ```
 
-`- **依存**:` 行は `dispatch-prompt-gen` が正規表現でパースする機械可読フォーマットである。
-`なし` またはカンマ区切りのタスクID列(`T1, T2`)以外は書かない。依存欄に挙げたタスクは
-dispatch 時に完了報告が自動結合される対象になるため、真に前提となるタスクのみ記載する。
+`- **依存**:` 行は `state-sync` / `next-task` / `dispatch-prompt-gen` が機械的にパースする
+機械可読フォーマットである。`なし` またはカンマ区切りのタスクID列(`T1, T2`)以外は書かない。
+依存欄に挙げたタスクは dispatch 時に完了報告が自動結合される対象になるため、真に前提となる
+タスクのみ記載する。
+
+- 依存行はすべてのタスクに必須(依存が無ければ `なし`)
+- 注記(例: `T30(Prometheus 基盤。完了済み)`)は書かない。前提タスクに関する補足は**目的欄**に
+  書く。完了状態は state.json で機械的に判定するため書かない
+- 形式違反・存在しないタスクID・自分自身への依存は `state-sync` / `next-task` /
+  `dispatch-prompt-gen` がエラー(exit 1)にし、不正な値を stderr に出す(黙って捨てない)。
+  循環依存は `state-sync` と `next-task` が検出する
+- タスクの実行順は記述順・ID順ではなく依存関係で決まる(`next-task` が選ぶ)
 
 ## state.json(/agent-task-plan が `scripts/state-sync --init` で機械生成、各skillが更新)
 
@@ -144,12 +162,26 @@ tasks.md・config.json・依存タスクの完了報告(直接依存のみ)か�
 | exit | 意味 | 生成物 |
 |------|------|--------|
 | `0` | 生成成功 | `runs/<タスクID>-<試行回数>/prompt.md` を書き出す |
-| `1` | 使い方・tasks.md/state.json 不備(タスクID未検出、tasks.md/state.json が無い 等) | 書き出さない |
+| `1` | 使い方・tasks.md/state.json 不備(タスクID未検出、tasks.md/state.json が無い、依存欄の形式違反・存在しないID・自己依存 等) | 書き出さない |
 | `2` | 引き継ぎガード失敗(依存タスクが `done` でない、または依存タスクの `report.md` が見つからない) | 書き出さない(既存の古い prompt.md があれば削除する) |
 | `3` | リトライ(`-Attempt 2` 以上)なのに `fix-notes.md` が見つからない | 書き出さない |
 
 exit 0 以外は dispatch を行わず、stderr の内容(exit 2 なら欠落内容の列挙)をそのまま
-ユーザーに報告する。exit 0 の場合も生成されたプロンプト全文は会話に読み込まない
+ユーザーに報告する。
+
+**PR モード**(`-Pr` / `--pr`): PR 作成を子に単発で依頼するプロンプトを
+`dispatch-pr-prompt-template.md` から生成し、`runs/pr-<N>-1/prompt.md` に書き出す
+(`<N>` は既存の `pr-*` の次の連番)。PR に含めるタスクは、state.json で `done` かつ
+`commit` が `git log main..HEAD` に含まれるものを自動で選ぶ。stdout に `RunId: pr-<N>` を
+出力するので、`dispatch-run` に `pr-<N>` と `1` を渡して起動する。作業ブランチではなく
+`main` 上で実行した場合や、対象タスクが無い場合は exit 1。
+
+```powershell
+.agents/workflow/scripts/dispatch-prompt-gen.ps1 -Pr
+```
+```bash
+.agents/workflow/scripts/dispatch-prompt-gen.sh --pr
+```exit 0 の場合も生成されたプロンプト全文は会話に読み込まない
 (読み込むと機械生成によるトークン節約が無意味になる)。
 
 ### dispatch-run — 子エージェントCLIのデタッチ実行
@@ -158,6 +190,13 @@ exit 0 以外は dispatch を行わず、stderr の内容(exit 2 なら欠落内
 `child_agent.command_template`)を stdin を閉じて実行する。stdout/stderr を
 `runs/<タスクID>-<試行回数>/output.log` に、終了後に exit code と終了時刻を
 `runs/<タスクID>-<試行回数>/done`(`EXIT:` / `END:` の2行)に書き出す。
+
+`EXIT:` の値は、数値(子CLIの exit code)・`signal:<番号>`(子がシグナルで強制終了された。
+POSIX 版のみ)・`crashed:<メッセージ>`(ラッパー自体の異常終了。PowerShell 版)のいずれか。
+POSIX 版は、Python 経由の起動では子の負の returncode を、bash で直接起動するフォールバック
+経路では 128 より大きい終了コードをシグナル終了とみなし、`signal:15` のように記録する
+(従来は SIGTERM が `EXIT:241` と記録され、通常の終了と区別できなかった)。
+Windows にはシグナルの仕組みが無いため、PowerShell 版での強制終了は通常の非0終了として記録される。
 親プロセスのタイムアウト・終了に巻き込まれないよう `Start-Process` / `nohup` 等で
 デタッチ起動する。
 
@@ -167,6 +206,23 @@ Start-Process pwsh -ArgumentList "-NoProfile -File .agents/workflow/scripts/disp
 ```bash
 nohup .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1 &
 ```
+
+### dispatch-check — 完了検知後の終了状態・成果物の判定
+
+`done` マーカーを検知したら毎回実行する。終了状態の区分(`ok` / `nonzero` / `signal` /
+`crashed`)、完了報告(`output.log` 内の `## 完了報告`)の有無、`git status --porcelain`、
+`git diff --stat`、`output.log` の末尾30行をまとめて出力する。
+
+```powershell
+.agents/workflow/scripts/dispatch-check.ps1 -TaskId T1 -Attempt 1
+```
+```bash
+.agents/workflow/scripts/dispatch-check.sh T1 1
+```
+
+exit code: `0`=正常終了かつ完了報告あり、`1`=done マーカーが無い・使い方不備、
+`4`=異常終了(非0・`signal:*`・`crashed:*`)、`5`=EXIT:0 だが完了報告が無い。
+`4` / `5` の場合はレビューに進まず、出力された成果物の有無をユーザーに報告する。
 
 ### state-sync — state.json の機械生成・追記同期
 
@@ -189,9 +245,89 @@ JSONを直接書くことはない。
   .agents/workflow/scripts/state-sync.sh
   ```
   tasks.md に無いIDが state.json 側にある場合は警告のみ(削除は手動判断)。
+- **挿入**(既存タスクの間に新タスクを挟む。新タスクのセクションを tasks.md 末尾に追記してから実行):
+  ```powershell
+  .agents/workflow/scripts/state-sync.ps1 -Insert T8 -Before T4
+  ```
+  ```bash
+  .agents/workflow/scripts/state-sync.sh --insert T8 --before T4
+  ```
+  `--before` に指定したタスク(カンマ区切りで複数可)の依存欄に新タスクIDを追加し、
+  state.json に新タスクを `pending` で追加する。`--before` のタスクが `pending` でない場合や、
+  循環依存になる場合は拒否し、tasks.md / state.json を変更しない。
 
-exit code: `0`=成功、`1`=使い方不備(tasks.md/state.json 不在、`--init` 時の `--source` 欠落や
-state.json 既存 等)。
+どのモードでも、state.json を書く前に全タスクの依存欄を検証する(形式違反・存在しないID・
+自己依存・循環依存・依存行の欠落)。不正があれば何も書き込まずに exit 1 で終了する。
+
+exit code: `0`=成功、`1`=使い方不備・検証エラー(tasks.md/state.json 不在、`--init` 時の
+`--source` 欠落や state.json 既存、依存欄の不正、挿入先が `pending` でない 等)。
+
+### next-task — 次に処理するタスクの選択
+
+state.json の状態と tasks.md の依存関係から、次に処理するタスクを機械的に選ぶ。
+state.json の並び順ではなく依存関係を見るため、挿入したタスクも正しい順で選ばれる。
+
+1. `in_progress` / `in_review` のタスク(中断からの再開対象)があれば、その最初のもの
+2. なければ、依存タスクがすべて `done` の最初の `pending` タスク
+
+```powershell
+.agents/workflow/scripts/next-task.ps1
+```
+```bash
+.agents/workflow/scripts/next-task.sh
+```
+
+stdout に `<タスクID> <status>`(例: `T8 pending`)を出力する。
+
+exit code: `0`=該当タスクあり、`1`=tasks.md/state.json 不在・依存欄の不正、`3`=全タスク `done`、
+`4`=実行可能なタスクが無い(`failed` や未完了の依存で止まっている。原因を stderr に列挙)。
+
+### upstream-issue — ワークフロー由来の問題を配布元に起票
+
+起票先は `config.json` の `upstream.url`(https / ssh 形式の GitHub URL)から決める。
+利用先リポジトリには起票しない。起票は外部への公開を伴うため、`--create` はユーザーの
+承認を得てから実行する(手順は `agent-workflow` skill の「upstream への Issue 起票手順」)。
+
+```powershell
+.agents/workflow/scripts/upstream-issue.ps1 -Search "<キーワード>"            # 重複候補(open/closed)
+.agents/workflow/scripts/upstream-issue.ps1 -Create -Title "<件名>" -BodyFile <パス> -DryRun
+```
+```bash
+.agents/workflow/scripts/upstream-issue.sh --search "<キーワード>"
+.agents/workflow/scripts/upstream-issue.sh --create --title "<件名>" --body-file <パス> --dry-run
+```
+
+`-DryRun` / `--dry-run` は起票先リポジトリと実行する gh コマンドを表示するだけで、gh を呼ばない。
+本文は `upstream-issue-template.md` をもとに作る。ラベルは付けない。
+
+exit code: `0`=成功、`1`=使い方不備・`upstream.url` 未設定・GitHub 以外の URL、その他=gh の exit code。
+
+### workflow-sync-scripts — 配布テンプレートの更新を配置先に反映
+
+`scripts/` と `README.md` はセットアップ時のコピーのため、`.agents/skills/` を更新しても
+自動では更新されない。このスクリプトで配布テンプレートとの差分を検出・反映する
+(`workflow-update` skill から使う)。**必ずテンプレート側のコピー
+(`.agents/skills/_templates/workflow/scripts/`)から実行する**。
+
+```powershell
+.agents/skills/_templates/workflow/scripts/workflow-sync-scripts.ps1                 # 一覧
+.agents/skills/_templates/workflow/scripts/workflow-sync-scripts.ps1 -CopyMissing    # 未配置のみコピー
+.agents/skills/_templates/workflow/scripts/workflow-sync-scripts.ps1 -Diff scripts/dispatch-run.ps1
+.agents/skills/_templates/workflow/scripts/workflow-sync-scripts.ps1 -Overwrite scripts/dispatch-run.ps1,README.md
+```
+```bash
+bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh
+bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --copy-missing
+bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --diff scripts/dispatch-run.sh
+bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --overwrite scripts/dispatch-run.sh,README.md
+```
+
+一覧は `missing`(未配置)/ `differs`(内容が異なる)とファイル名(`scripts/<名前>` / `README.md`)を
+表示する。改行コード(CRLF/LF)・BOM だけの違いは差分とみなさない。`differs` のファイルは
+利用先でカスタマイズされている可能性があるため、差分を確認してユーザーの承認を得てから
+`--overwrite` する。
+
+exit code: `0`=成功(一覧モードでは差分なし)、`1`=使い方不備・不明なファイル名、`3`=一覧モードで差分あり。
 
 ### workflow-archive — 一巡後のサイクル退避
 

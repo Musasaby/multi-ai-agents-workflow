@@ -9,7 +9,9 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
 
 ## 引数
 
-- 第1引数: タスクID(例: `T1`)。省略時は state.json の最初の `pending` タスク
+- 第1引数: タスクID(例: `T1`)。省略時は `next-task`(PowerShell:
+  `.agents/workflow/scripts/next-task.ps1` / POSIX: `next-task.sh`)が出力するタスク
+  (state.json の並び順ではなく、依存がすべて `done` の最初の `pending` タスク)
 - `--agent-cmd "<テンプレート>"`: 子エージェントCLIのコマンドテンプレート。省略時は
   `.agents/workflow/config.json` の `child_agent.command_template` を使う。
   テンプレート内の `{prompt}` がタスクプロンプトに展開される
@@ -24,7 +26,9 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
 - state.json の対象タスクが `pending` または `in_progress`(リトライ)であることを確認
 - 依存タスク(`依存:` 欄)がすべて `done` であることを確認
 - 子エージェントCLIの疎通確認: コマンドテンプレートの先頭コマンドに `--version` 等を付けて実行し、正常終了することを確認。失敗した場合はエラー出力を添えて中断しユーザーに報告する
-  - **sandbox 環境で `~/.config` や `~/.local/share` 配下の作成が拒否される問題を回避するため、事前に `XDG_CONFIG_HOME` と `XDG_DATA_HOME` をプロジェクト内ディレクトリに設定して疎通確認する**:
+  - 疎通確認は `dispatch-run` と同じ環境で行う。`config.json` の `child_agent.isolate_xdg` が
+    `false`(既定)なら、そのまま `<コマンドテンプレートの先頭コマンド> --version` を実行する
+  - **`isolate_xdg` が `true` の場合**(sandbox 環境で `~/.config` や `~/.local/share` 配下の作成が拒否される問題を回避するため、`dispatch-run` が `XDG_CONFIG_HOME` と `XDG_DATA_HOME` をプロジェクト内ディレクトリに切り替える設定)は、同じ設定で疎通確認する。この設定では `~/.local/share/<CLI>/auth.json` 等の認証情報が見えなくなるため、認証が必要な CLI は失敗しうる:
     ```powershell
     # PowerShell
     $env:XDG_CONFIG_HOME = ".agents/workflow/.config"
@@ -100,12 +104,13 @@ exit 3 になる。
   `.agents/workflow/scripts/` にコピーする。
   POSIX 環境ではコピー後に `chmod +x .agents/workflow/scripts/dispatch-run.sh` を実行する。
   **既存のスクリプトは上書きしない**(利用先でカスタマイズ済みの可能性があるため)。
-  同様に `dispatch-prompt-gen.ps1/.sh` と `dispatch-prompt-template.md` も
-  `_templates/workflow/scripts/` から `.agents/workflow/scripts/` にコピーする。
+  同様に、`_templates/workflow/scripts/` 配下の他のファイル(`dispatch-prompt-gen.ps1/.sh`、
+  `dispatch-prompt-template.md`、共通部品 `tasklib.ps1/.py` 等)のうち未配置のものも
+  `.agents/workflow/scripts/` にコピーする。
 - **ラッパースクリプト**(PowerShell: `.agents/workflow/scripts/dispatch-run.ps1`)が
   以下の責務を担う:
   - プロンプトを `.agents/workflow/runs/<タスクID>-<試行回数>/prompt.md` から読み込む
-  - `XDG_CONFIG_HOME` / `XDG_DATA_HOME` をプロジェクト内ディレクトリに設定
+  - `child_agent.isolate_xdg` が `true` のときだけ、`XDG_CONFIG_HOME` / `XDG_DATA_HOME` をプロジェクト内ディレクトリに設定する(既定の `false` では呼び出し元の設定をそのまま使い、CLI の認証情報も引き継ぐ)
   - **PowerShellのコンソールエンコーディングをUTF-8に設定する**(`[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` および `$OutputEncoding = [System.Text.Encoding]::UTF8` をスクリプト冒頭で実行)。
     `Start-Process` でデタッチ起動した子コンソールはOSのシステムロケール既定コードページ(日本語Windowsでは932/Shift_JIS)を引き継ぐため、未設定だとUTF-8で出力するCLIのstdout/stderrをリダイレクトする際に文字化けする
   - stdin を閉じて CLI(`$null | <CLI> run $prompt`)を実行し、stdout/stderr を
@@ -116,9 +121,17 @@ exit 3 になる。
   - パス: `.agents/workflow/runs/<タスクID>-<試行回数>/done`
   - 内容(2行):
     ```
-    EXIT:<exit code(数値)。異常終了時は crashed:<エラーメッセージ>>
+    EXIT:<exit code(数値) | signal:<シグナル番号> | crashed:<エラーメッセージ>>
     END:<ISO 8601形式の終了時刻(例: 2026-07-09T15:30:00.0000000+09:00)>
     ```
+  - `EXIT` の値:
+    - 数値: 子CLIの exit code(`0` が正常終了)
+    - `signal:<番号>`: 子CLIがシグナルで強制終了された(例: `signal:15` = SIGTERM)。
+      **POSIX 版(`dispatch-run.sh`)のみ**が記録する。従来はシグナル死が `EXIT:241`
+      (= 256 - 15)のように記録され、「241 で終了」と区別できなかった。Windows には
+      シグナルの仕組みが無いため、`dispatch-run.ps1` での強制終了は通常の非0終了(数値)として
+      記録される
+    - `crashed:<メッセージ>`: ラッパースクリプト自体が例外で異常終了した(PowerShell 版)
   - 例:
     ```
     EXIT:0
@@ -133,7 +146,7 @@ exit 3 になる。
   # POSIX: nohup ＋ & でデタッチ起動
   nohup .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1 &
   ```
-  (XDG環境変数の設定はラッパースクリプト内で行われるため、起動コマンド側での設定は不要)
+  (XDG環境変数の切り替えは `isolate_xdg` に従ってラッパースクリプト内で行われるため、起動コマンド側での設定は不要)
 - 起動直後、ユーザーが別ターミナル/別セッションでリアルタイム閲覧できるよう、以下のいずれかのコマンドを提示する(親エージェント自身が実行し続ける必要はない):
   ```powershell
   Get-Content .agents/workflow/runs/T1-1/output.log -Wait -Tail 20
@@ -189,7 +202,7 @@ exit 3 になる。
     sleep 30
   done
   ```
-- **タイムアウト管理**: `config.json` の `child_agent.timeout_seconds`(デフォルト: 3600秒)を
+- **タイムアウト管理**: `config.json` の `child_agent.timeout_seconds`(デフォルト: 1800秒)を
   親側のポーリングループ内で監視する。タイムアウト超過時はループを抜け、タスクを
   `in_progress` のままユーザーに報告する
 - **ポーリング実行の上限への注意**: 上記のポーリングループは親エージェントのコマンド実行上限
@@ -200,6 +213,25 @@ exit 3 になる。
   完結する場合の例示であり、実際の利用時は適宜分割すること
 - **ハング検知**: ポーリングループ内で、ログファイルの最終更新時刻が10分以上前の場合に
   警告を出力する。ハングの可能性があるためユーザーに報告する
+- **完了検知後は毎回 `dispatch-check` を実行し、exit code で機械的に分岐する**
+  (`EXIT` の値を親が目視で解釈しない。非0終了の見落としを防ぐため)。
+  `dispatch-check` は終了状態の区分・完了報告の有無・`git status --porcelain`・
+  `git diff --stat`・`output.log` の末尾30行をまとめて出力する
+  ```powershell
+  .agents/workflow/scripts/dispatch-check.ps1 -TaskId T1 -Attempt 1
+  ```
+  ```bash
+  .agents/workflow/scripts/dispatch-check.sh T1 1
+  ```
+  - **exit 0**(正常終了かつ完了報告あり): 下記の検証に進む
+  - **exit 4**(異常終了: 非0・`signal:*`・`crashed:*`): レビューには進まない。
+    出力された成果物の有無(`git status` / `git diff --stat` に変更があるか、
+    `output.log` の末尾で作業がどこまで進んだか、完了報告があるか)をユーザーに報告し、
+    再dispatch するか、成果物を引き取るかの判断を仰ぐ。`signal:*` の場合は、外部から
+    強制終了された(メモリ逼迫・監督プロセス等)可能性が高いことも添える
+  - **exit 5**(EXIT:0 だが完了報告なし): 成果物の有無を添えてユーザーに報告する
+    (子が途中で応答を終えた可能性がある)
+  - **exit 1**: done マーカーが無い(まだ終了していない)
 - 完了確認後、子エージェントの出力(`output.log`)と `git status` / `git diff --stat` を突き合わせる:
   - 完了報告フォーマットが出力に含まれているか
   - テスト結果が「全件パス」か。失敗が残っている・テスト結果の記載がない場合は
@@ -224,7 +256,7 @@ exit 3 になる。
   - ログファイルパス(`output.log` の絶対/相対パス)
   - 実行中ログをリアルタイム閲覧するコマンド(§3で提示するもの)
 - **完了検知後**(§4完了時)に最低限報告する項目:
-  - exit code(`done` マーカーの内容)
+  - exit code(`done` マーカーの内容)と `dispatch-check` の判定(Verdict)
   - テスト結果の検証結果(全件パスか、失敗があればその概要)
   - 次のフェーズ(レビューへ進む/再dispatchする/ユーザーへエスカレーションする)のどれになったか
 
@@ -232,12 +264,19 @@ exit 3 になる。
 
 ### `.agents/workflow/.config` 配下のディレクトリ作成が拒否される
 
-`sandbox` 環境で `.agents/workflow/.config` や `.agents/workflow/.config/opencode/log` ディレクトリの作成が権限不足等で拒否される場合は、以下のいずれかで対処する。
+(`child_agent.isolate_xdg: true` で使っている場合)`sandbox` 環境で `.agents/workflow/.config` や `.agents/workflow/.config/opencode/log` ディレクトリの作成が権限不足等で拒否される場合は、以下のいずれかで対処する。
 
 - **昇格実行**: ディレクトリ作成コマンドを管理者権限または昇格したコンテキストで実行する
 - **事前作成**: `/agents-md-setup` 等のセットアップ時に、リポジトリのセットアップ権限で `.agents/workflow/.config/opencode/log` を事前に作成しておく
 
 上記の対処後、事前チェックと実行の `XDG_CONFIG_HOME` / `XDG_DATA_HOME` 設定が正常に機能するようになる。
+
+### 子エージェントCLIが認証エラー・`Unexpected server error` で失敗する
+
+`child_agent.isolate_xdg` が `true` だと、`~/.local/share/opencode/auth.json` 等の認証情報が
+見えなくなる。sandbox 環境でなければ `isolate_xdg` を `false`(既定)にする。sandbox 環境で
+`true` が必要な場合は、`.agents/workflow/.config` 配下で CLI のログイン(例:
+`XDG_CONFIG_HOME=.agents/workflow/.config XDG_DATA_HOME=.agents/workflow/.config opencode auth login`)を行う。
 
 ### それでも `EEXIST` 等のエラーが出る場合
 
