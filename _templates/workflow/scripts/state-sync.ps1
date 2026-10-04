@@ -137,3 +137,4 @@ if ($tasksChanged) {
 $json = $state | ConvertTo-Json -Depth 10
 [System.IO.File]::WriteAllText($StatePath, $json + "`n", $utf8NoBom)
 Write-Output "Synced: $StatePath"
+exit 0

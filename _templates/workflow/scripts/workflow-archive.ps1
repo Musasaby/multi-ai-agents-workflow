@@ -48,3 +48,4 @@ foreach ($name in $Existing) {
 }
 
 Write-Output "Archived: $ArchiveDir ($($Existing -join ', '))"
+exit 0
