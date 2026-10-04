@@ -209,29 +209,20 @@ if ($Attempt -ge 2) {
 }
 
 $config = Get-Content $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+# config の検証コマンド(command が空のステップは載せない)。1つも無ければ空にし、
+# テンプレート側の「受け入れ基準に書かれた確認手順」だけを子に実行させる
 $verifyLines = @()
-$hasVerify = $false
-
-if ($config.quality_gate) {
-    if ($config.quality_gate.child_dispatch_command) {
-        $verifyLines += "- $($config.quality_gate.child_dispatch_command)"
-        $hasVerify = $true
-    } elseif ($config.quality_gate.steps) {
-        foreach ($step in $config.quality_gate.steps) {
-            if ($step.blocking) {
-                $verifyLines += "- $($step.name): $($step.command)"
-                $hasVerify = $true
-            }
-        }
+$cdc = if ($config.quality_gate) { "$($config.quality_gate.child_dispatch_command)".Trim() } else { '' }
+if ($cdc) {
+    $verifyLines += "- $cdc"
+} elseif ($config.quality_gate -and $config.quality_gate.steps) {
+    foreach ($step in $config.quality_gate.steps) {
+        $cmd = "$($step.command)".Trim()
+        if ($step.blocking -and $cmd) { $verifyLines += "- $($step.name): $cmd" }
     }
 }
-if ($config.test_command) {
-    $verifyLines += "- $($config.test_command)"
-    $hasVerify = $true
-}
-if (-not $hasVerify) {
-    $verifyLines += '(設定ファイルの test_command / quality_gate で検証コマンドを指定してください)'
-}
+$tc = "$($config.test_command)".Trim()
+if ($tc) { $verifyLines += "- $tc" }
 
 $verifyInstruction = $verifyLines -join "`n"
 

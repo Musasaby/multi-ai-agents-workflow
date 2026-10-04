@@ -13,7 +13,7 @@ Claude Code 固有のパス(`CLAUDE.md`, `.claude/`)からはリンク経由で�
 ### 1. 正本の確認・スキャフォールド
 
 - `AGENTS.md` がルートに存在するか確認。なければ `_templates/AGENTS.md` から作成する(skill ディレクトリから見たパスは `../_templates/AGENTS.md`、利用先では `.agents/skills/_templates/AGENTS.md`)。このとき実体のある `CLAUDE.md`(import 1行でないもの)が存在すれば、その内容を `AGENTS.md` に移行する
-- `AGENTS.md` が既存の場合は、テンプレートの「マルチエージェントワークフロー」節を追記するかユーザーに提案する。**既存の内容を上書きしない**
+- `AGENTS.md` が既存の場合は、テンプレートの「テスト・検証の注意(子エージェント向け)」節と「マルチエージェントワークフロー」節を追記するかユーザーに提案する。**既存の内容を上書きしない**
 - `.agents/skills/`, `.agents/workflow/` ディレクトリの存在を確認
 - `.agents/workflow/.config/opencode/log` ディレクトリを事前作成する(子エージェント CLI が sandbox 内から設定・ログディレクトリを作成できない環境への備え。`agent-dispatch` の `XDG_CONFIG_HOME` / `XDG_DATA_HOME` プリフライトが参照する):
   ```powershell

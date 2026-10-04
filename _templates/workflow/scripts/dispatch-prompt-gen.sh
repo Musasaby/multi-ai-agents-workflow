@@ -286,37 +286,28 @@ ${FIX_CONTENT}"
 fi
 
 # --- Build verify instruction ---
-VERIFY_LINES=""
-HAS_VERIFY=false
-
-if command -v python3 > /dev/null 2>&1; then
-    VERIFY_LINES=$(python3 -c "
-import json
-with open('$CONFIG_PATH_PY') as f:
+# config の検証コマンド(command が空のステップは載せない)。1つも無ければ空にし、
+# テンプレート側の「受け入れ基準に書かれた確認手順」だけを子に実行させる
+VERIFY_LINES=$(python3 - "$CONFIG_PATH_PY" <<'PY' | tr -d '\r'
+import json, sys
+with open(sys.argv[1], encoding='utf-8') as f:
     cfg = json.load(f)
 lines = []
-qg = cfg.get('quality_gate', {})
-if qg:
-    cdc = qg.get('child_dispatch_command', '')
-    if cdc:
-        lines.append('- ' + cdc)
-    else:
-        for step in qg.get('steps', []):
-            if step.get('blocking'):
-                lines.append('- ' + step['name'] + ': ' + step['command'])
-tc = cfg.get('test_command', '')
+qg = cfg.get('quality_gate') or {}
+cdc = (qg.get('child_dispatch_command') or '').strip()
+if cdc:
+    lines.append('- ' + cdc)
+else:
+    for step in qg.get('steps') or []:
+        cmd = (step.get('command') or '').strip()
+        if step.get('blocking') and cmd:
+            lines.append('- ' + step.get('name', 'check') + ': ' + cmd)
+tc = (cfg.get('test_command') or '').strip()
 if tc:
     lines.append('- ' + tc)
-if not lines:
-    lines.append('(設定ファイルの test_command / quality_gate で検証コマンドを指定してください)')
 print('\n'.join(lines))
-" 2>/dev/null)
-    HAS_VERIFY=true
-fi
-
-if [ "$HAS_VERIFY" = false ]; then
-    VERIFY_LINES="- (設定ファイルの test_command / quality_gate で検証コマンドを指定してください)"
-fi
+PY
+) || exit 1
 
 # --- Generate prompt ---
 mkdir -p "$RUN_DIR"

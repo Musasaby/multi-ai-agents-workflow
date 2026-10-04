@@ -330,6 +330,51 @@ t_gen_invalid_task_id() {
     assert_eq 1 "$CODE" "path-like task id rejected"
 }
 
+set_verify_config() { # $1 = quality_gate.steps の JSON, $2 = test_command
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" "$1" "$2" <<'PY'
+import json, sys
+p, steps, tc = sys.argv[1:4]
+with open(p, encoding='utf-8') as f:
+    cfg = json.load(f)
+cfg['quality_gate']['steps'] = json.loads(steps)
+cfg['test_command'] = tc
+with open(p, 'w', encoding='utf-8') as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+PY
+}
+
+prompt_t1() { cat "$PROJ/.agents/workflow/runs/T1-1/prompt.md"; }
+
+t_gen_skips_empty_steps() {
+    basic_tasks
+    write_state "T1:pending"
+    set_verify_config '[{"name":"typecheck","command":"","blocking":true},{"name":"test","command":"npm test","blocking":true},{"name":"lint","command":"","blocking":false}]' ""
+    run_script dispatch-prompt-gen.sh T1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$(prompt_t1)" "- test: npm test" "non-empty step listed"
+    assert_not_contains "$(prompt_t1)" "typecheck" "empty step skipped"
+    assert_contains "$(prompt_t1)" "受け入れ基準に書かれた確認手順" "acceptance criteria always included"
+}
+
+t_gen_no_verify_command() {
+    basic_tasks
+    write_state "T1:pending"
+    set_verify_config '[{"name":"typecheck","command":"","blocking":true}]' ""
+    run_script dispatch-prompt-gen.sh T1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$(prompt_t1)" "受け入れ基準に書かれた確認手順" "falls back to acceptance criteria"
+    assert_not_contains "$(prompt_t1)" "設定ファイルの" "no human-facing config message"
+}
+
+t_gen_no_project_specific_text() {
+    basic_tasks
+    write_state "T1:pending"
+    run_script dispatch-prompt-gen.sh T1
+    assert_not_contains "$(prompt_t1)" "kotlin" "no Kotlin-specific instruction"
+    assert_not_contains "$(prompt_t1)" "Gradle" "no Gradle-specific instruction"
+    assert_contains "$(prompt_t1)" "AGENTS.md" "points to AGENTS.md for project-specific rules"
+}
+
 echo "test-tasks.sh"
 test_case "gen: 注記付き依存はexit 1" t_gen_annotation_rejected
 test_case "gen: 正しい形式は通る" t_gen_valid_forms_pass
@@ -358,4 +403,7 @@ test_case "__pycache__ を作らない" t_no_pycache
 test_case "insert: 空白区切りの--before" t_insert_before_space_separated
 test_case "next: tasks空はexit 1" t_next_empty_state
 test_case "gen: 不正なTaskIdはexit 1" t_gen_invalid_task_id
+test_case "gen: 空のquality_gateステップは載せない" t_gen_skips_empty_steps
+test_case "gen: 検証コマンド未設定は受け入れ基準を指示" t_gen_no_verify_command
+test_case "gen: プロジェクト固有の指示を含まない" t_gen_no_project_specific_text
 summary

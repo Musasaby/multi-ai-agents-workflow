@@ -147,6 +147,12 @@ tasks.md・config.json・依存タスクの完了報告(直接依存のみ)か�
 定型文(実装ルール・テスト検証指示・完了報告フォーマット)は `dispatch-prompt-template.md`
 から展開する。
 
+「テスト・検証」節には、常に「タスクの受け入れ基準に書かれた確認手順・テストコマンド」を
+入れ、加えて config の検証コマンド(`quality_gate.child_dispatch_command`、または `command` が
+空でない blocking ステップ、および `test_command`)を列挙する。`command` が空のステップは載せない。
+テンプレートはプロジェクトに依存しない内容だけを持つ。ビルドツール固有の注意などは、利用先の
+`AGENTS.md` の「テスト・検証の注意(子エージェント向け)」節に書く(子への指示は AGENTS.md に従うよう求める)。
+
 ```powershell
 # PowerShell(初回 = Attempt省略で1、リトライは -Attempt <n>)
 .agents/workflow/scripts/dispatch-prompt-gen.ps1 -TaskId T3
