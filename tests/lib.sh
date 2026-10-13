@@ -61,6 +61,45 @@ write_state() {
         > "$PROJ/.agents/workflow/state.json"
 }
 
+# state.json のトップレベル group を設定する(空引数は「既定グループ=空文字列」として設定)。
+# (キー自体を削除したい場合は remove_state_group を使うこと)
+set_state_group() {
+    python3 - "$(py_path "$PROJ/.agents/workflow/state.json")" "$1" <<'PY'
+import json, sys
+p, group = sys.argv[1], sys.argv[2]
+with open(p, encoding='utf-8') as f:
+    s = json.load(f)
+s['group'] = group
+with open(p, 'w', encoding='utf-8', newline='\n') as f:
+    json.dump(s, f, ensure_ascii=False, indent=2)
+    f.write('\n')
+PY
+}
+
+# state.json のトップレベル group キーを削除する(groupフィールド無しの旧state.json相当)
+remove_state_group() {
+    python3 - "$(py_path "$PROJ/.agents/workflow/state.json")" <<'PY'
+import json, sys
+p = sys.argv[1]
+with open(p, encoding='utf-8') as f:
+    s = json.load(f)
+s.pop('group', None)
+with open(p, 'w', encoding='utf-8', newline='\n') as f:
+    json.dump(s, f, ensure_ascii=False, indent=2)
+    f.write('\n')
+PY
+}
+
+# state.json のトップレベル group を返す(キーが無ければ <absent>)
+state_group() {
+    python3 -c "
+import json, sys
+with open(sys.argv[1], encoding='utf-8') as f:
+    s = json.load(f)
+print(s.get('group', '<absent>'))
+" "$(py_path "$PROJ/.agents/workflow/state.json")"
+}
+
 # write_report T1 1 → runs/T1-1/report.md を作る
 write_report() {
     mkdir -p "$PROJ/.agents/workflow/runs/$1-$2"

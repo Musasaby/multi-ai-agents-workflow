@@ -56,6 +56,32 @@ function Set-State {
     Write-Utf8File "$script:Proj/.agents/workflow/state.json" ($state | ConvertTo-Json -Depth 10)
 }
 
+# state.json のトップレベル group を設定する(空文字列は「既定グループ」として設定)。
+# (キー自体を削除したい場合は Remove-StateGroup を使うこと)
+function Set-StateGroup {
+    param([string]$Group)
+    $path = "$script:Proj/.agents/workflow/state.json"
+    $state = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    if ($state.PSObject.Properties['group']) { $state.PSObject.Properties.Remove('group') }
+    $state | Add-Member -NotePropertyName group -NotePropertyValue $Group
+    Write-Utf8File $path ($state | ConvertTo-Json -Depth 10)
+}
+
+# state.json のトップレベル group キーを削除する(groupフィールド無しの旧state.json相当)
+function Remove-StateGroup {
+    $path = "$script:Proj/.agents/workflow/state.json"
+    $state = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    if ($state.PSObject.Properties['group']) { $state.PSObject.Properties.Remove('group') }
+    Write-Utf8File $path ($state | ConvertTo-Json -Depth 10)
+}
+
+# state.json のトップレベル group を返す(キーが無ければ <absent>)
+function Get-StateGroup {
+    $state = [System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/state.json", [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    if ($state.PSObject.Properties['group']) { return $state.group }
+    return '<absent>'
+}
+
 function Set-Report {
     param([string]$TaskId, [int]$Attempt)
     Write-Utf8File "$script:Proj/.agents/workflow/runs/$TaskId-$Attempt/report.md" "## 完了報告`n- 変更ファイル: a`n"

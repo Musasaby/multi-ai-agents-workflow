@@ -130,6 +130,256 @@ Invoke-TestCase "sync: 追記 正常" {
     Assert-Eq done (Get-StateTask T1).status "existing status kept"
 }
 
+# ---------- グループ解析とグループ間依存の検証 (#30) ----------
+
+# tasklib のグループ解析(Read-TaskList / Get-GroupOrder)を直接検証する
+. "$script:TemplateScripts/tasklib.ps1"
+function Get-TaskGroups {
+    return ((@(Read-TaskList @(Split-TaskLines (Get-TasksText))) | ForEach-Object { $_.id + '=' + $_.group }) -join ',')
+}
+function Get-TaskGroupOrder { return (((Get-GroupOrder @(Split-TaskLines (Get-TasksText)))) -join ',') }
+
+$groupedTasks = @'
+## T1: 既定の基盤
+- **目的**: p
+- **依存**: なし
+
+<!-- グループ P: 既存成果の取り込み -->
+
+## T2: Pの処理A
+- **目的**: a
+- **依存**: T1
+
+## T3: Pの処理B
+- **目的**: b
+- **依存**: T1, T2
+
+<!-- グループ A -->
+
+## T4: Aの処理
+- **目的**: c
+- **依存**: T2, T3
+'@
+
+Invoke-TestCase "sync: グループ区切りの解析" {
+    Set-Tasks $groupedTasks
+    Invoke-Script state-sync.ps1 -Init -Source test
+    Assert-Eq 0 $script:Code "init succeeds: $($script:Err)"
+    Assert-Eq "T1=,T2=P,T3=P,T4=A" (Get-TaskGroups) "groups parsed"
+    Assert-Eq ",P,A" (Get-TaskGroupOrder) "group order (default first)"
+    Invoke-Script next-task.ps1
+    Assert-Eq 0 $script:Code "next-task with groups: $($script:Err)"
+    Assert-Eq "T1 pending" $script:Out "default group task chosen"
+}
+
+Invoke-TestCase "sync: グループ欄は位置より優先" {
+    Set-Tasks $groupedTasks
+    Add-Tasks "`n`n## T5: 末尾に追記したつもり`n- **グループ**: P`n- **依存**: T1, T3`n"
+    Invoke-Script state-sync.ps1 -Init -Source test
+    Assert-Eq 0 $script:Code "init succeeds: $($script:Err)"
+    Assert-Eq "T1=,T2=P,T3=P,T4=A,T5=P" (Get-TaskGroups) "group field overrides position"
+}
+
+Invoke-TestCase "sync: 存在しないグループ名はexit 1" {
+    Set-Tasks $groupedTasks
+    Add-Tasks "`n`n## T5: 末尾に追記したつもり`n- **グループ**: ZZZ`n- **依存**: T1`n"
+    Invoke-Script state-sync.ps1 -Init -Source test
+    Assert-Eq 1 $script:Code "exit code"
+    Assert-Contains $script:Err "unknown group 'ZZZ'" "stderr names the unknown group"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/state.json" "state.json not created"
+}
+
+$crossGroupTasks = @'
+<!-- グループ A -->
+
+## T1: Aの処理
+- **目的**: a
+- **依存**: T2
+
+<!-- グループ B -->
+
+## T2: Bの処理
+- **目的**: b
+- **依存**: なし
+'@
+
+Invoke-TestCase "sync: 後のグループへの依存はexit 1" {
+    Set-Tasks $crossGroupTasks
+    Invoke-Script state-sync.ps1 -Init -Source test
+    Assert-Eq 1 $script:Code "exit code"
+    Assert-Contains $script:Err "Later-group dependency: T1 (group 'A') depends on T2 (group 'B')" "stderr names task ids and both groups"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/state.json" "state.json not created"
+}
+
+Invoke-TestCase "next: 後のグループへの依存はexit 1" {
+    Set-Tasks $crossGroupTasks
+    Set-State 'T1:pending' 'T2:pending'
+    Invoke-Script next-task.ps1
+    Assert-Eq 1 $script:Code "exit code"
+    Assert-Contains $script:Err "Later-group dependency: T1 (group 'A') depends on T2 (group 'B')" "stderr names task ids and both groups"
+}
+
+Invoke-TestCase "sync: 追記 グループ欄で前のグループに戻す" {
+    Set-Tasks $groupedTasks
+    Set-State 'T1:done' 'T2:done' 'T3:pending' 'T4:pending'
+    Add-Tasks "`n`n## T5: 追加(Pに戻す)`n- **グループ**: P`n- **依存**: T3`n"
+    Invoke-Script state-sync.ps1
+    Assert-Eq 0 $script:Code "append succeeds: $($script:Err)"
+    Assert-Eq "T1,T2,T3,T4,T5" (Get-StateIds) "T5 appended"
+    Assert-Eq "T1=,T2=P,T3=P,T4=A,T5=P" (Get-TaskGroups) "T5 belongs to P via field"
+}
+
+Invoke-TestCase "sync: 追記 後のグループへの依存は拒否" {
+    Set-Tasks $groupedTasks
+    Set-State 'T1:done' 'T2:done' 'T3:pending' 'T4:pending'
+    Add-Tasks "`n`n## T5: 追加(Pに戻すつもり)`n- **グループ**: P`n- **依存**: T4`n"
+    $before = Get-StateText
+    Invoke-Script state-sync.ps1
+    Assert-Eq 1 $script:Code "exit code"
+    Assert-Contains $script:Err "Later-group dependency: T5 (group 'P') depends on T4 (group 'A')" "stderr names task ids and both groups"
+    Assert-Eq $before (Get-StateText) "state.json unchanged"
+}
+
+Invoke-TestCase "sync: グループ欄が空はexit 1" {
+    Set-Tasks $groupedTasks
+    Add-Tasks "`n`n## T5: 末尾に追記したつもり`n- **グループ**: `n- **依存**: T1`n"
+    Invoke-Script state-sync.ps1 -Init -Source test
+    Assert-Eq 1 $script:Code "exit code"
+    Assert-Contains $script:Err "T5" "stderr names the task"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/state.json" "state.json not created"
+}
+
+Invoke-TestCase "sync: 不正形式の区切り行は無視" {
+    Set-Tasks "<!-- グループ: P -->`n`n## T1: a`n- **依存**: なし`n`n<!-- グループ P B -->`n`n## T2: b`n- **依存**: T1`n"
+    Invoke-Script state-sync.ps1 -Init -Source test
+    Assert-Eq 0 $script:Code "malformed lines are not separators: $($script:Err)"
+    Assert-Eq "T1=,T2=" (Get-TaskGroups) "all tasks in the default group"
+    Assert-Eq "" (Get-TaskGroupOrder) "no separator names in order"
+}
+
+# ---------- next-task: グループ限定と exit 6 (#30) ----------
+
+# グループ P(T1)・A(T2, T3)。既定グループにタスクは無い
+$paTasks = @'
+<!-- グループ P -->
+
+## T1: Pの処理
+- **目的**: p
+- **依存**: なし
+
+<!-- グループ A -->
+
+## T2: Aの処理
+- **目的**: a
+- **依存**: T1
+
+## T3: Aの処理2
+- **目的**: b
+- **依存**: T2
+'@
+
+function Set-BranchPerGroup { param([bool]$Value)
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg.branch_per_group = $Value
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+}
+
+Invoke-TestCase "next: 作業グループ完了はexit 6" {
+    Set-Tasks $paTasks
+    Set-State 'T1:done' 'T2:pending' 'T3:pending'
+    Set-StateGroup P
+    Invoke-Script next-task.ps1
+    Assert-Eq 6 $script:Code "exit code: $($script:Err)"
+    Assert-Eq P $script:Out "stdout shows the completed group name"
+}
+
+Invoke-TestCase "next: 次グループを現在グループにしたら選ぶ" {
+    Set-Tasks $paTasks
+    Set-State 'T1:done' 'T2:pending' 'T3:pending'
+    Set-StateGroup A
+    Invoke-Script next-task.ps1
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "T2 pending" $script:Out "task in the current group is chosen"
+}
+
+Invoke-TestCase "next: group欄なしは未完了最初のグループ" {
+    Set-Tasks $paTasks
+    Set-State 'T1:done' 'T2:pending' 'T3:pending'
+    Invoke-Script next-task.ps1
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "T2 pending" $script:Out "first group with unfinished tasks is the work group"
+}
+
+Invoke-TestCase "next: 未知のグループ名は未完了最初のグループ" {
+    Set-Tasks $paTasks
+    Set-State 'T1:pending' 'T2:pending' 'T3:pending'
+    Set-StateGroup ZZZ
+    Invoke-Script next-task.ps1
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "T1 pending" $script:Out "first group with unfinished tasks (P) is the work group"
+}
+
+Invoke-TestCase "next: 既定グループ完了は空のグループ名でexit 6" {
+    Set-Tasks $groupedTasks
+    Set-State 'T1:done' 'T2:pending' 'T3:pending' 'T4:pending'
+    Set-StateGroup ''
+    Invoke-Script next-task.ps1
+    Assert-Eq 6 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "" $script:Out "stdout shows the default group (empty name)"
+}
+
+Invoke-TestCase "next: branch_per_group false は全タスクから選ぶ" {
+    Set-Tasks $paTasks
+    Set-State 'T1:done' 'T2:pending' 'T3:pending'
+    Set-StateGroup P
+    Set-BranchPerGroup $false
+    Invoke-Script next-task.ps1
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "T2 pending" $script:Out "task chosen from all tasks"
+}
+
+Invoke-TestCase "next: 区切り無しで全完了はexit 3" {
+    Set-Tasks $basicTasks
+    Set-State 'T1:done' 'T2:done' 'T3:done' 'T4:done'
+    Invoke-Script next-task.ps1
+    Assert-Eq 3 $script:Code "all done is exit 3 even with the default group"
+}
+
+Invoke-TestCase "sync: init で group を初期化" {
+    Set-Tasks $paTasks
+    Invoke-Script state-sync.ps1 -Init -Source test
+    Assert-Eq 0 $script:Code "init succeeds: $($script:Err)"
+    Assert-Eq P (Get-StateGroup) "group initialized with the first group having tasks"
+    Set-Tasks $groupedTasks
+    Remove-Item "$script:Proj/.agents/workflow/state.json" -Force
+    Invoke-Script state-sync.ps1 -Init -Source test
+    Assert-Eq "" (Get-StateGroup) "first group is the default group when it has tasks"
+}
+
+Invoke-TestCase "sync: insert・追記で group を保持" {
+    Set-Tasks $groupedTasks
+    Set-State 'T1:done' 'T2:done' 'T3:pending' 'T4:pending'
+    Set-StateGroup P
+    Add-T8 'T3'
+    Invoke-Script state-sync.ps1 -Insert T8 -Before T4
+    Assert-Eq 0 $script:Code "insert succeeds: $($script:Err)"
+    Assert-Eq "T1,T2,T3,T4,T8" (Get-StateIds) "T8 appended"
+    Assert-Eq P (Get-StateGroup) "group preserved by -Insert"
+    Add-Tasks "`n`n## T9: 追加`n- **依存**: T4`n"
+    Invoke-Script state-sync.ps1
+    Assert-Eq 0 $script:Code "append succeeds: $($script:Err)"
+    Assert-Eq P (Get-StateGroup) "group preserved by append"
+}
+
+Invoke-TestCase "sync: group欄の無い旧stateには足さない" {
+    Set-Tasks $groupedTasks
+    Set-State 'T1:done' 'T2:done' 'T3:pending' 'T4:pending'
+    Invoke-Script state-sync.ps1
+    Assert-Eq 0 $script:Code "append succeeds: $($script:Err)"
+    Assert-Eq "<absent>" (Get-StateGroup) "group key not added to legacy state.json"
+}
+
 # ---------- state-sync: 挿入 (#13) ----------
 
 Invoke-TestCase "insert: pendingの前に挿入" {

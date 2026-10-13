@@ -45,12 +45,27 @@ $tasks = @(Read-TaskList $lines)
 if ($tasks.Count -eq 0) { Fail "No task headings found in $TasksPath" }
 $byId = @{}
 foreach ($t in $tasks) { $byId[$t.id] = $t }
+$groupOrder = @(Get-GroupOrder $lines)
 
 $existing = $null
 $existingStatus = [ordered]@{}
 if (-not $Init) {
     $existing = Get-Content $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json
     foreach ($t in $existing.tasks) { $existingStatus[$t.id] = $t.status }
+}
+
+# 未完了タスクを含む最初のグループ(group_order 順。全グループ完了時は先頭グループ)
+function Get-FirstGroupWithUncompleted {
+    param($StatusMap)
+    foreach ($g in $groupOrder) {
+        $ids = @($tasks | Where-Object { $_.group -ceq $g } | ForEach-Object { $_.id })
+        $hasUncompleted = $false
+        foreach ($id in $ids) {
+            if (-not $StatusMap.Contains($id) -or $StatusMap[$id] -ne 'done') { $hasUncompleted = $true; break }
+        }
+        if ($hasUncompleted) { return $g }
+    }
+    return $groupOrder[0]
 }
 
 # --- 挿入: 後続タスクの依存欄に新タスクを追加する(書き込みは検証後) ---
@@ -85,9 +100,10 @@ if ($Insert) {
     $tasksChanged = $true
 }
 
-# --- 依存欄の検証(全モード共通。state.json を書く前に失敗させる) ---
+# --- 依存欄とグループの検証(全モード共通。state.json を書く前に失敗させる) ---
 try {
     [void](Resolve-TaskDeps $tasks -CheckCycles)
+    [void](Test-GroupDeps $tasks $groupOrder)
 } catch {
     Fail $_.Exception.Message
 }
@@ -104,6 +120,7 @@ if ($Init) {
     $state = [ordered]@{
         source     = $Source
         branch     = $branch
+        group      = Get-FirstGroupWithUncompleted @{}
         updated_at = $nowIso
         tasks      = @($tasks | ForEach-Object { New-TaskEntry $_ })
     }
@@ -120,12 +137,16 @@ if ($Init) {
             Write-Warning "state.json has task '$id' not present in tasks.md (not removed)"
         }
     }
+    # トップレベルの既存キーは source / branch / group を引き継ぐ(group が無い旧 state.json
+    # では後方互換のため group キーを足さない。next-task が未完了タスクを含む最初のグループを
+    # 作業グループとみなす)
     $state = [ordered]@{
         source     = $existing.source
         branch     = $existing.branch
         updated_at = $nowIso
-        tasks      = $out
     }
+    if ($existing.PSObject.Properties['group']) { $state.group = $existing.group }
+    $state.tasks = $out
 }
 
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)

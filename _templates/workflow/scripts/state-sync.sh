@@ -104,12 +104,20 @@ tasks = tasklib.parse_tasks(content)
 if not tasks:
     fail('No task headings found in ' + tasks_path)
 by_id = {t['id']: t for t in tasks}
+order = tasklib.group_order(content)
 
 existing = None
 if not init:
     with open(state_path, encoding='utf-8') as f:
         existing = json.load(f)
 existing_status = {t['id']: t['status'] for t in existing['tasks']} if existing else {}
+
+def first_group_with_uncompleted(status_map):
+    for g in order:
+        task_ids = [t['id'] for t in tasks if t['group'] == g]
+        if any(status_map.get(tid) != 'done' for tid in task_ids):
+            return g
+    return order[0] if order else ''  # 全グループ完了(通常は到達しない)
 
 # --- 挿入: 後続タスクの依存欄に新タスクを追加する(書き込みは検証後) ---
 lines = None
@@ -148,9 +156,10 @@ if insert:
     content = ''.join(lines)
     tasks = tasklib.parse_tasks(content)
 
-# --- 依存欄の検証(全モード共通。state.json を書く前に失敗させる) ---
+# --- 依存欄とグループの検証(全モード共通。state.json を書く前に失敗させる) ---
 try:
     tasklib.resolve_deps(tasks, check_cycles=True)
+    tasklib.check_group_deps(tasks, order)
 except tasklib.TaskFileError as e:
     fail(str(e))
 
@@ -160,7 +169,8 @@ def new_entry(t):
     return {'id': t['id'], 'title': t['title'], 'status': 'pending', 'retries': 0, 'commit': None}
 
 if init:
-    state = {'source': source, 'branch': branch, 'updated_at': now, 'tasks': [new_entry(t) for t in tasks]}
+    state = {'source': source, 'branch': branch, 'group': first_group_with_uncompleted({}),
+             'updated_at': now, 'tasks': [new_entry(t) for t in tasks]}
 else:
     out = list(existing['tasks'])
     for t in tasks:
@@ -169,7 +179,13 @@ else:
     for tid in existing_status:
         if tid not in by_id:
             print("state.json has task '" + tid + "' not present in tasks.md (not removed)", file=sys.stderr)
-    state = {'source': existing['source'], 'branch': existing['branch'], 'updated_at': now, 'tasks': out}
+    # トップレベルの既存キーは source / branch / group を引き継ぐ(group が無い旧 state.json
+    # では後方互換のため group キーを足さない。next-task が未完了タスクを含む最初のグループを
+    # 作業グループとみなす)
+    state = {'source': existing['source'], 'branch': existing['branch'], 'updated_at': now}
+    if 'group' in existing:
+        state['group'] = existing['group']
+    state['tasks'] = out
 
 if lines is not None:
     with open(tasks_path, 'w', encoding='utf-8', newline='') as f:

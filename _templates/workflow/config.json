@@ -6,6 +6,7 @@
   },
   "test_command": "",
   "verify_before_commit": false,
+  "branch_per_group": true,
   "quality_gate": {
     "steps": [
       { "name": "typecheck", "command": "", "blocking": true },

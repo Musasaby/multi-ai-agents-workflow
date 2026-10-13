@@ -172,6 +172,322 @@ EOF
     assert_eq done "$(state_get T1 status)" "existing status kept"
 }
 
+# ---------- グループ解析とグループ間依存の検証 (#30) ----------
+
+# 解析結果のグループ一覧: 標準出力に "T1=,T2=P,..." 形式
+# -B で tasklib 直読み込み時の __pycache__ 生成も抑止する
+task_groups() {
+    python3 -B - "$(py_path "$TEMPLATE_SCRIPTS")" "$(py_path "$PROJ/.agents/workflow/tasks.md")" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import tasklib
+with open(sys.argv[2], encoding='utf-8') as f:
+    tasks = tasklib.parse_tasks(f.read())
+print(','.join(t['id'] + '=' + t['group'] for t in tasks))
+PY
+}
+
+# group_order() の戻り値: 標準出力に ",P,A" 形式
+task_group_order() {
+    python3 -B - "$(py_path "$TEMPLATE_SCRIPTS")" "$(py_path "$PROJ/.agents/workflow/tasks.md")" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import tasklib
+with open(sys.argv[2], encoding='utf-8') as f:
+    print(','.join(tasklib.group_order(f.read())))
+PY
+}
+
+# 区切りつき基本タスク: T1=既定、T2/T3=グループ P、T4=グループ A(前のグループへの依存のみ)
+grouped_tasks() {
+    write_tasks <<'EOF'
+## T1: 既定の基盤
+- **目的**: p
+- **依存**: なし
+
+<!-- グループ P: 既存成果の取り込み -->
+
+## T2: Pの処理A
+- **目的**: a
+- **依存**: T1
+
+## T3: Pの処理B
+- **目的**: b
+- **依存**: T1, T2
+
+<!-- グループ A -->
+
+## T4: Aの処理
+- **目的**: c
+- **依存**: T2, T3
+EOF
+}
+
+t_sync_group_parse() {
+    grouped_tasks
+    run_script state-sync.sh --init --source test
+    assert_eq 0 "$CODE" "init succeeds: $ERR"
+    assert_eq "T1=,T2=P,T3=P,T4=A" "$(task_groups)" "groups parsed"
+    assert_eq ",P,A" "$(task_group_order)" "group order (default first)"
+    run_script next-task.sh
+    assert_eq 0 "$CODE" "next-task with groups: $ERR"
+    assert_eq "T1 pending" "$OUT" "default group task chosen"
+}
+
+t_sync_group_field_overrides() {
+    grouped_tasks
+    cat >> "$PROJ/.agents/workflow/tasks.md" <<'EOF'
+
+## T5: 末尾に追記したつもり
+- **グループ**: P
+- **依存**: T1, T3
+EOF
+    run_script state-sync.sh --init --source test
+    assert_eq 0 "$CODE" "init succeeds: $ERR"
+    assert_eq "T1=,T2=P,T3=P,T4=A,T5=P" "$(task_groups)" "group field overrides position"
+}
+
+t_sync_group_unknown_rejected() {
+    grouped_tasks
+    cat >> "$PROJ/.agents/workflow/tasks.md" <<'EOF'
+
+## T5: 末尾に追記したつもり
+- **グループ**: ZZZ
+- **依存**: T1
+EOF
+    run_script state-sync.sh --init --source test
+    assert_eq 1 "$CODE" "exit code"
+    assert_contains "$ERR" "unknown group 'ZZZ'" "stderr names the unknown group"
+    assert_file_absent "$PROJ/.agents/workflow/state.json" "state.json not created"
+}
+
+t_sync_group_dep_later_rejected() {
+    write_tasks <<'EOF'
+<!-- グループ A -->
+
+## T1: Aの処理
+- **目的**: a
+- **依存**: T2
+
+<!-- グループ B -->
+
+## T2: Bの処理
+- **目的**: b
+- **依存**: なし
+EOF
+    run_script state-sync.sh --init --source test
+    assert_eq 1 "$CODE" "exit code"
+    assert_contains "$ERR" "Later-group dependency: T1 (group 'A') depends on T2 (group 'B')" "stderr names task ids and both groups"
+    assert_file_absent "$PROJ/.agents/workflow/state.json" "state.json not created"
+}
+
+t_next_group_dep_later_rejected() {
+    write_tasks <<'EOF'
+<!-- グループ A -->
+
+## T1: Aの処理
+- **目的**: a
+- **依存**: T2
+
+<!-- グループ B -->
+
+## T2: Bの処理
+- **目的**: b
+- **依存**: なし
+EOF
+    write_state "T1:pending" "T2:pending"
+    run_script next-task.sh
+    assert_eq 1 "$CODE" "exit code"
+    assert_contains "$ERR" "Later-group dependency: T1 (group 'A') depends on T2 (group 'B')" "stderr names task ids and both groups"
+}
+
+t_sync_append_group_field_keeps_backward_dep() {
+    grouped_tasks
+    write_state "T1:done" "T2:done" "T3:pending" "T4:pending"
+    cat >> "$PROJ/.agents/workflow/tasks.md" <<'EOF'
+
+## T5: 追加(Pに戻す)
+- **グループ**: P
+- **依存**: T3
+EOF
+    run_script state-sync.sh
+    assert_eq 0 "$CODE" "append succeeds: $ERR"
+    assert_eq "T1,T2,T3,T4,T5" "$(state_ids)" "T5 appended"
+    assert_eq "T1=,T2=P,T3=P,T4=A,T5=P" "$(task_groups)" "T5 belongs to P via field"
+}
+
+t_sync_append_group_field_later_dep_rejected() {
+    grouped_tasks
+    write_state "T1:done" "T2:done" "T3:pending" "T4:pending"
+    cat >> "$PROJ/.agents/workflow/tasks.md" <<'EOF'
+
+## T5: 追加(Pに戻すつもり)
+- **グループ**: P
+- **依存**: T4
+EOF
+    local before
+    before="$(cat "$PROJ/.agents/workflow/state.json")"
+    run_script state-sync.sh
+    assert_eq 1 "$CODE" "exit code"
+    assert_contains "$ERR" "Later-group dependency: T5 (group 'P') depends on T4 (group 'A')" "stderr names task ids and both groups"
+    assert_eq "$before" "$(cat "$PROJ/.agents/workflow/state.json")" "state.json unchanged"
+}
+
+t_sync_group_invalid_name_rejected() {
+    grouped_tasks
+    cat >> "$PROJ/.agents/workflow/tasks.md" <<'EOF'
+
+## T5: 末尾に追記したつもり
+- **グループ**: 
+- **依存**: T1
+EOF
+    run_script state-sync.sh --init --source test
+    assert_eq 1 "$CODE" "exit code"
+    assert_contains "$ERR" "T5" "stderr names the task"
+    assert_file_absent "$PROJ/.agents/workflow/state.json" "state.json not created"
+}
+
+t_sync_group_malformed_line_ignored() {
+    write_tasks <<'EOF'
+<!-- グループ: P -->
+
+## T1: a
+- **依存**: なし
+
+<!-- グループ P B -->
+
+## T2: b
+- **依存**: T1
+EOF
+    run_script state-sync.sh --init --source test
+    assert_eq 0 "$CODE" "malformed lines are not separators: $ERR"
+    assert_eq "T1=,T2=" "$(task_groups)" "all tasks in the default group"
+    assert_eq "" "$(task_group_order)" "no separator names in order"
+}
+
+# ---------- next-task: グループ限定と exit 6 (#30) ----------
+
+# グループ P(T1)・A(T2, T3)。既定グループにタスクは無い
+p_a_tasks() {
+    write_tasks <<'EOF'
+<!-- グループ P -->
+
+## T1: Pの処理
+- **目的**: p
+- **依存**: なし
+
+<!-- グループ A -->
+
+## T2: Aの処理
+- **目的**: a
+- **依存**: T1
+
+## T3: Aの処理2
+- **目的**: b
+- **依存**: T2
+EOF
+}
+
+t_next_group_done_exit6() {
+    p_a_tasks
+    write_state "T1:done" "T2:pending" "T3:pending"
+    set_state_group P
+    run_script next-task.sh
+    assert_eq 6 "$CODE" "exit code: $ERR"
+    assert_eq "P" "$OUT" "stdout shows the completed group name"
+}
+
+t_next_group_advanced_to_next_group() {
+    p_a_tasks
+    write_state "T1:done" "T2:pending" "T3:pending"
+    set_state_group A
+    run_script next-task.sh
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_eq "T2 pending" "$OUT" "task in the current group is chosen"
+}
+
+t_next_group_missing_field_falls_back() {
+    p_a_tasks
+    write_state "T1:done" "T2:pending" "T3:pending"   # group フィールド無し
+    run_script next-task.sh
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_eq "T2 pending" "$OUT" "first group with unfinished tasks is the work group"
+}
+
+t_next_group_unknown_name_falls_back() {
+    p_a_tasks
+    write_state "T1:pending" "T2:pending" "T3:pending"
+    set_state_group ZZZ   # tasks.md に存在しないグループ名
+    run_script next-task.sh
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_eq "T1 pending" "$OUT" "first group with unfinished tasks (P) is the work group"
+}
+
+t_next_default_group_done_exit6() {
+    grouped_tasks
+    write_state "T1:done" "T2:pending" "T3:pending" "T4:pending"
+    set_state_group ""   # 既定グループ(空文字列)
+    run_script next-task.sh
+    assert_eq 6 "$CODE" "exit code: $ERR"
+    assert_eq "" "$OUT" "stdout shows the default group (empty name)"
+}
+
+t_next_branch_per_group_false_chooses_all() {
+    p_a_tasks
+    write_state "T1:done" "T2:pending" "T3:pending"
+    set_state_group P
+    set_branch_per_group false
+    run_script next-task.sh
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_eq "T2 pending" "$OUT" "task chosen from all tasks"
+}
+
+t_next_no_separator_all_done_exit3() {
+    basic_tasks
+    write_state "T1:done" "T2:done" "T3:done" "T4:done"
+    run_script next-task.sh
+    assert_eq 3 "$CODE" "all done is exit 3 even with the default group"
+}
+
+t_sync_init_group_field() {
+    p_a_tasks
+    run_script state-sync.sh --init --source test
+    assert_eq 0 "$CODE" "init succeeds: $ERR"
+    assert_eq "P" "$(state_group)" "group initialized with the first group having tasks"
+    grouped_tasks
+    rm "$PROJ/.agents/workflow/state.json"
+    run_script state-sync.sh --init --source test
+    assert_eq "" "$(state_group)" "first group is the default group when it has tasks"
+}
+
+t_sync_insert_preserves_group() {
+    grouped_tasks
+    write_state "T1:done" "T2:done" "T3:pending" "T4:pending"
+    set_state_group P
+    append_t8 "T3"
+    run_script state-sync.sh --insert T8 --before T4
+    assert_eq 0 "$CODE" "insert succeeds: $ERR"
+    assert_eq "T1,T2,T3,T4,T8" "$(state_ids)" "T8 appended"
+    assert_eq "P" "$(state_group)" "group preserved by --insert"
+    cat >> "$PROJ/.agents/workflow/tasks.md" <<'EOF'
+
+## T9: 追加
+- **依存**: T4
+EOF
+    run_script state-sync.sh
+    assert_eq 0 "$CODE" "append succeeds: $ERR"
+    assert_eq "P" "$(state_group)" "group preserved by append"
+}
+
+t_sync_group_absent_kept_absent() {
+    grouped_tasks
+    write_state "T1:done" "T2:done" "T3:pending" "T4:pending"   # group フィールド無し
+    run_script state-sync.sh
+    assert_eq 0 "$CODE" "append succeeds: $ERR"
+    assert_eq "<absent>" "$(state_group)" "group key not added to legacy state.json"
+}
+
+
 # ---------- state-sync: 挿入 (#13) ----------
 
 append_t8() { # $1 = T8 の依存
@@ -343,6 +659,18 @@ with open(p, 'w', encoding='utf-8') as f:
 PY
 }
 
+set_branch_per_group() { # $1 = true / false
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" "$1" <<'PY'
+import json, sys
+p, bpg = sys.argv[1:3]
+with open(p, encoding='utf-8') as f:
+    cfg = json.load(f)
+cfg['branch_per_group'] = (bpg == 'true')
+with open(p, 'w', encoding='utf-8') as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+PY
+}
+
 prompt_t1() { cat "$PROJ/.agents/workflow/runs/T1-1/prompt.md"; }
 
 t_gen_skips_empty_steps() {
@@ -396,6 +724,25 @@ test_case "sync: init 依存行なしはexit 1" t_sync_init_missing_line_rejecte
 test_case "sync: init 循環はexit 1" t_sync_init_cycle_rejected
 test_case "sync: 追記 不正ならstate不変" t_sync_append_invalid_keeps_state
 test_case "sync: 追記 正常" t_sync_append_valid
+test_case "sync: グループ区切りの解析" t_sync_group_parse
+test_case "sync: グループ欄は位置より優先" t_sync_group_field_overrides
+test_case "sync: 存在しないグループ名はexit 1" t_sync_group_unknown_rejected
+test_case "sync: 後のグループへの依存はexit 1" t_sync_group_dep_later_rejected
+test_case "next: 後のグループへの依存はexit 1" t_next_group_dep_later_rejected
+test_case "sync: 追記 グループ欄で前のグループに戻す" t_sync_append_group_field_keeps_backward_dep
+test_case "sync: 追記 後のグループへの依存は拒否" t_sync_append_group_field_later_dep_rejected
+test_case "sync: グループ欄が空はexit 1" t_sync_group_invalid_name_rejected
+test_case "sync: 不正形式の区切り行は無視" t_sync_group_malformed_line_ignored
+test_case "next: 作業グループ完了はexit 6" t_next_group_done_exit6
+test_case "next: 次グループを現在グループにしたら選ぶ" t_next_group_advanced_to_next_group
+test_case "next: group欄なしは未完了最初のグループ" t_next_group_missing_field_falls_back
+test_case "next: 未知のグループ名は未完了最初のグループ" t_next_group_unknown_name_falls_back
+test_case "next: 既定グループ完了は空のグループ名でexit 6" t_next_default_group_done_exit6
+test_case "next: branch_per_group false は全タスクから選ぶ" t_next_branch_per_group_false_chooses_all
+test_case "next: 区切り無しで全完了はexit 3" t_next_no_separator_all_done_exit3
+test_case "sync: init で group を初期化" t_sync_init_group_field
+test_case "sync: insert・追記で group を保持" t_sync_insert_preserves_group
+test_case "sync: group欄の無い旧stateには足さない" t_sync_group_absent_kept_absent
 test_case "insert: pendingの前に挿入" t_insert_before_pending
 test_case "insert: なし→T8、複数指定" t_insert_before_none_dep
 test_case "insert: pending以外は拒否" t_insert_before_non_pending_rejected
