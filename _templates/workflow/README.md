@@ -15,6 +15,7 @@
 │   ├── dispatch-pr-prompt-template.md   PR作成の単発依頼用(dispatch-prompt-gen --pr)
 │   ├── state-sync.ps1 / .sh
 │   ├── next-task.ps1 / .sh
+│   ├── group-advance.ps1 / .sh  グループ完了後の PR 状態判定と次グループのブランチ切替
 │   ├── task-state.ps1 / .sh
 │   ├── tasklib.ps1 / tasklib.py  tasks.md 解析・依存欄検証の共通部品
 │   ├── upstream-issue.ps1 / .sh
@@ -47,6 +48,7 @@
 | `child_agent.timeout_seconds` | 子エージェント実行のタイムアウト(秒) | `1800` |
 | `child_agent.isolate_xdg` | `true` なら `dispatch-run` が子CLIの `XDG_CONFIG_HOME` / `XDG_DATA_HOME` を `.agents/workflow/.config` に切り替える(sandbox で `~/.config` 等に書けない環境向け)。切り替えると `~/.local/share/<CLI>/auth.json` 等の認証情報が見えなくなる。未指定は `false` | `false` |
 | `test_command` | 子エージェントに実行させるテストコマンド。空ならタスクごとに親が指定 | `""` |
+| `branch_per_group` | tasks.md にグループ区切り(`<!-- グループ <名前> -->`)がある場合に、グループ単位の PR 作成・ブランチ切替(next-task の exit 6 と `group-advance`)を必須手順にする。`false` ならグループを解釈せず全タスクを1つのまとまりとして扱う。config.json が無い・読めない場合の既定値も `true` | `true` |
 | `verify_before_commit` | コミット直前に親がテストコマンドを1回実行する最終ゲート | `false` |
 | `max_fix_retries` | レビュー不合格時の子エージェントへの再依頼上限。超過で親のサブエージェントにフォールバック | `2` |
 | `comprehension_check.enabled` | タスク合格時に理解確認質問を生成するか | `false` |
@@ -83,9 +85,12 @@ Claude Code を子エージェントとして使う場合は `stream-json` 出�
 ```markdown
 # タスク一覧: <計画ソース(Issue #N またはドキュメントパス)>
 
+<!-- グループ <名前>: <説明> -->        ← 省略可(グループ境界。`: <説明>` も省略可)
+
 ## T1: <タスクタイトル>
 - **目的**: 何を達成するか
 - **対象**: 変更が想定されるファイル・モジュール
+- **グループ**: <名前>            ← 任意(所属を位置でなく名前で指定する)
 - **受け入れ基準**:
   - [ ] 基準1(検証可能な形で記述)
   - [ ] 基準2
@@ -105,19 +110,41 @@ Claude Code を子エージェントとして使う場合は `stream-json` 出�
   循環依存は `state-sync` と `next-task` が検出する
 - タスクの実行順は記述順・ID順ではなく依存関係で決まる(`next-task` が選ぶ)
 
+グループ区切り行は `state-sync` / `next-task` / `dispatch-prompt-gen` / `group-advance` が
+機械的にパースする。`<名前>` は空白と `:` を含まない文字列(大文字小文字を区別)。
+区切りが無い領域のタスクは既定グループ(空の名前)に属する。既定グループは名前で参照
+できないため `- **グループ**:` 欄での指定(空欄)は不可。
+
+- 違反は `state-sync` / `next-task` がエラー(exit 1)にして stderr に内容を出す:
+  空のグループ名・宣言されていないグループ名・**後のグループのタスクへの依存**
+  (依存先は同じグループまたは前のグループのみ。これは各グループの PR が正常に閉じる
+  ための前提になる)
+- `- **グループ**:` 欄(任意)は所属グループを記述位置でなく名前で指定する(欄の名前が
+  tasks.md の区切りで宣言済みの場合のみ位置より優先)。追加モードでの使い方は
+  `agent-task-plan` skill を参照
+- グループ境界(next-task の exit 6)は `agent-workflow` skill の
+  「グループ単位の PR とブランチ切替」で PR 作成・ブランチ切替の機械的な単位として使われる
+  (`config.json` の `branch_per_group` が `false` の場合はグループ解釈をしない)
+
 ## state.json(/agent-task-plan が `scripts/state-sync --init` で機械生成、各skillが更新)
 
 機械可読な進捗状態。中断後の再開はこのファイルを起点にする。LLMは直接生成・編集しない。
 
-`branch` は「現在の作業ブランチ」を表す。初期生成時(`state-sync --init`)は git から
-自動取得されるが、機能グループ単位でブランチを分割する運用(`agent-workflow` skill の
-「ブランチ分割の推奨」)を取る場合、グループ境界でのブランチ切替後にこのフィールドを
-現在のブランチ名へ更新し、次のグループの進捗状態コミット(`chore: ...`)に含める。
+`branch` は「現在の作業ブランチ」、`group` は「現在の作業グループ」を表す(tasks.md に
+グループ区切りがある場合。区切りが無いサイクルでは既定グループの空文字列。config の
+`branch_per_group: false` では `next-task` がこのフィールドを参照しない)。初期生成時(`state-sync --init`)では `branch` が git から、`group` が tasks.md の
+グループ区切りから自動設定される(`branch` は workflow 開始時点の作業ブランチ、
+`group` は未完了タスクを含む最初のグループ)。
+グループ境界でのブランチ切替(`agent-workflow` skill の「グループ単位の PR とブランチ切替」)
+では `group-advance` がこの2つのフィールドを更新するため、親が手で書き換える必要はない。
+既存の state.json に `group` キーが無い場合、`state-sync` の追記同期は後方互換のため
+キーを追加せず、`next-task` は未完了タスクを含む最初のグループを作業グループとみなす。
 
 ```json
 {
   "source": "Issue #12 | docs/plan.md",
   "branch": "develop/xxx",
+  "group": "G1",
   "updated_at": "2026-06-12T10:00:00+09:00",
   "tasks": [
     {
@@ -313,10 +340,47 @@ state.json の並び順ではなく依存関係を見るため、挿入したタ
 .agents/workflow/scripts/next-task.sh
 ```
 
-stdout に `<タスクID> <status>`(例: `T8 pending`)を出力する。
+stdout に `<タスクID> <status>`(例: `T8 pending`)を出力する。config の `branch_per_group`
+が有効で tasks.md にグループ区切りがある場合、候補は state.json の `group`(現在の作業
+グループ。キーが無い・未知の名前なら「未完了タスクを含む最初のグループ」)のタスクに限定される。
+作業グループが全タスク `done` で他のグループに未完了の残がある場合は、グループ境界を
+知らせるため stdout に作業グループ名を出力して exit 6 を返す(既定グループの場合は
+空文字列が出力される)。
 
-exit code: `0`=該当タスクあり、`1`=tasks.md/state.json 不在・依存欄の不正、`3`=全タスク `done`、
-`4`=実行可能なタスクが無い(`failed` や未完了の依存で止まっている。原因を stderr に列挙)。
+exit code: `0`=該当タスクあり、`1`=tasks.md/state.json 不在・依存欄の不正(形式違反・
+存在しないID・自己依存・循環依存)、`3`=全タスク `done`、
+`4`=実行可能なタスクが無い(`failed` や未完了の依存で止まっている。原因を stderr に列挙)、
+`6`=作業グループ完了(他グループに未完了あり。`group-advance` で分岐する)。
+
+### group-advance — グループ完了後の PR 判定と次グループへのブランチ切替
+
+`next-task` が exit 6(作業グループ完了)を返したグループ境界で実行する。PR の状態を
+`gh pr view <state.json の branch> --json state,url` で機械的に判定し、MERGED なら
+次のグループのブランチへ切り替える。前提チェック(満たさなければ何も書き換えず exit 1):
+作業グループが完了していること(next-task と同じ判定)、`git status --porcelain` が空であること。
+
+```powershell
+.agents/workflow/scripts/group-advance.ps1 -Branch "develop/<作業名>-<グループ名>"
+```
+```bash
+.agents/workflow/scripts/group-advance.sh --branch "develop/<作業名>-<グループ名>"
+```
+
+PR が MERGED だった場合のみ `--branch` / `-Branch`(次のグループ用の新ブランチ名。
+`develop/` 始まりが必須)を使い、`git switch main` → `git pull --ff-only` →
+`git switch -c <新ブランチ>` で切替し、state.json の `branch` を新ブランチ名、
+`group` を次のグループ(未完了タスクを含む最初のグループ)に更新する。stdout に
+`ADVANCED <新ブランチ名> <新グループ名>` を出力する。state.json を書き換えるのは
+この MERGED の場合だけで、exit 7 / 8 / 9 / 1 では何も書き換えない(状況が変わったら
+同じコマンドを再実行すればよい)。
+
+exit code: `0`=切替完了、`1`=使い方・前提不備(グループ未完了・作業ツリー未クリーン・
+`--branch` 未指定や `develop/` 以外の名前 等)、`7`=PR 未作成(stdout `NO_PR`)、
+`8`=PR が OPEN(マージ待ち。stdout `OPEN <PR URL>`)、`9`=PR が未マージのまま閉鎖
+(エスカレーション)。git / gh の失敗時は何も書き換えずその exit code を返す
+(gh の失敗はメッセージが「no pull requests found」の場合のみ exit 7 の「PR なし」扱い)。
+
+使い方と分岐後の進め方は `agent-workflow` skill の「グループ単位の PR とブランチ切替」を参照。
 
 ### upstream-issue — ワークフロー由来の問題を配布元に起票
 
