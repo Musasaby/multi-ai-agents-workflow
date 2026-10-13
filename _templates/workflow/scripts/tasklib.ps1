@@ -1,9 +1,14 @@
-﻿# tasks.md の解析と依存欄の検証(PowerShell版スクリプト共通)。
+﻿# tasks.md の解析と依存欄・グループの検証(PowerShell版スクリプト共通)。
 # state-sync.ps1 / next-task.ps1 / dispatch-prompt-gen.ps1 から dot-source して使う。
 # 依存欄の厳密フォーマット: `- **依存**: なし` または `- **依存**: T1, T2`
+# グループ区切り行の厳密フォーマット: `<!-- グループ <名前> -->` または
+# `<!-- グループ <名前>: <説明> -->`(<名前> は空白と ':' を含まない文字列)
 
 $script:DepLinePattern = '^(\s*-\s+\*\*依存\*\*:)[ \t]*(.*?)[ \t]*$'
 $script:DepFormatHint = "expected 'なし' or comma-separated task IDs like 'T1, T2'"
+$script:GroupLinePattern = '^<!--\s*グループ\s+([^\s:]+)(?:\s*:\s*(.*?))?\s*-->\s*$'
+$script:GroupFieldPattern = '^(\s*-\s+\*\*グループ\*\*:)[ \t]*(.*?)[ \t]*$'
+$script:DefaultGroup = ''
 
 # 改行コードを保持したまま行に分割する(CRLF の tasks.md をそのまま書き戻すため)
 function Split-TaskLines {
@@ -16,16 +21,27 @@ function Get-LineBody {
     return $Line.TrimEnd("`r", "`n")
 }
 
-# tasks.md を解析し、出現順のタスク一覧(id / title / depRaw / depLine)を返す
+# tasks.md を解析し、出現順のタスク一覧(id / title / depRaw / depLine / group / groupRaw)を返す
+# group は所属グループ名: タスク見出しより前にある直近のグループ区切りの名前(区切りが
+# 1つも無い、または最初の区切りより前のタスクは既定グループ = $script:DefaultGroup '')。
+# groupRaw は欄 '- **グループ**: <名前>' の値(欄が無ければ $null)。欄があれば位置より
+# 優先する(名前が tasks.md の区切りに存在する場合のみ。不一致の検証は Test-GroupDeps が行う)
 function Read-TaskList {
     param([string[]]$Lines)
     $tasks = [ordered]@{}
     $current = $null
+    $currentGroup = $script:DefaultGroup
+    $declared = [System.Collections.Generic.List[string]]::new()
     for ($i = 0; $i -lt $Lines.Count; $i++) {
         $line = (Get-LineBody $Lines[$i]).TrimStart([char]0xFEFF)
+        if ($line -cmatch $script:GroupLinePattern) {
+            $currentGroup = $Matches[1]
+            if (-not $declared.Contains($currentGroup)) { $declared.Add($currentGroup) }
+            continue
+        }
         if ($line.StartsWith('## ')) {
             if ($line -cmatch '^## (T\d+):\s*(.+)') {
-                $current = [pscustomobject]@{ id = $Matches[1]; title = $Matches[2].Trim(); depRaw = $null; depLine = -1 }
+                $current = [pscustomobject]@{ id = $Matches[1]; title = $Matches[2].Trim(); depRaw = $null; depLine = -1; group = $currentGroup; groupRaw = $null }
                 $tasks[$current.id] = $current
             } else {
                 $current = $null
@@ -36,8 +52,67 @@ function Read-TaskList {
             $current.depRaw = $Matches[2]
             $current.depLine = $i
         }
+        if ($null -ne $current -and $null -eq $current.groupRaw -and $line -cmatch $script:GroupFieldPattern) {
+            $current.groupRaw = $Matches[2]
+        }
+    }
+    # グループ欄による上書き(欄の名前が区切りに存在する場合のみ)
+    foreach ($t in $tasks.Values) {
+        if ($null -ne $t.groupRaw -and $declared.Contains($t.groupRaw)) { $t.group = $t.groupRaw }
     }
     return @($tasks.Values)
+}
+
+# tasks.md 上に出現するグループの順序を返す。
+# 戻り値は [既定グループ(''), 区切り名...] の配列(区切り名は最初に出現した順、重複なし)
+function Get-GroupOrder {
+    param([string[]]$Lines)
+    $names = [System.Collections.Generic.List[string]]::new()
+    $names.Add($script:DefaultGroup)
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        $line = (Get-LineBody $Lines[$i]).TrimStart([char]0xFEFF)
+        if ($line -cmatch $script:GroupLinePattern -and -not $names.Contains($Matches[1])) {
+            $names.Add($Matches[1])
+        }
+    }
+    return @($names)
+}
+
+# グループ欄と、依存先が後のグループに属する依存を検証する。エラーはまとめて例外にする。
+# GroupOrder は Get-GroupOrder の戻り値(先頭が既定グループ '')。依存先が自分より後の
+# グループに属する依存は、そのタスクが永久に実行できないため例外にする
+function Test-GroupDeps {
+    param($Tasks, [string[]]$GroupOrder)
+    # グループ名は大文字小文字を区別する(POSIX 版と同じ。@{} は区別しないため Dictionary を使う)
+    $idx = [System.Collections.Generic.Dictionary[string, int]]::new()
+    for ($i = 0; $i -lt $GroupOrder.Count; $i++) {
+        if (-not $idx.ContainsKey($GroupOrder[$i])) { $idx[$GroupOrder[$i]] = $i }
+    }
+    $groupOf = @{}
+    foreach ($t in $Tasks) { $groupOf[$t.id] = $t.group }
+    $errors = @()
+    foreach ($t in $Tasks) {
+        if ($null -ne $t.groupRaw) {
+            if ($t.groupRaw -eq '') {
+                $errors += "$($t.id): group field ('- **グループ**: ...') is empty"
+                continue
+            }
+            if (-not $idx.ContainsKey($t.groupRaw)) {
+                $errors += "$($t.id): unknown group '$($t.groupRaw)' (not declared by any '<!-- グループ <名前> -->' line in tasks.md)"
+                continue
+            }
+        }
+        try { $deps = @(Get-TaskDeps $t) } catch { continue }  # 依存欄の不備は Resolve-TaskDeps が報告する
+        $myIdx = if ($idx.ContainsKey($t.group)) { $idx[$t.group] } else { 0 }
+        foreach ($d in $deps) {
+            if (-not $groupOf.ContainsKey($d)) { continue }  # 存在しない依存先は Resolve-TaskDeps が報告する
+            $dIdx = if ($idx.ContainsKey($groupOf[$d])) { $idx[$groupOf[$d]] } else { 0 }
+            if ($dIdx -gt $myIdx) {
+                $errors += "Later-group dependency: $($t.id) (group '$($groupOf[$t.id])') depends on $d (group '$($groupOf[$d])'); a task must not depend on a task in a later group"
+            }
+        }
+    }
+    if ($errors.Count -gt 0) { throw ($errors -join "`n") }
 }
 
 # 依存欄を検証してタスクIDの配列を返す。不正なら例外を投げる

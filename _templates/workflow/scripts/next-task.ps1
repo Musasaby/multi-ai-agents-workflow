@@ -20,8 +20,10 @@ foreach ($p in @($TasksPath, $StatePath)) {
 }
 
 $lines = @(Split-TaskLines ([System.IO.File]::ReadAllText($TasksPath, [System.Text.Encoding]::UTF8)))
+$tasks = @(Read-TaskList $lines)
 try {
-    $graph = Resolve-TaskDeps @(Read-TaskList $lines) -CheckCycles
+    $graph = Resolve-TaskDeps $tasks -CheckCycles
+    [void](Test-GroupDeps $tasks (Get-GroupOrder $lines))
 } catch {
     [Console]::Error.WriteLine($_.Exception.Message)
     exit 1

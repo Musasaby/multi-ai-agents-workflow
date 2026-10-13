@@ -148,9 +148,10 @@ if insert:
     content = ''.join(lines)
     tasks = tasklib.parse_tasks(content)
 
-# --- 依存欄の検証(全モード共通。state.json を書く前に失敗させる) ---
+# --- 依存欄とグループの検証(全モード共通。state.json を書く前に失敗させる) ---
 try:
     tasklib.resolve_deps(tasks, check_cycles=True)
+    tasklib.check_group_deps(tasks, tasklib.group_order(content))
 except tasklib.TaskFileError as e:
     fail(str(e))
 

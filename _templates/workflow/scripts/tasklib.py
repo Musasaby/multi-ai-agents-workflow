@@ -1,7 +1,9 @@
-"""tasks.md の解析と依存欄の検証(POSIX版スクリプト共通)。
+"""tasks.md の解析と依存欄・グループの検証(POSIX版スクリプト共通)。
 
 state-sync.sh / next-task.sh / dispatch-prompt-gen.sh から import して使う。
 依存欄の厳密フォーマット: `- **依存**: なし` または `- **依存**: T1, T2`
+グループ区切り行の厳密フォーマット: `<!-- グループ <名前> -->` または
+`<!-- グループ <名前>: <説明> -->`(<名前> は空白と ':' を含まない文字列)
 """
 import re
 
@@ -9,6 +11,9 @@ HEADING_RE = re.compile(r'^## (T\d+):\s*(.+)')
 DEP_LINE_RE = re.compile(r'^(\s*-\s+\*\*依存\*\*:)[ \t]*(.*?)[ \t]*$')
 TASK_ID_RE = re.compile(r'^T\d+$')
 DEP_FORMAT_HINT = "expected 'なし' or comma-separated task IDs like 'T1, T2'"
+GROUP_LINE_RE = re.compile(r'^<!--\s*グループ\s+([^:\s]+)(?:\s*:\s*(.*?))?\s*-->\s*$')
+GROUP_FIELD_RE = re.compile(r'^(\s*-\s+\*\*グループ\*\*:)[ \t]*(.*?)[ \t]*$')
+DEFAULT_GROUP = ''
 
 
 class TaskFileError(Exception):
@@ -25,34 +30,107 @@ def strip_eol(line):
 
 
 def parse_tasks(content):
-    """tasks.md を解析し、出現順の [{'id','title','dep_raw','dep_line'}] を返す。
+    """tasks.md を解析し、出現順の [{'id','title','dep_raw','dep_line','group','group_raw'}] を返す。
 
     dep_raw は依存欄の値(依存行が無ければ None)、dep_line は lines 上の行番号。
-    同じIDの見出しが複数ある場合は後勝ち(従来の state-sync と同じ)。
+    group は所属グループ名: タスク見出しより前にある直近のグループ区切りの名前(区切りが
+    1つも無い、または最初の区切りより前のタスクは既定グループ DEFAULT_GROUP ='')。
+    group_raw はタスク欄 '- **グループ**: <名前>' の値(欄が無ければ None)。欄があれば
+    位置より優先する(名前が tasks.md の区切りに存在する場合のみ。不一致の検証は
+    check_group_deps が行う)。同じIDの見出しが複数ある場合は後勝ち(従来の state-sync と同じ)。
     """
     lines = split_lines(content)
     tasks = {}
     order = []
     current = None
+    current_group = DEFAULT_GROUP
+    declared = set()
     for i, raw in enumerate(lines):
         line = strip_eol(raw).lstrip('﻿')
+        m = GROUP_LINE_RE.match(line)
+        if m:
+            current_group = m.group(1)
+            declared.add(current_group)
+            continue
         if line.startswith('## '):
             m = HEADING_RE.match(line)
             if m:
                 tid = m.group(1)
                 if tid not in tasks:
                     order.append(tid)
-                current = {'id': tid, 'title': m.group(2).strip(), 'dep_raw': None, 'dep_line': None}
+                current = {'id': tid, 'title': m.group(2).strip(), 'dep_raw': None, 'dep_line': None,
+                           'group': current_group, 'group_raw': None}
                 tasks[tid] = current
             else:
                 current = None
             continue
-        if current is not None and current['dep_raw'] is None:
-            m = DEP_LINE_RE.match(line)
-            if m:
-                current['dep_raw'] = m.group(2)
-                current['dep_line'] = i
+        if current is not None:
+            if current['dep_raw'] is None:
+                m = DEP_LINE_RE.match(line)
+                if m:
+                    current['dep_raw'] = m.group(2)
+                    current['dep_line'] = i
+            if current['group_raw'] is None:
+                m = GROUP_FIELD_RE.match(line)
+                if m:
+                    current['group_raw'] = m.group(2)
+    # グループ欄による上書き(欄の名前が区切りに存在する場合のみ)
+    for t in (tasks[tid] for tid in order):
+        if t['group_raw'] is not None and t['group_raw'] in declared:
+            t['group'] = t['group_raw']
     return [tasks[tid] for tid in order]
+
+
+def group_order(content):
+    """tasks.md 上に出現するグループの順序を返す。
+
+    戻り値は [既定グループ(''), 区切り名...] のリスト(区切り名は最初に出現した順、重複なし)。
+    """
+    names = [DEFAULT_GROUP]
+    for raw in split_lines(content):
+        m = GROUP_LINE_RE.match(strip_eol(raw).lstrip('﻿'))
+        if m and m.group(1) not in names:
+            names.append(m.group(1))
+    return names
+
+
+def check_group_deps(tasks, order):
+    """グループ欄と、依存先が後のグループに属する依存を検証する。エラーはすべて集めて TaskFileError。
+
+    order は group_order(content) の戻り値(先頭が既定グループ '')。依存先が自分より後の
+    グループに属する依存は、そのタスクが永久に実行できないためエラーにする。
+    """
+    idx = {}
+    for i, name in enumerate(order):
+        if name not in idx:
+            idx[name] = i
+    group_of = {t['id']: t['group'] for t in tasks}
+    errors = []
+    for t in tasks:
+        raw = t['group_raw']
+        if raw is not None:
+            if raw == '':
+                errors.append(t['id'] + ": group field ('- **グループ**: ...') is empty")
+                continue
+            if raw not in idx:
+                errors.append(t['id'] + ": unknown group '" + raw
+                              + "' (not declared by any '<!-- グループ <名前> -->' line in tasks.md)")
+                continue
+        try:
+            deps = parse_deps(t)
+        except TaskFileError:
+            continue  # 依存欄の不備は resolve_deps が報告する
+        my_idx = idx.get(t['group'], 0)
+        for d in deps:
+            d_group = group_of.get(d)
+            if d_group is None:
+                continue  # 存在しない依存先は resolve_deps が報告する
+            if idx.get(d_group, 0) > my_idx:
+                errors.append("Later-group dependency: " + t['id'] + " (group '" + t['group']
+                              + "') depends on " + d + " (group '" + d_group
+                              + "'); a task must not depend on a task in a later group")
+    if errors:
+        raise TaskFileError('\n'.join(errors))
 
 
 def parse_deps(task):

@@ -42,9 +42,11 @@ sys.path.insert(0, script_dir)
 import tasklib
 
 with open(tasks_path, encoding='utf-8', newline='') as f:
-    tasks = tasklib.parse_tasks(f.read())
+    content = f.read()
+tasks = tasklib.parse_tasks(content)
 try:
     graph = tasklib.resolve_deps(tasks, check_cycles=True)
+    tasklib.check_group_deps(tasks, tasklib.group_order(content))
 except tasklib.TaskFileError as e:
     print(str(e), file=sys.stderr)
     sys.exit(1)

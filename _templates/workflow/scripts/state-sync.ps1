@@ -85,9 +85,10 @@ if ($Insert) {
     $tasksChanged = $true
 }
 
-# --- 依存欄の検証(全モード共通。state.json を書く前に失敗させる) ---
+# --- 依存欄とグループの検証(全モード共通。state.json を書く前に失敗させる) ---
 try {
     [void](Resolve-TaskDeps $tasks -CheckCycles)
+    [void](Test-GroupDeps $tasks (Get-GroupOrder $lines))
 } catch {
     Fail $_.Exception.Message
 }
