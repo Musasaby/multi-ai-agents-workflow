@@ -16,6 +16,7 @@
 │   ├── state-sync.ps1 / .sh
 │   ├── next-task.ps1 / .sh
 │   ├── group-advance.ps1 / .sh  グループ完了後の PR 状態判定と次グループのブランチ切替
+│   ├── branch-check.ps1 / .sh  今のブランチが作業に使ってよいかの判定(main 上・PR マージ済み・state.json との不一致)
 │   ├── task-state.ps1 / .sh
 │   ├── tasklib.ps1 / tasklib.py  tasks.md 解析・依存欄検証の共通部品
 │   ├── upstream-issue.ps1 / .sh
@@ -381,6 +382,40 @@ exit code: `0`=切替完了、`1`=使い方・前提不備(グループ未完了
 (gh の失敗はメッセージが「no pull requests found」の場合のみ exit 7 の「PR なし」扱い)。
 
 使い方と分岐後の進め方は `agent-workflow` skill の「グループ単位の PR とブランチ切替」を参照。
+
+### branch-check — 今のブランチが作業に使ってよいかの判定
+
+マージ済みの作業ブランチや `main` の上で作業・コミットしてしまうのを防ぐため、今のブランチが
+作業に使ってよいかを機械的に判定する。何も書き換えない(読み取り専用)。PR の状態は
+`gh pr list --head <現在のブランチ> --state merged --json url --limit 1` で調べる(squash マージでは
+`git merge-base --is-ancestor` が成り立たず、main から切った直後の新ブランチでは逆に成り立って
+しまうため、祖先判定は使わない)。
+
+```powershell
+.agents/workflow/scripts/branch-check.ps1           # tasks.md 以外の作業を始める前
+.agents/workflow/scripts/branch-check.ps1 -State    # dispatch・コミットの前(state.json の branch とも照合)
+```
+```bash
+.agents/workflow/scripts/branch-check.sh
+.agents/workflow/scripts/branch-check.sh --state
+```
+
+判定は次の順に行い、最初に当たったもので終える(gh を呼ばずに済む判定を先に行う):
+
+1. 使い方不備・git の失敗(detached HEAD を含む)→ exit `1`
+2. 現在のブランチが `main`(config.json の `upstream.branch` があればその名前も)→ exit `2`
+3. `--state` / `-State` 指定時、state.json の `branch` と現在のブランチが異なる → exit `5`
+   (stderr に両方の名前を出す。state.json が無い・`branch` が空の場合はこの判定を飛ばす)
+4. gh が無い・認証切れ等で PR 状態を取得できない → exit `4`
+5. 現在のブランチの PR がマージ済み → stdout `MERGED <PR URL>`、exit `3`
+6. いずれにも当たらない → stdout `OK <ブランチ名>`、exit `0`
+
+一致する PR が無い場合、gh は `[]` を出力して exit 0 で終わる(この場合は 6 の `OK`)。
+OPEN の PR しか無いブランチも `OK` になる。古い gh が「no pull requests found」のメッセージで
+失敗した場合も、PR なしとして `OK` 扱いにする。
+
+exit code: `0`=使ってよい、`1`=使い方不備・git 失敗、`2`=`main` 上、`3`=PR マージ済み
+(stdout `MERGED <PR URL>`)、`4`=gh で判定できない、`5`=state.json の `branch` と不一致。
 
 ### upstream-issue — ワークフロー由来の問題を配布元に起票
 
