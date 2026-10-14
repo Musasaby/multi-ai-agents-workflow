@@ -711,6 +711,88 @@ t_gen_broken_config() {
     assert_eq 1 "$CODE" "broken config.json -> exit 1"
 }
 
+# #36: test_command と child_dispatch_command が同じなら1回だけ載せる
+t_gen_dedup_verify_command() {
+    basic_tasks
+    write_state "T1:pending"
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" <<'PY'
+import json, sys
+p = sys.argv[1]
+with open(p, encoding='utf-8') as f:
+    cfg = json.load(f)
+cfg['quality_gate']['child_dispatch_command'] = 'pwsh -File tests/check.ps1'
+cfg['test_command'] = 'pwsh -File tests/check.ps1'
+with open(p, 'w', encoding='utf-8') as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+PY
+    run_script dispatch-prompt-gen.sh T1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_eq 1 "$(grep -c 'tests/check.ps1' "$PROJ/.agents/workflow/runs/T1-1/prompt.md")" "same command listed once"
+}
+
+ref_tasks() { # $1 = 参照ファイル欄(行全体。複数行可)
+    write_tasks <<EOF
+## T1: a
+- **目的**: x
+$1
+- **依存**: なし
+EOF
+    write_state "T1:pending"
+}
+
+t_gen_ref_files_ok() {
+    printf 'x\n' > "$PROJ/a.txt"
+    mkdir -p "$PROJ/src" && printf 'y\n' > "$PROJ/src/b.sh"
+    ref_tasks $'- **参照ファイル**:\n  - `a.txt`(全体)\n  - `src/b.sh:10-40`(関数 foo)'
+    run_script dispatch-prompt-gen.sh T1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_not_contains "$ERR" "WARN" "no warning"
+}
+
+t_gen_ref_files_missing() {
+    ref_tasks $'- **参照ファイル**:\n  - `nope.txt`'
+    run_script dispatch-prompt-gen.sh T1
+    assert_eq 1 "$CODE" "missing reference file -> exit 1"
+    assert_contains "$ERR" "nope.txt" "missing path reported"
+    assert_file_absent "$PROJ/.agents/workflow/runs/T1-1/prompt.md" "no prompt written"
+}
+
+t_gen_ref_files_absent_warns() {
+    ref_tasks ""
+    run_script dispatch-prompt-gen.sh T1
+    assert_eq 0 "$CODE" "absent field is not an error: $ERR"
+    assert_contains "$ERR" "WARN: T1: no '- **参照ファイル**:' field" "warning"
+}
+
+t_gen_ref_files_none() {
+    ref_tasks '- **参照ファイル**: なし'
+    run_script dispatch-prompt-gen.sh T1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_not_contains "$ERR" "WARN" "no warning"
+}
+
+t_gen_agents_md_at_only_warns() {
+    basic_tasks
+    write_state "T1:pending"
+    printf '@.agents/skills/_templates/AGENTS.md\n' > "$PROJ/AGENTS.md"
+    run_script dispatch-prompt-gen.sh T1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$ERR" "AGENTS.md only contains '@' references" "warning"
+    printf '# AGENTS.md\n@other.md\n' > "$PROJ/AGENTS.md"
+    run_script dispatch-prompt-gen.sh T1
+    assert_not_contains "$ERR" "AGENTS.md only contains" "no warning when AGENTS.md has content"
+}
+
+t_gen_ref_files_inline() {
+    printf 'x\n' > "$PROJ/a.txt"
+    ref_tasks '- **参照ファイル**: `a.txt:1-5`(全体)'
+    run_script dispatch-prompt-gen.sh T1
+    assert_eq 0 "$CODE" "inline reference accepted: $ERR"
+    ref_tasks '- **参照ファイル**: `nope.txt`'
+    run_script dispatch-prompt-gen.sh T1
+    assert_eq 1 "$CODE" "inline missing reference -> exit 1"
+}
+
 echo "test-tasks.sh"
 test_case "gen: 注記付き依存はexit 1" t_gen_annotation_rejected
 test_case "gen: 正しい形式は通る" t_gen_valid_forms_pass
@@ -762,4 +844,11 @@ test_case "gen: 空のquality_gateステップは載せない" t_gen_skips_empty
 test_case "gen: 検証コマンド未設定は受け入れ基準を指示" t_gen_no_verify_command
 test_case "gen: プロジェクト固有の指示を含まない" t_gen_no_project_specific_text
 test_case "gen: config.json が壊れていればexit 1" t_gen_broken_config
+test_case "gen: 同じ検証コマンドは1回だけ載せる" t_gen_dedup_verify_command
+test_case "gen: 参照ファイルが存在すれば通る" t_gen_ref_files_ok
+test_case "gen: 存在しない参照ファイルはexit 1" t_gen_ref_files_missing
+test_case "gen: 参照ファイル欄が無ければ警告" t_gen_ref_files_absent_warns
+test_case "gen: 参照ファイル なし は検証しない" t_gen_ref_files_none
+test_case "gen: @参照だけのAGENTS.mdは警告" t_gen_agents_md_at_only_warns
+test_case "gen: 同じ行の参照ファイルも検証する" t_gen_ref_files_inline
 summary

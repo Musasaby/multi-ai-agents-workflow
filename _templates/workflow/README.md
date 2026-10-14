@@ -16,6 +16,7 @@
 │   ├── state-sync.ps1 / .sh
 │   ├── next-task.ps1 / .sh
 │   ├── group-advance.ps1 / .sh  グループ完了後の PR 状態判定と次グループのブランチ切替
+│   ├── branch-check.ps1 / .sh  今のブランチが作業に使ってよいかの判定(main 上・PR マージ済み・state.json との不一致)
 │   ├── task-state.ps1 / .sh
 │   ├── tasklib.ps1 / tasklib.py  tasks.md 解析・依存欄検証の共通部品
 │   ├── upstream-issue.ps1 / .sh
@@ -25,6 +26,7 @@
 ├── runs/<タスクID>-<試行回数>/   ← 実行単位の生成物(.gitignore対象。PR作成の単発依頼は pr-<N>-1/)
 │   ├── prompt.md        生成プロンプト
 │   ├── fix-notes.md     リトライ時のレビュー指摘(親が作成)
+│   ├── guard.sha256     起動時の管理ファイルの SHA-256(dispatch-run が作成、dispatch-check が改ざん検知に使う)
 │   ├── output.log       子エージェントの出力
 │   ├── done             完了マーカー(EXIT/END の2行)
 │   ├── exit-signal      シグナル番号の一時ファイル(POSIX版のみ。done 書き出し時に削除)
@@ -91,6 +93,9 @@ Claude Code を子エージェントとして使う場合は `stream-json` 出�
 - **目的**: 何を達成するか
 - **対象**: 変更が想定されるファイル・モジュール
 - **グループ**: <名前>            ← 任意(所属を位置でなく名前で指定する)
+- **参照ファイル**:               ← 子が最初に読むファイル(5件以内。読ませるものが無ければ `なし`)
+  - `path/to/file`(理由)
+  - `path/to/other:10-40`(行範囲を付けられる)
 - **受け入れ基準**:
   - [ ] 基準1(検証可能な形で記述)
   - [ ] 基準2
@@ -179,6 +184,7 @@ tasks.md・config.json・依存タスクの完了報告(直接依存のみ)か�
 「テスト・検証」節には、常に「タスクの受け入れ基準に書かれた確認手順・テストコマンド」を
 入れ、加えて config の検証コマンド(`quality_gate.child_dispatch_command`、または `command` が
 空でない blocking ステップ、および `test_command`)を列挙する。`command` が空のステップは載せない。
+同じコマンド(`test_command` と `child_dispatch_command` が同じ値など)は1回だけ載せる。
 テンプレートはプロジェクトに依存しない内容だけを持つ。ビルドツール固有の注意などは、利用先の
 `AGENTS.md` の「テスト・検証の注意(子エージェント向け)」節に書く(子への指示は AGENTS.md に従うよう求める)。
 
@@ -198,12 +204,19 @@ tasks.md・config.json・依存タスクの完了報告(直接依存のみ)か�
 | exit | 意味 | 生成物 |
 |------|------|--------|
 | `0` | 生成成功 | `runs/<タスクID>-<試行回数>/prompt.md` を書き出す |
-| `1` | 使い方・tasks.md/state.json 不備(タスクID未検出、tasks.md/state.json が無い、依存欄の形式違反・存在しないID・自己依存 等) | 書き出さない |
+| `1` | 使い方・tasks.md/state.json 不備(タスクID未検出、tasks.md/state.json が無い、依存欄の形式違反・存在しないID・自己依存、参照ファイル欄のパスが存在しない・項目が無い 等) | 書き出さない |
 | `2` | 引き継ぎガード失敗(依存タスクが `done` でない、または依存タスクの `report.md` が見つからない) | 書き出さない(既存の古い prompt.md があれば削除する) |
 | `3` | リトライ(`-Attempt 2` 以上)なのに `fix-notes.md` が見つからない | 書き出さない |
 
 exit 0 以外は dispatch を行わず、stderr の内容(exit 2 なら欠落内容の列挙)をそのまま
 ユーザーに報告する。
+
+exit 0 でも、次の場合は stderr に `WARN:` を出す(生成は続ける)。親は内容を確かめ、必要なら
+tasks.md や AGENTS.md を直してから dispatch する:
+
+- タスクに `- **参照ファイル**:` 欄が無い、または6件以上ある(子が実装前に多くのファイルを読む原因になる)
+- ルートの `AGENTS.md` が `@` 参照の行だけでできている(opencode 等の子CLIは `@` を展開しないため、
+  子にルールが届かない。`AGENTS.md` に実体を書き、`CLAUDE.md` 側を `@AGENTS.md` にする)
 
 **PR モード**(`-Pr` / `--pr`): PR 作成を子に単発で依頼するプロンプトを
 `dispatch-pr-prompt-template.md` から生成し、`runs/pr-<N>-1/prompt.md` に書き出す
@@ -248,8 +261,23 @@ nohup .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1 &
 ### dispatch-check — 完了検知後の終了状態・成果物の判定
 
 `done` マーカーを検知したら毎回実行する。終了状態の区分(`ok` / `nonzero` / `signal` /
-`crashed`)、完了報告(`output.log` 内の `## 完了報告`)の有無、`git status --porcelain`、
+`crashed`)、管理ファイルの改ざん検知(`Guard:`)、権限拒否の有無(`Permission denied:`)、
+完了報告の判定(`Completion report:`)、変更件数(`Changes:`)、`git status --porcelain`、
 `git diff --stat`、`output.log` の末尾30行をまとめて出力する。
+
+- **改ざん検知**: `dispatch-run` は起動時に `prompt.md`・`state.json`・`tasks.md`・`config.json` の
+  SHA-256 を `runs/<タスクID>-<試行回数>/guard.sha256` に記録する。`dispatch-check` はこれと
+  現在の内容を比べ、変更・削除を検知する。`guard.sha256`・`output.log` が無い場合や、
+  `output.log` に NUL バイトがある(実行中に空にされた)場合も改ざんとみなす
+- **完了報告**: `output.log` で**最後に出現する** `## 完了報告` 行だけを対象にする。
+  その後にツール実行の記録(opencode が色付きで出すマーカー行 = ANSI エスケープに挟まれた
+  `$ ` / `→ ` / `← ` / `✱ ` / `✗ ` / `⚙ ` / `! `、stream-json の `[tool_use]` / `[tool_result]` 行)が
+  続く場合は無効(報告本文の色なしの `→ 要確認` や `$ npm test` はツール実行とみなさない)。必須項目は通常のタスクが
+  `- 変更ファイル:` と `- テスト結果:`、PR 作成の run(`pr-*`)が `- PR URL:`。値が空・
+  `<...>` のまま(テンプレート)の場合も無効
+- **権限拒否**: 行頭が `! permission requested:` で `auto-rejecting` を含む行(opencode の拒否の記録)が
+  あれば権限拒否とみなす(子が表示したソース中の同じ文字列には反応しない)
+- Windows PowerShell 5.1 が UTF-16LE で書いた `output.log` も BOM を見て読む(PowerShell 版)
 
 ```powershell
 .agents/workflow/scripts/dispatch-check.ps1 -TaskId T1 -Attempt 1
@@ -258,9 +286,20 @@ nohup .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1 &
 .agents/workflow/scripts/dispatch-check.sh T1 1
 ```
 
-exit code: `0`=正常終了かつ完了報告あり、`1`=done マーカーが無い・使い方不備、
-`4`=異常終了(非0・`signal:*`・`crashed:*`)、`5`=EXIT:0 だが完了報告が無い。
-`4` / `5` の場合はレビューに進まず、出力された成果物の有無をユーザーに報告する。
+exit code(複数に当たる場合は上の行を優先する):
+
+| exit | Verdict | 意味 |
+|------|---------|------|
+| `8` | `tampered` | 管理ファイルの改ざん(上記) |
+| `4` | `abnormal-exit` | 異常終了(非0・`signal:*`・`crashed:*`) |
+| `6` | `permission-denied` | 権限拒否で中断 |
+| `5` | `no-report` | 完了報告が無い・無効 |
+| `7` | `no-changes` | 完了報告はあるが作業ツリーに変更が無い(`pr-*` の run では判定しない) |
+| `0` | `ok` | 正常終了かつ完了報告あり |
+| `1` | — | done マーカーが無い・使い方不備 |
+
+`0` 以外の場合はレビューに進まず、出力された内容をユーザーに報告する(`7` は、変更が無いのが
+正しいタスクに限り検証に進んでよい。詳細は `agent-dispatch` skill §4)。
 
 ### state-sync — state.json の機械生成・追記同期
 
@@ -381,6 +420,40 @@ exit code: `0`=切替完了、`1`=使い方・前提不備(グループ未完了
 (gh の失敗はメッセージが「no pull requests found」の場合のみ exit 7 の「PR なし」扱い)。
 
 使い方と分岐後の進め方は `agent-workflow` skill の「グループ単位の PR とブランチ切替」を参照。
+
+### branch-check — 今のブランチが作業に使ってよいかの判定
+
+マージ済みの作業ブランチや `main` の上で作業・コミットしてしまうのを防ぐため、今のブランチが
+作業に使ってよいかを機械的に判定する。何も書き換えない(読み取り専用)。PR の状態は
+`gh pr list --head <現在のブランチ> --state merged --json url --limit 1` で調べる(squash マージでは
+`git merge-base --is-ancestor` が成り立たず、main から切った直後の新ブランチでは逆に成り立って
+しまうため、祖先判定は使わない)。
+
+```powershell
+.agents/workflow/scripts/branch-check.ps1           # tasks.md 以外の作業を始める前
+.agents/workflow/scripts/branch-check.ps1 -State    # dispatch・コミットの前(state.json の branch とも照合)
+```
+```bash
+.agents/workflow/scripts/branch-check.sh
+.agents/workflow/scripts/branch-check.sh --state
+```
+
+判定は次の順に行い、最初に当たったもので終える(gh を呼ばずに済む判定を先に行う):
+
+1. 使い方不備・git の失敗(detached HEAD を含む)→ exit `1`
+2. 現在のブランチが `main`(config.json の `upstream.branch` があればその名前も)→ exit `2`
+3. `--state` / `-State` 指定時、state.json の `branch` と現在のブランチが異なる → exit `5`
+   (stderr に両方の名前を出す。state.json が無い・`branch` が空の場合はこの判定を飛ばす)
+4. gh が無い・認証切れ等で PR 状態を取得できない → exit `4`
+5. 現在のブランチの PR がマージ済み → stdout `MERGED <PR URL>`、exit `3`
+6. いずれにも当たらない → stdout `OK <ブランチ名>`、exit `0`
+
+一致する PR が無い場合、gh は `[]` を出力して exit 0 で終わる(この場合は 6 の `OK`)。
+OPEN の PR しか無いブランチも `OK` になる。古い gh が「no pull requests found」のメッセージで
+失敗した場合も、PR なしとして `OK` 扱いにする。
+
+exit code: `0`=使ってよい、`1`=使い方不備・git 失敗、`2`=`main` 上、`3`=PR マージ済み
+(stdout `MERGED <PR URL>`)、`4`=gh で判定できない、`5`=state.json の `branch` と不一致。
 
 ### upstream-issue — ワークフロー由来の問題を配布元に起票
 

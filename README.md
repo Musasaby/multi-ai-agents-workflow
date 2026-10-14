@@ -12,10 +12,13 @@ AIエージェント(Claude Code、OpenCode 等)による複数エージェン�
 | `agent-quality-gate/` | 品質ゲート(typecheck/lint/test)の設定駆動一括実行・合否報告 |
 | `agent-comprehension-check/` | 回答済み質問ファイルの判定・解説(別セッション対応) |
 | `agent-review-commit/` | レビュー・修正再依頼・コミット |
+| `agent-branch-guard/` | ワークフロー外の変更・コミットを伴う依頼のブランチ判定(branch-check) |
 | `agents-md-setup/` | 正本化セットアップとリンク検証 |
 | `workflow-update/` | `git subtree` ベースの更新支援 |
 | `_templates/` | 利用先用テンプレート(`AGENTS.md`, `CLAUDE.md`, `workflow/config.json`, `workflow/README.md`) |
 | `.gitignore` | `.claude` リンクと個人設定の除外 |
+| `AGENTS.md` | **本リポジトリの開発用**ルール(利用先では使わない。利用先の `AGENTS.md` は `_templates/AGENTS.md` から作る) |
+| `tests/` | **本リポジトリの開発用**のテストと品質ゲート(利用先では使わない) |
 
 ## 前提
 
@@ -136,7 +139,7 @@ skill の編集はリポジトリルート直下の各ディレクトリ(`agent-
 ```powershell
 # ルート直下の配布物を .agents/skills にコピー
 $items = 'agent-workflow','agent-task-plan','agent-dispatch','agent-review-commit',
-         'agent-comprehension-check','agent-quality-gate','agents-md-setup','workflow-update','_templates'
+         'agent-comprehension-check','agent-quality-gate','agent-branch-guard','agents-md-setup','workflow-update','_templates'
 foreach ($i in $items) {
   Remove-Item ".agents/skills/$i" -Recurse -Force -ErrorAction SilentlyContinue
   Copy-Item $i ".agents/skills/$i" -Recurse
@@ -166,6 +169,29 @@ Get-ChildItem tests/test-*.ps1 | ForEach-Object { pwsh -NoProfile -File $_.FullN
 ```
 
 POSIX 版のシグナル終了のテスト(Python 経由の経路)は Linux でのみ実行されます(Windows ではスキップ)。
+
+構文・改行コード・BOM は `tests/syntax-check.ps1` で検査します(本リポジトリで workflow を回すときの
+品質ゲート。`.agents/workflow/config.json` の `test_command` / `quality_gate` にこのコマンドを設定する):
+
+```powershell
+pwsh -NoProfile -File tests/syntax-check.ps1
+```
+
+- `_templates/workflow/scripts/` と `tests/` の `.ps1` をパースし、`.sh` を `bash -n` で検査する
+- git 管理下と未追跡(`.gitignore` 対象外)のテキストファイルについて、CRLF を含むもの・
+  非 ASCII 文字を含むのに BOM が無い `.ps1`・BOM 付きの `.ps1` 以外のファイル(`.sh`・`.py`・`.md` 等)を失敗にする
+
+### 改行コード
+
+`.gitattributes` で全テキストファイルを作業ツリーでも LF に固定しています(`core.autocrlf=true` の
+環境でも LF でチェックアウトされます)。`.gitattributes` の導入前に clone した作業ツリーに CRLF の
+ファイルが残っている場合は、未コミットの変更が無い状態で次を実行して LF でチェックアウトし直します:
+
+```bash
+git ls-files --eol | awk '$2 == "w/crlf" {print $NF}' | while read -r f; do rm -- "$f"; done
+git checkout -- .
+git ls-files --eol | grep -c "w/crlf"   # 0 になれば完了
+```
 
 ### 旧構成からの移行
 

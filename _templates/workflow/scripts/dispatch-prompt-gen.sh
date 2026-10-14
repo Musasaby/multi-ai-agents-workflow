@@ -192,6 +192,52 @@ print(','.join(deps))
 PY
 ) || exit 1
 
+# --- 参照ファイル欄の検証 ---
+# `- **参照ファイル**:` の下の箇条書き(`` - `<パス>` `` + 任意の説明。`<パス>:10-40` のような
+# 行範囲は可)を、子が最初に読むファイルとして扱う。存在しないパスはエラー、欄が無い・
+# 6件以上ある場合は警告のみ。値に `なし` と書いた場合は検証しない。
+python3 - "$TASK_ID" "$TASK_SECTION" <<'PY' || exit 1
+import os, re, sys
+task_id, section = sys.argv[1:3]
+lines = section.split('\n')
+field_re = re.compile(r'^(\s*)-\s+\*\*参照ファイル\*\*:\s*(.*?)\s*$')
+start = None
+for i, line in enumerate(lines):
+    m = field_re.match(line)
+    if m:
+        start, indent, inline = i, len(m.group(1)), m.group(2)
+        break
+if start is None:
+    print('WARN: ' + task_id + ": no '- **参照ファイル**:' field (the child may read many files before starting)", file=sys.stderr)
+    sys.exit(0)
+if inline == 'なし':
+    sys.exit(0)
+# 同じ行に書かれたパス(`- **参照ファイル**: `a.txt`, `b.sh``)も受け付ける
+paths = [re.sub(r':\d+(-\d+)?$', '', p) for p in re.findall(r'`([^`]+)`', inline)]
+for line in lines[start + 1:]:
+    if not line.strip():
+        continue
+    if len(line) - len(line.lstrip()) <= indent:
+        break
+    m = re.match(r'^\s*-\s+`([^`]+)`', line)
+    if m:
+        paths.append(re.sub(r':\d+(-\d+)?$', '', m.group(1)))
+if not paths:
+    print(task_id + ": '- **参照ファイル**:' has no items (write '- `<path>`' items below the field or `<path>` on the same line, or 'なし')", file=sys.stderr)
+    sys.exit(1)
+missing = [p for p in paths if not os.path.exists(p)]
+if missing:
+    print(task_id + ': reference file(s) not found: ' + ', '.join(missing), file=sys.stderr)
+    sys.exit(1)
+if len(paths) > 5:
+    print('WARN: ' + task_id + ': ' + str(len(paths)) + ' reference files (keep it to a few)', file=sys.stderr)
+PY
+
+# --- AGENTS.md が @ 参照だけのファイルなら警告する(opencode 等は @ を展開しないため、子にルールが届かない) ---
+if [ -f AGENTS.md ] && ! awk '/[^[:space:]]/ && !/^[[:space:]]*@/ { found = 1; exit } END { exit !found }' AGENTS.md; then
+    echo "WARN: AGENTS.md only contains '@' references; child CLIs such as opencode do not expand them, so the child cannot read the rules" >&2
+fi
+
 # --- Handoff guard ---
 if [ -n "$DEPS" ]; then
     if [ ! -f "$STATE_PATH" ]; then
@@ -304,17 +350,21 @@ import json, sys
 with open(sys.argv[1], encoding='utf-8') as f:
     cfg = json.load(f)
 lines = []
+cmds = []
 qg = cfg.get('quality_gate') or {}
 cdc = (qg.get('child_dispatch_command') or '').strip()
 if cdc:
     lines.append('- ' + cdc)
+    cmds.append(cdc)
 else:
     for step in qg.get('steps') or []:
         cmd = (step.get('command') or '').strip()
         if step.get('blocking') and cmd:
             lines.append('- ' + step.get('name', 'check') + ': ' + cmd)
+            cmds.append(cmd)
+# 同じコマンドを2回載せない(子が別物と誤解して迷わないように)
 tc = (cfg.get('test_command') or '').strip()
-if tc:
+if tc and tc not in cmds:
     lines.append('- ' + tc)
 print('\n'.join(lines))
 PY

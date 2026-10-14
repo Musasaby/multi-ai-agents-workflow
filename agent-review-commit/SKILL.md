@@ -58,6 +58,9 @@ state.json を直接編集しない):
   保存する(`/agent-dispatch <タスクID>` を `-Attempt <次の試行回数>` でリトライ実行した際、
   生成スクリプト `dispatch-prompt-gen` がこのファイルを読み込んでプロンプト冒頭に結合する。
   ファイルが無い状態で `-Attempt 2` 以上を実行すると exit 3 になる)。
+  `fix-notes.md` にはタスク固有の指摘だけを書き、一時ファイルの置き場所・管理ファイルの扱い・
+  プロジェクト外の禁止など、`dispatch-prompt-template.md` の「実装ルール」が定める事項を
+  書き直さない(言い回しの違いが矛盾に見え、子が迷うため。規則は実装ルールの1か所に置く)。
   指摘が複雑でテンプレートに収まらない場合は、`fix-notes.md` を作らず、親が
   `runs/<タスクID>-<次の試行回数>/prompt.md` を直接作成して生成スクリプトをバイパスしてよい
   (`/agent-dispatch` §2 のフォールバック手順に準ずる)。
@@ -81,8 +84,11 @@ state.json を直接編集しない):
 
 (手順5.2 の品質ゲートで FAIL(blocking) になった場合はここから不合格に転じ、手順4へ戻る)
 
-1. 現在のブランチを確認。`main` 上なら **コミットせず中断**し、ユーザーに報告する
-   (本来 `/agent-workflow` 開始時に `develop/*` ブランチにいるはず)
+1. `branch-check --state` を実行し、コミットしてよいブランチかを機械的に判定する
+   (PowerShell: `.agents/workflow/scripts/branch-check.ps1 -State` / POSIX:
+   `branch-check.sh --state`。`main` の判定は branch-check の exit 2 が担う)。
+   **exit 0 以外の場合はコミットせず中断**し、exit code と stderr の内容を添えて
+   ユーザーに報告する(本来 `/agent-workflow` 開始時に `develop/*` ブランチにいるはず)
 2. `config.json` の `verify_before_commit` が `true` の場合のみ、最終ゲートとして
    親が品質ゲートを1回実行する:
    - `quality_gate` が定義されていれば `/agent-quality-gate` を実行する
