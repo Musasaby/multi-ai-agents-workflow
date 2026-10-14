@@ -559,4 +559,67 @@ Invoke-TestCase "gen: config.json が壊れていればexit 1" {
     Assert-Eq 1 $script:Code "broken config.json -> exit 1"
 }
 
+# #36: test_command と child_dispatch_command が同じなら1回だけ載せる
+Invoke-TestCase "gen: 同じ検証コマンドは1回だけ載せる" {
+    Set-Tasks $basicTasks
+    Set-State 'T1:pending'
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg.quality_gate.child_dispatch_command = 'pwsh -File tests/check.ps1'
+    $cfg.test_command = 'pwsh -File tests/check.ps1'
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Eq 1 ([regex]::Matches((Get-PromptT1), [regex]::Escape('tests/check.ps1')).Count) "same command listed once"
+}
+
+function Set-RefTasks {
+    param([string]$Field)
+    Set-Tasks "## T1: a`n- **目的**: x`n$Field`n- **依存**: なし`n"
+    Set-State 'T1:pending'
+}
+
+Invoke-TestCase "gen: 参照ファイルが存在すれば通る" {
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Write-Utf8File "$script:Proj/src/b.sh" "y`n"
+    Set-RefTasks "- **参照ファイル**:`n  - ``a.txt``(全体)`n  - ``src/b.sh:10-40``(関数 foo)"
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-NotContains $script:Err "WARN" "no warning"
+}
+
+Invoke-TestCase "gen: 存在しない参照ファイルはexit 1" {
+    Set-RefTasks "- **参照ファイル**:`n  - ``nope.txt``"
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1
+    Assert-Eq 1 $script:Code "missing reference file -> exit 1"
+    Assert-Contains $script:Err "nope.txt" "missing path reported"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/runs/T1-1/prompt.md" "no prompt written"
+}
+
+Invoke-TestCase "gen: 参照ファイル欄が無ければ警告" {
+    Set-RefTasks ""
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1
+    Assert-Eq 0 $script:Code "absent field is not an error: $($script:Err)"
+    Assert-Contains $script:Err "WARN: T1: no '- **参照ファイル**:' field" "warning"
+}
+
+Invoke-TestCase "gen: 参照ファイル なし は検証しない" {
+    Set-RefTasks "- **参照ファイル**: なし"
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-NotContains $script:Err "WARN" "no warning"
+}
+
+Invoke-TestCase "gen: @参照だけのAGENTS.mdは警告" {
+    Set-Tasks $basicTasks
+    Set-State 'T1:pending'
+    Write-Utf8File "$script:Proj/AGENTS.md" "@.agents/skills/_templates/AGENTS.md`n"
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Err "AGENTS.md only contains '@' references" "warning"
+    Write-Utf8File "$script:Proj/AGENTS.md" "# AGENTS.md`n@other.md`n"
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1
+    Assert-NotContains $script:Err "AGENTS.md only contains" "no warning when AGENTS.md has content"
+}
+
 Show-Summary

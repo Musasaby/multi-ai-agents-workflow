@@ -141,6 +141,49 @@ if ($unknownDeps.Count -gt 0) {
     exit 1
 }
 
+# 参照ファイル欄の検証
+# `- **参照ファイル**:` の下の箇条書き(`` - `<パス>` `` + 任意の説明。`<パス>:10-40` のような
+# 行範囲は可)を、子が最初に読むファイルとして扱う。存在しないパスはエラー、欄が無い・
+# 6件以上ある場合は警告のみ。値に `なし` と書いた場合は検証しない。
+$refStart = -1
+for ($i = 0; $i -lt $sectionLines.Count; $i++) {
+    if ($sectionLines[$i].TrimEnd("`r") -match '^(\s*)-\s+\*\*参照ファイル\*\*:\s*(.*?)\s*$') {
+        $refStart = $i; $refIndent = $Matches[1].Length; $refInline = $Matches[2]
+        break
+    }
+}
+if ($refStart -lt 0) {
+    [Console]::Error.WriteLine("WARN: ${TaskId}: no '- **参照ファイル**:' field (the child may read many files before starting)")
+} elseif ($refInline -ne 'なし') {
+    $refPaths = @()
+    for ($i = $refStart + 1; $i -lt $sectionLines.Count; $i++) {
+        $line = $sectionLines[$i].TrimEnd("`r")
+        if (-not $line.Trim()) { continue }
+        if (($line.Length - $line.TrimStart().Length) -le $refIndent) { break }
+        if ($line -match '^\s*-\s+`([^`]+)`') { $refPaths += ($Matches[1] -replace ':\d+(-\d+)?$', '') }
+    }
+    if ($refPaths.Count -eq 0) {
+        [Console]::Error.WriteLine("${TaskId}: '- **参照ファイル**:' has no items (write '- ``<path>``' items, or 'なし')")
+        exit 1
+    }
+    $missingRefs = @($refPaths | Where-Object { -not (Test-Path -LiteralPath $_) })
+    if ($missingRefs.Count -gt 0) {
+        [Console]::Error.WriteLine("${TaskId}: reference file(s) not found: $($missingRefs -join ', ')")
+        exit 1
+    }
+    if ($refPaths.Count -gt 5) {
+        [Console]::Error.WriteLine("WARN: ${TaskId}: $($refPaths.Count) reference files (keep it to a few)")
+    }
+}
+
+# AGENTS.md が @ 参照だけのファイルなら警告する(opencode 等は @ を展開しないため、子にルールが届かない)
+if (Test-Path AGENTS.md -PathType Leaf) {
+    $agentsLines = @(Get-Content AGENTS.md -Encoding UTF8 | Where-Object { $_.Trim() })
+    if (-not ($agentsLines | Where-Object { $_.Trim() -notmatch '^@' })) {
+        [Console]::Error.WriteLine("WARN: AGENTS.md only contains '@' references; child CLIs such as opencode do not expand them, so the child cannot read the rules")
+    }
+}
+
 if ($deps.Count -gt 0) {
     if (-not (Test-Path $StatePath)) {
         Write-Error "state.json not found: $StatePath"
@@ -232,18 +275,21 @@ try {
 # config の検証コマンド(command が空のステップは載せない)。1つも無ければ空にし、
 # テンプレート側の「受け入れ基準に書かれた確認手順」だけを子に実行させる
 $verifyLines = @()
+$verifyCmds = @()
 $cdc = if ($config.quality_gate) { "$($config.quality_gate.child_dispatch_command)".Trim() } else { '' }
 if ($cdc) {
     $verifyLines += "- $cdc"
+    $verifyCmds += $cdc
 } elseif ($config.quality_gate -and $config.quality_gate.steps) {
     foreach ($step in $config.quality_gate.steps) {
         $cmd = "$($step.command)".Trim()
         $name = if ($step.name) { $step.name } else { 'check' }
-        if ($step.blocking -and $cmd) { $verifyLines += "- ${name}: $cmd" }
+        if ($step.blocking -and $cmd) { $verifyLines += "- ${name}: $cmd"; $verifyCmds += $cmd }
     }
 }
+# 同じコマンドを2回載せない(子が別物と誤解して迷わないように)
 $tc = "$($config.test_command)".Trim()
-if ($tc) { $verifyLines += "- $tc" }
+if ($tc -and $tc -cnotin $verifyCmds) { $verifyLines += "- $tc" }
 
 $verifyInstruction = $verifyLines -join "`n"
 

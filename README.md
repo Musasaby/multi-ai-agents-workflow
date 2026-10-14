@@ -16,6 +16,8 @@ AIエージェント(Claude Code、OpenCode 等)による複数エージェン�
 | `workflow-update/` | `git subtree` ベースの更新支援 |
 | `_templates/` | 利用先用テンプレート(`AGENTS.md`, `CLAUDE.md`, `workflow/config.json`, `workflow/README.md`) |
 | `.gitignore` | `.claude` リンクと個人設定の除外 |
+| `AGENTS.md` | **本リポジトリの開発用**ルール(利用先では使わない。利用先の `AGENTS.md` は `_templates/AGENTS.md` から作る) |
+| `tests/` | **本リポジトリの開発用**のテストと品質ゲート(利用先では使わない) |
 
 ## 前提
 
