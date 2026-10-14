@@ -84,8 +84,11 @@ state.json を直接編集しない):
 
 (手順5.2 の品質ゲートで FAIL(blocking) になった場合はここから不合格に転じ、手順4へ戻る)
 
-1. 現在のブランチを確認。`main` 上なら **コミットせず中断**し、ユーザーに報告する
-   (本来 `/agent-workflow` 開始時に `develop/*` ブランチにいるはず)
+1. `branch-check --state` を実行し、コミットしてよいブランチかを機械的に判定する
+   (PowerShell: `.agents/workflow/scripts/branch-check.ps1 -State` / POSIX:
+   `branch-check.sh --state`。`main` の判定は branch-check の exit 2 が担う)。
+   **exit 0 以外の場合はコミットせず中断**し、exit code と stderr の内容を添えて
+   ユーザーに報告する(本来 `/agent-workflow` 開始時に `develop/*` ブランチにいるはず)
 2. `config.json` の `verify_before_commit` が `true` の場合のみ、最終ゲートとして
    親が品質ゲートを1回実行する:
    - `quality_gate` が定義されていれば `/agent-quality-gate` を実行する

@@ -22,6 +22,19 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
 
 ### 1. 事前チェック
 
+- `branch-check --state`(PowerShell: `.agents/workflow/scripts/branch-check.ps1 -State` /
+  POSIX: `branch-check.sh --state`)を実行し、現在のブランチが作業に使ってよいかを機械的に判定する
+  (マージ済みブランチ・`main`・state.json の `branch` との不一致を検出する)。
+  **exit 0 以外の場合は dispatch しない**。exit code と stderr の内容(
+  `2`=`main` 上、`3`=PR マージ済み・stdout `MERGED <PR URL>`、`5`=state.json の
+  `branch` と不一致 等)を添えてユーザーに報告し、中断する。
+  exit code の意味は `_templates/workflow/README.md` の「branch-check」の節と一致する
+  ```powershell
+  .agents/workflow/scripts/branch-check.ps1 -State
+  ```
+  ```bash
+  .agents/workflow/scripts/branch-check.sh --state
+  ```
 - `git status` で作業ツリーがクリーンであることを確認(未コミット変更があれば中断してユーザーに報告)
 - state.json の対象タスクが `pending` または `in_progress`(リトライ)であることを確認
 - 依存タスク(`依存:` 欄)がすべて `done` であることを確認
