@@ -167,6 +167,29 @@ Get-ChildItem tests/test-*.ps1 | ForEach-Object { pwsh -NoProfile -File $_.FullN
 
 POSIX 版のシグナル終了のテスト(Python 経由の経路)は Linux でのみ実行されます(Windows ではスキップ)。
 
+構文・改行コード・BOM は `tests/syntax-check.ps1` で検査します(本リポジトリで workflow を回すときの
+品質ゲート。`.agents/workflow/config.json` の `test_command` / `quality_gate` にこのコマンドを設定する):
+
+```powershell
+pwsh -NoProfile -File tests/syntax-check.ps1
+```
+
+- `_templates/workflow/scripts/` と `tests/` の `.ps1` をパースし、`.sh` を `bash -n` で検査する
+- git 管理下と未追跡(`.gitignore` 対象外)のテキストファイルについて、CRLF を含むもの・
+  非 ASCII 文字を含むのに BOM が無い `.ps1`・BOM 付きの `.sh` / `.py` を失敗にする
+
+### 改行コード
+
+`.gitattributes` で全テキストファイルを作業ツリーでも LF に固定しています(`core.autocrlf=true` の
+環境でも LF でチェックアウトされます)。`.gitattributes` の導入前に clone した作業ツリーに CRLF の
+ファイルが残っている場合は、未コミットの変更が無い状態で次を実行して LF でチェックアウトし直します:
+
+```bash
+git ls-files --eol | awk '$2 == "w/crlf" {print $NF}' | while read -r f; do rm -- "$f"; done
+git checkout -- .
+git ls-files --eol | grep -c "w/crlf"   # 0 になれば完了
+```
+
 ### 旧構成からの移行
 
 以前の「`.claude/skills` 配下に各 skill への個別ジャンクション/シンボリックリンクを作成する」方式は、現在の「`.claude` 全体を `.agents` へのジャンクションとする」標準形に統一されています。

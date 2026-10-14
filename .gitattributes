@@ -1,3 +1,7 @@
+# 改行コードを利用者の git 設定(core.autocrlf 等)に依存させず、作業ツリーでも LF に固定する。
+# PowerShell 7 / Windows PowerShell 5.1 とも LF の .ps1 をそのまま実行できる。
+# 改行コード・BOM は tests/syntax-check.ps1 が検査する。
+* text=auto eol=lf
 # bash / python はCRLFだと動かないため、チェックアウト時もLFに固定する
 *.sh text eol=lf
 *.py text eol=lf

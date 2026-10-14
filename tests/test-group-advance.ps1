@@ -1,4 +1,4 @@
-# T3: group-advance(グループ完了後の PR 状態判定とブランチ切替, PowerShell版)。
+﻿# T3: group-advance(グループ完了後の PR 状態判定とブランチ切替, PowerShell版)。
 # gh を PATH 先頭に置いたスタブ(gh.cmd)で差し替え、PR 状態(NO_PR / OPEN / CLOSED / MERGED)
 # ごとの exit code と、MERGED 時のブランチ作成・切替・state.json 更新を検証する。
 . "$PSScriptRoot/lib.ps1"
