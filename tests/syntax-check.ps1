@@ -3,7 +3,7 @@
 #   2. git 管理下と未追跡(.gitignore 対象外)のテキストファイルについて、改行コードと BOM を検査する
 #      - CRLF を含むファイルは失敗(.gitattributes で全ファイル LF に固定している)
 #      - 非 ASCII 文字を含む .ps1 に BOM が無ければ失敗(Windows PowerShell 5.1 が UTF-8 と認識しないため)
-#      - .sh / .py に BOM があれば失敗(bash / python が先頭行を正しく読めないため)
+#      - .ps1 以外に BOM があれば失敗(bash / python が先頭行を、skill の読み込みが frontmatter を正しく読めないため)
 # 検査対象はリポジトリルートの正本(`.agents/` 配下のミラーは検査しない)。
 $ErrorActionPreference = "Stop"
 Set-Location (Resolve-Path "$PSScriptRoot/..")
@@ -68,8 +68,8 @@ foreach ($rel in $files) {
         Write-Host "BOM ERROR (非 ASCII 文字を含む .ps1 は BOM 付き UTF-8 で保存すること): $rel"
         $failed = $true
     }
-    if (($ext -eq '.sh' -or $ext -eq '.py') -and $hasBom) {
-        Write-Host "BOM ERROR ($ext は BOM なしで保存すること): $rel"
+    if ($ext -ne '.ps1' -and $hasBom) {
+        Write-Host "BOM ERROR (.ps1 以外は BOM なしで保存すること): $rel"
         $failed = $true
     }
 }

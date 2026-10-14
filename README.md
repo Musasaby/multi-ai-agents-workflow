@@ -178,7 +178,7 @@ pwsh -NoProfile -File tests/syntax-check.ps1
 
 - `_templates/workflow/scripts/` と `tests/` の `.ps1` をパースし、`.sh` を `bash -n` で検査する
 - git 管理下と未追跡(`.gitignore` 対象外)のテキストファイルについて、CRLF を含むもの・
-  非 ASCII 文字を含むのに BOM が無い `.ps1`・BOM 付きの `.sh` / `.py` を失敗にする
+  非 ASCII 文字を含むのに BOM が無い `.ps1`・BOM 付きの `.ps1` 以外のファイル(`.sh`・`.py`・`.md` 等)を失敗にする
 
 ### 改行コード
 
