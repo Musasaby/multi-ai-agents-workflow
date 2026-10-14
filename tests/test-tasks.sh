@@ -783,6 +783,16 @@ t_gen_agents_md_at_only_warns() {
     assert_not_contains "$ERR" "AGENTS.md only contains" "no warning when AGENTS.md has content"
 }
 
+t_gen_ref_files_inline() {
+    printf 'x\n' > "$PROJ/a.txt"
+    ref_tasks '- **参照ファイル**: `a.txt:1-5`(全体)'
+    run_script dispatch-prompt-gen.sh T1
+    assert_eq 0 "$CODE" "inline reference accepted: $ERR"
+    ref_tasks '- **参照ファイル**: `nope.txt`'
+    run_script dispatch-prompt-gen.sh T1
+    assert_eq 1 "$CODE" "inline missing reference -> exit 1"
+}
+
 echo "test-tasks.sh"
 test_case "gen: 注記付き依存はexit 1" t_gen_annotation_rejected
 test_case "gen: 正しい形式は通る" t_gen_valid_forms_pass
@@ -840,4 +850,5 @@ test_case "gen: 存在しない参照ファイルはexit 1" t_gen_ref_files_miss
 test_case "gen: 参照ファイル欄が無ければ警告" t_gen_ref_files_absent_warns
 test_case "gen: 参照ファイル なし は検証しない" t_gen_ref_files_none
 test_case "gen: @参照だけのAGENTS.mdは警告" t_gen_agents_md_at_only_warns
+test_case "gen: 同じ行の参照ファイルも検証する" t_gen_ref_files_inline
 summary

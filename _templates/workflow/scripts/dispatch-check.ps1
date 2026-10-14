@@ -69,25 +69,40 @@ if (-not (Test-Path $guardPath)) {
         }
     }
 }
-$logBytes = $null
+$logText = $null
 if (-not (Test-Path $logPath)) {
     $guardIssues += "deleted: $logPath"
 } else {
     $logBytes = [System.IO.File]::ReadAllBytes((Resolve-Path $logPath).Path)
-    # 書き込み中のファイルを `: >` 等で空にすると、書き込み位置より前が NUL で埋まる
-    if ([Array]::IndexOf($logBytes, [byte]0) -ge 0) { $guardIssues += "truncated during the run (NUL bytes): $logPath" }
+    # Windows PowerShell 5.1 の `*>` は UTF-16LE(BOM FF FE)で書くため、BOM を見てデコードする
+    if ($logBytes.Length -ge 2 -and $logBytes[0] -eq 0xFF -and $logBytes[1] -eq 0xFE) {
+        $logText = [System.Text.Encoding]::Unicode.GetString($logBytes, 2, $logBytes.Length - 2)
+    } else {
+        $logText = [System.Text.Encoding]::UTF8.GetString($logBytes)
+    }
+    # 書き込み中のファイルを `: >` 等で空にすると、書き込み位置より前が NUL で埋まる(デコード後に判定する)
+    if ($logText.Contains([string][char]0)) { $guardIssues += "truncated during the run (NUL bytes): $logPath" }
 }
 
-# --- ログの正規化(NUL・ANSI エスケープ・CR を除く) ---
+# --- ログの正規化(NUL・CR を除く。ANSI エスケープは行ごとに扱う) ---
+$esc = [string][char]27
+$ansiRe = [regex]::Escape($esc) + '\[[0-9;]*[A-Za-z]'
+$rawLines = @()
 $cleanLines = @()
-if ($null -ne $logBytes) {
-    $text = [System.Text.Encoding]::UTF8.GetString($logBytes) -replace "`0", ''
-    $text = $text -replace "$([char]27)\[[0-9;]*[A-Za-z]", ''
-    $cleanLines = @($text -split "`r?`n")
+if ($null -ne $logText) {
+    $rawLines = @(($logText -replace "`0", '') -split "`r?`n")
+    $cleanLines = @($rawLines | ForEach-Object { $_ -replace $ansiRe, '' })
 }
 
-# --- 権限拒否の検出(opencode: "auto-rejecting" / "rejected permission") ---
-$deniedLines = @($cleanLines | Where-Object { $_ -match 'auto-rejecting|rejected permission' })
+# --- 権限拒否の検出 ---
+# opencode が拒否を記録する行(行頭の `! permission requested: ...; auto-rejecting`)だけに一致させる
+# (子がスクリプトやテストを表示した出力の中の同じ文字列には反応しない)
+$deniedLines = @($cleanLines | Where-Object { $_ -match '^! permission requested: .*auto-rejecting' })
+
+# ツール実行の記録: opencode が色付きで出すマーカー行(`ESC[0m$ ESC[0m...` 等)と
+# stream-json の `[tool_use]` / `[tool_result]` 行に限る(報告本文の `→ 要確認` や `$ npm test` は対象外)
+$toolRe = '^' + [regex]::Escape($esc) + '\[[0-9;]*m(\$|→|←|✱|✗|⚙|!) ' + [regex]::Escape($esc) + '\[[0-9;]*m'
+$toolFlags = @($rawLines | ForEach-Object { ($_ -match $toolRe) -or ($_ -match '^\[tool_(use|result)\]') })
 
 # --- 完了報告の判定 ---
 # 最後に出現する `## 完了報告` だけを対象にし、その後にツール実行の記録が続く場合は無効とする
@@ -97,14 +112,12 @@ $deniedLines = @($cleanLines | Where-Object { $_ -match 'auto-rejecting|rejected
 $isPr = $TaskId.StartsWith('pr-')
 $required = if ($isPr) { @('PR URL') } else { @('変更ファイル', 'テスト結果') }
 function Get-ReportResult {
-    param([string[]]$Lines, [string[]]$Required)
+    param([string[]]$Lines, [bool[]]$ToolFlags, [string[]]$Required)
     $last = -1
     for ($i = 0; $i -lt $Lines.Count; $i++) { if ($Lines[$i] -match '^## 完了報告[ \t]*$') { $last = $i } }
     if ($last -lt 0) { return 'missing' }
     for ($i = $last + 1; $i -lt $Lines.Count; $i++) {
-        if ($Lines[$i] -match '^(\$|→|←|✱|✗|⚙|!) ' -or $Lines[$i] -match '^\[tool_(use|result)\]') {
-            return "invalid (tool activity after the report at line $($i + 1))"
-        }
+        if ($ToolFlags[$i]) { return "invalid (tool activity after the report at line $($i + 1))" }
     }
     $end = $Lines.Count - 1
     for ($i = $last + 1; $i -lt $Lines.Count; $i++) { if ($Lines[$i] -match '^## ') { $end = $i - 1; break } }
@@ -112,7 +125,7 @@ function Get-ReportResult {
         $prefix = "- ${field}:"
         $found = $false
         for ($i = $last + 1; $i -le $end; $i++) {
-            if (-not $Lines[$i].StartsWith($prefix)) { continue }
+            if (-not $Lines[$i].StartsWith($prefix, [System.StringComparison]::Ordinal)) { continue }
             $value = $Lines[$i].Substring($prefix.Length).Trim()
             if ($value -eq '' -and $i -lt $end -and $Lines[$i + 1] -match '^[ \t]+[^ \t]') { $value = '(list)' }
             if ($value -eq '') { return "invalid (empty field: $field)" }
@@ -123,7 +136,7 @@ function Get-ReportResult {
     }
     return 'found'
 }
-$reportResult = Get-ReportResult $cleanLines $required
+$reportResult = Get-ReportResult $cleanLines $toolFlags $required
 
 $changes = @(git status --porcelain | Where-Object { $_ })
 $changeCount = $changes.Count

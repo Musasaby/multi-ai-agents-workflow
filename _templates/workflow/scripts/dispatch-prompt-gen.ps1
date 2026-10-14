@@ -155,7 +155,8 @@ for ($i = 0; $i -lt $sectionLines.Count; $i++) {
 if ($refStart -lt 0) {
     [Console]::Error.WriteLine("WARN: ${TaskId}: no '- **参照ファイル**:' field (the child may read many files before starting)")
 } elseif ($refInline -ne 'なし') {
-    $refPaths = @()
+    # 同じ行に書かれたパス(`- **参照ファイル**: `a.txt`, `b.sh``)も受け付ける
+    $refPaths = @([regex]::Matches($refInline, '`([^`]+)`') | ForEach-Object { $_.Groups[1].Value -replace ':\d+(-\d+)?$', '' })
     for ($i = $refStart + 1; $i -lt $sectionLines.Count; $i++) {
         $line = $sectionLines[$i].TrimEnd("`r")
         if (-not $line.Trim()) { continue }
@@ -163,7 +164,7 @@ if ($refStart -lt 0) {
         if ($line -match '^\s*-\s+`([^`]+)`') { $refPaths += ($Matches[1] -replace ':\d+(-\d+)?$', '') }
     }
     if ($refPaths.Count -eq 0) {
-        [Console]::Error.WriteLine("${TaskId}: '- **参照ファイル**:' has no items (write '- ``<path>``' items, or 'なし')")
+        [Console]::Error.WriteLine("${TaskId}: '- **参照ファイル**:' has no items (write '- ``<path>``' items below the field or ``<path>`` on the same line, or 'なし')")
         exit 1
     }
     $missingRefs = @($refPaths | Where-Object { -not (Test-Path -LiteralPath $_) })

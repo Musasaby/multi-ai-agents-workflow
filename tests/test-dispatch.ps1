@@ -242,4 +242,34 @@ Invoke-TestCase "run+check: 子がprompt.mdを消せばexit 8" {
     Assert-Eq 8 $script:Code "exit code: $($script:Out)"
 }
 
+Invoke-TestCase "check: 報告本文の→や$で始まる行は有効" {
+    New-Run 0 "## 完了報告`n- 変更ファイル: a.txt`n- テスト結果: 全件パス`n`$ npm test`n→ 要確認"
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+}
+
+Invoke-TestCase "check: 表示されたソース中の権限拒否の文字列には反応しない" {
+    New-Run 0 "$esc[0m`$ $esc[0mgrep -n auto-rejecting tests/test-dispatch.sh`n12:    make_run 0 `"! permission requested: external_directory (/tmp/*); auto-rejecting`nError: The user rejected permission to use this specific tool call.`"`n$report"
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Permission denied: no" "flag"
+}
+
+Invoke-TestCase "check: 色付きの権限拒否行もexit 6" {
+    New-Run 0 "$esc[91m! permission requested: external_directory (/tmp/*); auto-rejecting$esc[0m"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 6 $script:Code "colored permission line detected: $($script:Out)"
+}
+
+Invoke-TestCase "check: UTF-16LEのoutput.log(Windows PowerShell 5.1)を読める" {
+    New-Run 0 $report
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    [System.IO.File]::WriteAllText("$script:Proj/.agents/workflow/runs/T1-1/output.log", "$report`r`n", [System.Text.UnicodeEncoding]::new($false, $true))
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Guard: ok" "UTF-16 is not treated as truncated"
+}
+
 Show-Summary

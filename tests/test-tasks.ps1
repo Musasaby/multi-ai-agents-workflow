@@ -622,4 +622,14 @@ Invoke-TestCase "gen: @参照だけのAGENTS.mdは警告" {
     Assert-NotContains $script:Err "AGENTS.md only contains" "no warning when AGENTS.md has content"
 }
 
+Invoke-TestCase "gen: 同じ行の参照ファイルも検証する" {
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Set-RefTasks "- **参照ファイル**: ``a.txt:1-5``(全体)"
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1
+    Assert-Eq 0 $script:Code "inline reference accepted: $($script:Err)"
+    Set-RefTasks "- **参照ファイル**: ``nope.txt``"
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1
+    Assert-Eq 1 $script:Code "inline missing reference -> exit 1"
+}
+
 Show-Summary

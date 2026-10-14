@@ -212,7 +212,8 @@ if start is None:
     sys.exit(0)
 if inline == 'なし':
     sys.exit(0)
-paths = []
+# 同じ行に書かれたパス(`- **参照ファイル**: `a.txt`, `b.sh``)も受け付ける
+paths = [re.sub(r':\d+(-\d+)?$', '', p) for p in re.findall(r'`([^`]+)`', inline)]
 for line in lines[start + 1:]:
     if not line.strip():
         continue
@@ -222,7 +223,7 @@ for line in lines[start + 1:]:
     if m:
         paths.append(re.sub(r':\d+(-\d+)?$', '', m.group(1)))
 if not paths:
-    print(task_id + ": '- **参照ファイル**:' has no items (write '- `<path>`' items, or 'なし')", file=sys.stderr)
+    print(task_id + ": '- **参照ファイル**:' has no items (write '- `<path>`' items below the field or `<path>` on the same line, or 'なし')", file=sys.stderr)
     sys.exit(1)
 missing = [p for p in paths if not os.path.exists(p)]
 if missing:
@@ -233,7 +234,7 @@ if len(paths) > 5:
 PY
 
 # --- AGENTS.md が @ 参照だけのファイルなら警告する(opencode 等は @ を展開しないため、子にルールが届かない) ---
-if [ -f AGENTS.md ] && ! grep -v '^[[:space:]]*$' AGENTS.md | grep -qv '^[[:space:]]*@'; then
+if [ -f AGENTS.md ] && ! awk '/[^[:space:]]/ && !/^[[:space:]]*@/ { found = 1; exit } END { exit !found }' AGENTS.md; then
     echo "WARN: AGENTS.md only contains '@' references; child CLIs such as opencode do not expand them, so the child cannot read the rules" >&2
 fi
 

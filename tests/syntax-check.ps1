@@ -45,7 +45,8 @@ if ($bash) {
 }
 
 # 改行コード・BOM の検査(git 管理下 + 未追跡の新規ファイル)
-$files = @(git ls-files) + @(git ls-files --others --exclude-standard) | Sort-Object -Unique
+# core.quotepath=off: 日本語名のファイルが引用符付きの8進表記になり、検査から漏れるのを防ぐ
+$files = @(git -c core.quotepath=off ls-files) + @(git -c core.quotepath=off ls-files --others --exclude-standard) | Sort-Object -Unique
 foreach ($rel in $files) {
     if (-not (Test-Path -LiteralPath $rel -PathType Leaf)) { continue }  # 削除済み
     $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $rel).Path)

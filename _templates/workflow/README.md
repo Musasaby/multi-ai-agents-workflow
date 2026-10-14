@@ -270,11 +270,14 @@ nohup .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1 &
   現在の内容を比べ、変更・削除を検知する。`guard.sha256`・`output.log` が無い場合や、
   `output.log` に NUL バイトがある(実行中に空にされた)場合も改ざんとみなす
 - **完了報告**: `output.log` で**最後に出現する** `## 完了報告` 行だけを対象にする。
-  その後にツール実行の記録(opencode の `$ ` / `→ ` / `← ` / `✱ ` / `✗ ` / `⚙ ` / `! ` 行、
-  stream-json の `[tool_use]` / `[tool_result]` 行)が続く場合は無効。必須項目は通常のタスクが
+  その後にツール実行の記録(opencode が色付きで出すマーカー行 = ANSI エスケープに挟まれた
+  `$ ` / `→ ` / `← ` / `✱ ` / `✗ ` / `⚙ ` / `! `、stream-json の `[tool_use]` / `[tool_result]` 行)が
+  続く場合は無効(報告本文の色なしの `→ 要確認` や `$ npm test` はツール実行とみなさない)。必須項目は通常のタスクが
   `- 変更ファイル:` と `- テスト結果:`、PR 作成の run(`pr-*`)が `- PR URL:`。値が空・
   `<...>` のまま(テンプレート)の場合も無効
-- **権限拒否**: `output.log` に `auto-rejecting` / `rejected permission` を含む行があれば権限拒否とみなす
+- **権限拒否**: 行頭が `! permission requested:` で `auto-rejecting` を含む行(opencode の拒否の記録)が
+  あれば権限拒否とみなす(子が表示したソース中の同じ文字列には反応しない)
+- Windows PowerShell 5.1 が UTF-16LE で書いた `output.log` も BOM を見て読む(PowerShell 版)
 
 ```powershell
 .agents/workflow/scripts/dispatch-check.ps1 -TaskId T1 -Attempt 1

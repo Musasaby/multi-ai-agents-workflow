@@ -34,8 +34,10 @@ if [ ! -f "$DONE_PATH" ]; then
 fi
 
 # Windows PowerShell 5.1 の Out-File は BOM を付けるため除去してから読む
-EXIT_VALUE="$(sed -n '1s/^\xEF\xBB\xBF//; s/\r$//; s/^EXIT://p' "$DONE_PATH" | head -1)"
-END_VALUE="$(sed -n 's/\r$//; s/^END://p' "$DONE_PATH" | head -1)"
+# (BSD sed は \xEF 等のエスケープを解釈しないため、BOM のバイト列は printf で作る)
+BOM="$(printf '\357\273\277')"
+EXIT_VALUE="$(LC_ALL=C tr -d '\r' < "$DONE_PATH" | LC_ALL=C sed -n "1s/^$BOM//; s/^EXIT://p" | head -1)"
+END_VALUE="$(LC_ALL=C tr -d '\r' < "$DONE_PATH" | LC_ALL=C sed -n 's/^END://p' | head -1)"
 
 case "$EXIT_VALUE" in
     0) KIND=ok ;;
@@ -72,7 +74,7 @@ else
 "
             fi
         fi
-    done < <(sed 's/\r$//' "$GUARD_PATH")
+    done < <(LC_ALL=C tr -d '\r' < "$GUARD_PATH")
 fi
 if [ ! -f "$LOG_PATH" ]; then
     GUARD_ISSUES="${GUARD_ISSUES}deleted: $LOG_PATH
@@ -83,34 +85,44 @@ elif [ "$(LC_ALL=C tr -d '\000' < "$LOG_PATH" | wc -c)" -ne "$(wc -c < "$LOG_PAT
 "
 fi
 
-# --- ログの正規化(ANSI エスケープと CR を除く) ---
+# --- ログの正規化(NUL・CR を除く。ANSI エスケープは awk 側で扱う) ---
+# BSD sed は不正な UTF-8 バイトでエラーになるため、バイト単位で処理する(LC_ALL=C の tr / awk)
 ESC="$(printf '\033')"
-CLEAN_LOG=""
+RAW_LOG=""
 if [ -f "$LOG_PATH" ]; then
-    CLEAN_LOG="$(LC_ALL=C tr -d '\000' < "$LOG_PATH" | sed "s/${ESC}\[[0-9;]*[A-Za-z]//g; s/\r\$//")"
+    RAW_LOG="$(LC_ALL=C tr -d '\000\r' < "$LOG_PATH")"
 fi
 
-# --- 権限拒否の検出(opencode: "auto-rejecting" / "rejected permission") ---
-DENIED_LINES="$(printf '%s\n' "$CLEAN_LOG" | grep -E 'auto-rejecting|rejected permission' || true)"
+# --- 権限拒否の検出 ---
+# opencode が拒否を記録する行(行頭の `! permission requested: ...; auto-rejecting`)だけに一致させる
+# (子がスクリプトやテストを表示した出力の中の同じ文字列には反応しない)
+DENIED_LINES="$(printf '%s\n' "$RAW_LOG" | LC_ALL=C awk -v esc="$ESC" '
+    { line = $0; gsub(esc "\\[[0-9;]*[A-Za-z]", "", line) }
+    line ~ /^! permission requested: .*auto-rejecting/ { print line }')"
 
 # --- 完了報告の判定 ---
 # 最後に出現する `## 完了報告` だけを対象にし、その後にツール実行の記録が続く場合は無効とする
-# (子がテンプレートやドキュメントを表示しただけの行に一致させないため)。必須項目は
+# (子がテンプレートやドキュメントを表示しただけの行に一致させないため)。ツール実行の記録は、
+# opencode が色付きで出すマーカー行(`ESC[0m$ ESC[0m...` 等)と stream-json の `[tool_use]` /
+# `[tool_result]` 行に限る(報告本文の `→ 要確認` や `$ npm test` は対象外)。必須項目は
 # 通常のタスクが「変更ファイル」「テスト結果」、PR 作成の run(pr-*)が「PR URL」。
 # 値が同じ行に無い場合は、次の行からのインデントされた箇条書きを値とみなす。
 case "$TASK_ID" in
     pr-*) IS_PR=true; REQUIRED='PR URL' ;;
     *) IS_PR=false; REQUIRED='変更ファイル|テスト結果' ;;
 esac
-REPORT_RESULT="$(printf '%s\n' "$CLEAN_LOG" | awk -v required="$REQUIRED" '
-    { lines[NR] = $0 }
-    /^## 完了報告[ \t]*$/ { last = NR }
+REPORT_RESULT="$(printf '%s\n' "$RAW_LOG" | LC_ALL=C awk -v esc="$ESC" -v required="$REQUIRED" '
+    {
+        raw = $0
+        tool[NR] = (raw ~ ("^" esc "\\[[0-9;]*m(\\$|→|←|✱|✗|⚙|!) " esc "\\[[0-9;]*m")) || (raw ~ /^\[tool_(use|result)\]/)
+        gsub(esc "\\[[0-9;]*[A-Za-z]", "", raw)
+        lines[NR] = raw
+    }
+    lines[NR] ~ /^## 完了報告[ \t]*$/ { last = NR }
     END {
         if (!last) { print "missing"; exit }
         for (i = last + 1; i <= NR; i++) {
-            if (lines[i] ~ /^(\$|→|←|✱|✗|⚙|!) / || lines[i] ~ /^\[tool_(use|result)\]/) {
-                print "invalid (tool activity after the report at line " i ")"; exit
-            }
+            if (tool[i]) { print "invalid (tool activity after the report at line " i ")"; exit }
         }
         end = NR
         for (i = last + 1; i <= NR; i++) if (lines[i] ~ /^## /) { end = i - 1; break }

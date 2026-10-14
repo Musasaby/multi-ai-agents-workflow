@@ -331,6 +331,32 @@ t_run_then_check_child_deletes_prompt() {
     assert_eq 8 "$CODE" "exit code: $OUT"
 }
 
+t_check_report_body_symbols() {
+    # 報告本文の `→ ` や `$ ` で始まる行(色なし)はツール実行の記録とみなさない
+    make_run 0 $'## 完了報告\n- 変更ファイル: a.txt\n- テスト結果: 全件パス\n$ npm test\n→ 要確認'
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+}
+
+t_check_quoted_permission_text() {
+    # 子が表示したソース中の文字列(行頭が `! permission requested` でない)には反応しない
+    make_run 0 "${ESC}[0m\$ ${ESC}[0mgrep -n auto-rejecting tests/test-dispatch.sh
+12:    make_run 0 \"! permission requested: external_directory (/tmp/*); auto-rejecting
+Error: The user rejected permission to use this specific tool call.\"
+$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Permission denied: no" "flag"
+}
+
+t_check_permission_denied_colored() {
+    make_run 0 "${ESC}[91m! permission requested: external_directory (/tmp/*); auto-rejecting${ESC}[0m"
+    run_script dispatch-check.sh T1 1
+    assert_eq 6 "$CODE" "colored permission line detected: $OUT"
+}
+
 echo "test-dispatch.sh"
 
 test_case "run: 正常終了はEXIT:0" t_run_exit0
@@ -360,4 +386,7 @@ test_case "check: guard.sha256が無ければexit 8" t_check_guard_missing
 test_case "check: output.logの切り詰めはexit 8" t_check_log_truncated
 test_case "run+check: 子が正常に完了すればexit 0" t_run_then_check_ok
 test_case "run+check: 子がprompt.mdを消せばexit 8" t_run_then_check_child_deletes_prompt
+test_case "check: 報告本文の→や$で始まる行は有効" t_check_report_body_symbols
+test_case "check: 表示されたソース中の権限拒否の文字列には反応しない" t_check_quoted_permission_text
+test_case "check: 色付きの権限拒否行もexit 6" t_check_permission_denied_colored
 summary
