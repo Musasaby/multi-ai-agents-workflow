@@ -12,6 +12,7 @@ AIエージェント(Claude Code、OpenCode 等)による複数エージェン�
 | `agent-quality-gate/` | 品質ゲート(typecheck/lint/test)の設定駆動一括実行・合否報告 |
 | `agent-comprehension-check/` | 回答済み質問ファイルの判定・解説(別セッション対応) |
 | `agent-review-commit/` | レビュー・修正再依頼・コミット |
+| `agent-branch-guard/` | ワークフロー外の変更・コミットを伴う依頼のブランチ判定(branch-check) |
 | `agents-md-setup/` | 正本化セットアップとリンク検証 |
 | `workflow-update/` | `git subtree` ベースの更新支援 |
 | `_templates/` | 利用先用テンプレート(`AGENTS.md`, `CLAUDE.md`, `workflow/config.json`, `workflow/README.md`) |
@@ -138,7 +139,7 @@ skill の編集はリポジトリルート直下の各ディレクトリ(`agent-
 ```powershell
 # ルート直下の配布物を .agents/skills にコピー
 $items = 'agent-workflow','agent-task-plan','agent-dispatch','agent-review-commit',
-         'agent-comprehension-check','agent-quality-gate','agents-md-setup','workflow-update','_templates'
+         'agent-comprehension-check','agent-quality-gate','agent-branch-guard','agents-md-setup','workflow-update','_templates'
 foreach ($i in $items) {
   Remove-Item ".agents/skills/$i" -Recurse -Force -ErrorAction SilentlyContinue
   Copy-Item $i ".agents/skills/$i" -Recurse

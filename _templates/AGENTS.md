@@ -35,6 +35,7 @@
 
 - 状態・設定の正本: `.agents/workflow/`(`config.json`, `tasks.md`, `state.json`)
 - 子エージェントとして実装を依頼された場合は、タスク定義(`.agents/workflow/tasks.md`)の受け入れ基準を満たし、テストを実行してから完了報告すること
+- tasks.md のタスク実行(`/agent-workflow`・`/agent-dispatch`・`/agent-review-commit`)以外の変更・コミットを伴う依頼(タスク追加・計画変更・バグ修正・ドキュメント修正・設定変更 等)を受けたら、作業に着手する前に `agent-branch-guard` skill を使ってブランチを確かめる
 - 理解確認(任意): `comprehension_check.enabled` が true の場合、各タスク完了後に質問ファイルが生成されます。回答を記入して `/agent-comprehension-check` を実行すると判定・解説が得られます(別セッションでも可)
 - 問題発生時の対応順序: 1) `multi-ai-agents-workflow` 由来の問題かを切り分け 2) スクリプトによる自動化などAIの性能に依存しない機械的改善を最優先で検討 3) 2 が難しい場合のみ skills/AGENTS.md 等ドキュメントの改善で対処 4) ワークフロー由来、または解決困難な場合はユーザーに報告して中断 5) ワークフロー由来の問題は、ユーザーの承認を得て upstream(配布元)リポジトリに Issue を起票する(詳細は `agent-workflow` skillの「問題発生時の対応順序」を参照)
 
