@@ -17,6 +17,13 @@ $jsonlPath = "$runDir/output.jsonl"
 $donePath = "$runDir/done"
 Remove-Item -Force -ErrorAction SilentlyContinue $donePath
 $promptPath = "$runDir/prompt.md"
+# 子が管理ファイルを変更・削除していないかを dispatch-check が確かめられるよう、起動時の
+# SHA-256 を記録する(存在しないファイルは "-")。形式は sha256sum と同じ "<hash>  <path>"
+$guardLines = foreach ($f in @($promptPath, '.agents/workflow/state.json', '.agents/workflow/tasks.md', '.agents/workflow/config.json')) {
+    $h = if (Test-Path -LiteralPath $f -PathType Leaf) { (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash.ToLowerInvariant() } else { '-' }
+    "$h  $f"
+}
+[System.IO.File]::WriteAllText((Join-Path (Get-Location) "$runDir/guard.sha256"), (($guardLines -join "`n") + "`n"), [System.Text.UTF8Encoding]::new($false))
 $prompt = Get-Content $promptPath -Raw
 $config = Get-Content ".agents/workflow/config.json" -Raw | ConvertFrom-Json
 # child_agent.isolate_xdg が true のときだけ、子CLIの設定・データの置き場所をプロジェクト内に切り替える

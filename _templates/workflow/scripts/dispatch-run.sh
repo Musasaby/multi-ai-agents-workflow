@@ -30,6 +30,21 @@ SIGNAL_PATH="$RUN_DIR/exit-signal"
 rm -f "$DONE_PATH" "$SIGNAL_PATH"
 PROMPT_PATH="$RUN_DIR/prompt.md"
 
+# 子が管理ファイルを変更・削除していないかを dispatch-check が確かめられるよう、起動時の
+# SHA-256 を記録する(存在しないファイルは "-")。形式は sha256sum と同じ "<hash>  <path>"
+GUARD_PATH="$RUN_DIR/guard.sha256"
+: > "$GUARD_PATH"
+for f in "$PROMPT_PATH" .agents/workflow/state.json .agents/workflow/tasks.md .agents/workflow/config.json; do
+  if [ ! -f "$f" ]; then
+    h=-
+  elif command -v sha256sum > /dev/null 2>&1; then
+    h=$(sha256sum "$f" | cut -d' ' -f1)
+  else
+    h=$(shasum -a 256 "$f" | cut -d' ' -f1)
+  fi
+  printf '%s  %s\n' "$h" "$f" >> "$GUARD_PATH"
+done
+
 CMD_TEMPLATE=$(jq -r '.child_agent.command_template' .agents/workflow/config.json 2>/dev/null || \
   python3 -c "import json; print(json.load(open('.agents/workflow/config.json'))['child_agent']['command_template'])" 2>/dev/null || \
   sed -n 's/.*"command_template"[[:space:]]*:[[:space:]]*"\(.*\)"[[:space:]]*,\{0,1\}[[:space:]]*$/\1/p' .agents/workflow/config.json | sed 's/\\"/"/g')

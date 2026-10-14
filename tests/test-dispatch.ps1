@@ -13,10 +13,24 @@ function Set-Child {
 
 function Get-DoneExit { return (Get-Content "$script:Proj/.agents/workflow/runs/T1-1/done" -Encoding utf8)[0] }
 
+# dispatch-run と同じ形式で guard.sha256 を書く(runs/<run>/prompt.md と管理ファイル)
+function Write-Guard {
+    param([string]$Run)
+    Push-Location $script:Proj
+    $lines = foreach ($f in @(".agents/workflow/runs/$Run/prompt.md", '.agents/workflow/state.json', '.agents/workflow/tasks.md', '.agents/workflow/config.json')) {
+        $h = if (Test-Path -LiteralPath $f -PathType Leaf) { (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash.ToLowerInvariant() } else { '-' }
+        "$h  $f"
+    }
+    Pop-Location
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/$Run/guard.sha256" (($lines -join "`n") + "`n")
+}
+
 function New-Run {
-    param([string]$Exit, [string]$Log)
-    Write-Utf8File "$script:Proj/.agents/workflow/runs/T1-1/done" "EXIT:$Exit`nEND:2026-01-01T00:00:00+09:00`n"
-    Write-Utf8File "$script:Proj/.agents/workflow/runs/T1-1/output.log" "$Log`n"
+    param([string]$Exit, [string]$Log, [string]$Run = 'T1-1')
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/$Run/prompt.md" "prompt`n"
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/$Run/done" "EXIT:$Exit`nEND:2026-01-01T00:00:00+09:00`n"
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/$Run/output.log" "$Log`n"
+    Write-Guard $Run
 }
 
 function Set-Isolate {
@@ -113,8 +127,119 @@ Invoke-TestCase "check: doneなしはexit 1" {
 Invoke-TestCase "check: BOM付きdone" {
     New-Run 0 $report
     [System.IO.File]::WriteAllText("$script:Proj/.agents/workflow/runs/T1-1/done", "EXIT:0`r`nEND:x`r`n", [System.Text.UTF8Encoding]::new($true))
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
     Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
     Assert-Eq 0 $script:Code "BOM-prefixed done marker parsed: $($script:Out)"
+}
+
+$esc = [char]27
+
+# #35: 子がテンプレートを cat しただけの `## 完了報告` に一致させない
+Invoke-TestCase "check: 完了報告の後にツール実行が続けば無効(exit 5)" {
+    New-Run 0 "$esc[0m`$ $esc[0mcat dispatch-pr-prompt-template.md`n## 完了報告`n- PR URL: <作成した PR の URL>`n$esc[0m→ $esc[0mRead README.md`n$esc[0m`$ $esc[0mls"
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 5 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "invalid (tool activity after the report" "reason"
+}
+
+Invoke-TestCase "check: テンプレートのままの完了報告は無効(exit 5)" {
+    New-Run 0 "## 完了報告`n- 変更ファイル: <一覧>`n- テスト結果: <パス/失敗の件数>"
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 5 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "template placeholder" "reason"
+}
+
+Invoke-TestCase "check: 必須項目が無い完了報告は無効(exit 5)" {
+    New-Run 0 "## 完了報告`n- 変更ファイル: a.txt`n- 備考: なし"
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 5 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "missing field: テスト結果" "reason"
+}
+
+Invoke-TestCase "check: 箇条書きの値・CRLF・ANSIを含む完了報告は有効" {
+    New-Run 0 "$esc[0m`$ $esc[0mbash tests/test.sh`r`n## 完了報告`r`n- 変更ファイル:`r`n  - ``a.txt```r`n- テスト結果: 全件パス`r"
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+}
+
+Invoke-TestCase "check: 権限拒否はexit 6" {
+    New-Run 0 "! permission requested: external_directory (/tmp/*); auto-rejecting`n✗ cd /tmp && git init failed`nError: The user rejected permission to use this specific tool call."
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 6 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Permission denied: yes" "flag"
+    Assert-Contains $script:Out "auto-rejecting" "denied line shown"
+}
+
+Invoke-TestCase "check: 変更0件はexit 7" {
+    New-Run 0 $report
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 7 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Changes: 0" "changes"
+}
+
+Invoke-TestCase "check: PR作成のrunは変更0件でも正常" {
+    New-Run 0 "## 完了報告`n- PR URL: https://github.com/o/r/pull/1`n- タイトル: t" 'pr-1-1'
+    Invoke-Script dispatch-check.ps1 -TaskId pr-1 -Attempt 1
+    Assert-Eq 0 $script:Code "pr run is not checked for changes: $($script:Out)"
+}
+
+# #34: 管理ファイルの変更・削除を検知する
+Invoke-TestCase "check: state.jsonの変更はexit 8" {
+    Set-State 'T1:in_progress'
+    New-Run 0 $report
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Set-State 'T1:done'
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 8 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "changed: .agents/workflow/state.json" "issue"
+}
+
+Invoke-TestCase "check: prompt.mdの削除はexit 8" {
+    New-Run 0 $report
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Remove-Item "$script:Proj/.agents/workflow/runs/T1-1/prompt.md"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 8 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "deleted: .agents/workflow/runs/T1-1/prompt.md" "issue"
+}
+
+Invoke-TestCase "check: guard.sha256が無ければexit 8" {
+    New-Run 0 $report
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Remove-Item "$script:Proj/.agents/workflow/runs/T1-1/guard.sha256"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 8 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "guard.sha256 not found" "issue"
+}
+
+Invoke-TestCase "check: output.logの切り詰めはexit 8" {
+    New-Run 0 $report
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/T1-1/output.log" ("`0`0`0" + $report + "`n")
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 8 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "truncated during the run" "issue"
+}
+
+# dispatch-run が書いた guard.sha256 を dispatch-check が検証する(結合)
+Invoke-TestCase "run+check: 子が正常に完了すればexit 0" {
+    Set-State 'T1:in_progress'
+    Set-Child "Set-Content -Path a.txt -Value x; Write-Output '## 完了報告'; Write-Output '- 変更ファイル: a.txt'; Write-Output '- テスト結果: 全件パス'"
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    Assert-FileExists "$script:Proj/.agents/workflow/runs/T1-1/guard.sha256" "guard written"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+}
+
+Invoke-TestCase "run+check: 子がprompt.mdを消せばexit 8" {
+    Set-Child "Remove-Item .agents/workflow/runs/T1-1/prompt.md; Set-Content -Path a.txt -Value x; Write-Output '## 完了報告'; Write-Output '- 変更ファイル: a.txt'; Write-Output '- テスト結果: 全件パス'"
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 8 $script:Code "exit code: $($script:Out)"
 }
 
 Show-Summary

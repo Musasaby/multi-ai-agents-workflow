@@ -26,6 +26,7 @@
 ├── runs/<タスクID>-<試行回数>/   ← 実行単位の生成物(.gitignore対象。PR作成の単発依頼は pr-<N>-1/)
 │   ├── prompt.md        生成プロンプト
 │   ├── fix-notes.md     リトライ時のレビュー指摘(親が作成)
+│   ├── guard.sha256     起動時の管理ファイルの SHA-256(dispatch-run が作成、dispatch-check が改ざん検知に使う)
 │   ├── output.log       子エージェントの出力
 │   ├── done             完了マーカー(EXIT/END の2行)
 │   ├── exit-signal      シグナル番号の一時ファイル(POSIX版のみ。done 書き出し時に削除)
@@ -249,8 +250,20 @@ nohup .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1 &
 ### dispatch-check — 完了検知後の終了状態・成果物の判定
 
 `done` マーカーを検知したら毎回実行する。終了状態の区分(`ok` / `nonzero` / `signal` /
-`crashed`)、完了報告(`output.log` 内の `## 完了報告`)の有無、`git status --porcelain`、
+`crashed`)、管理ファイルの改ざん検知(`Guard:`)、権限拒否の有無(`Permission denied:`)、
+完了報告の判定(`Completion report:`)、変更件数(`Changes:`)、`git status --porcelain`、
 `git diff --stat`、`output.log` の末尾30行をまとめて出力する。
+
+- **改ざん検知**: `dispatch-run` は起動時に `prompt.md`・`state.json`・`tasks.md`・`config.json` の
+  SHA-256 を `runs/<タスクID>-<試行回数>/guard.sha256` に記録する。`dispatch-check` はこれと
+  現在の内容を比べ、変更・削除を検知する。`guard.sha256`・`output.log` が無い場合や、
+  `output.log` に NUL バイトがある(実行中に空にされた)場合も改ざんとみなす
+- **完了報告**: `output.log` で**最後に出現する** `## 完了報告` 行だけを対象にする。
+  その後にツール実行の記録(opencode の `$ ` / `→ ` / `← ` / `✱ ` / `✗ ` / `⚙ ` / `! ` 行、
+  stream-json の `[tool_use]` / `[tool_result]` 行)が続く場合は無効。必須項目は通常のタスクが
+  `- 変更ファイル:` と `- テスト結果:`、PR 作成の run(`pr-*`)が `- PR URL:`。値が空・
+  `<...>` のまま(テンプレート)の場合も無効
+- **権限拒否**: `output.log` に `auto-rejecting` / `rejected permission` を含む行があれば権限拒否とみなす
 
 ```powershell
 .agents/workflow/scripts/dispatch-check.ps1 -TaskId T1 -Attempt 1
@@ -259,9 +272,20 @@ nohup .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1 &
 .agents/workflow/scripts/dispatch-check.sh T1 1
 ```
 
-exit code: `0`=正常終了かつ完了報告あり、`1`=done マーカーが無い・使い方不備、
-`4`=異常終了(非0・`signal:*`・`crashed:*`)、`5`=EXIT:0 だが完了報告が無い。
-`4` / `5` の場合はレビューに進まず、出力された成果物の有無をユーザーに報告する。
+exit code(複数に当たる場合は上の行を優先する):
+
+| exit | Verdict | 意味 |
+|------|---------|------|
+| `8` | `tampered` | 管理ファイルの改ざん(上記) |
+| `4` | `abnormal-exit` | 異常終了(非0・`signal:*`・`crashed:*`) |
+| `6` | `permission-denied` | 権限拒否で中断 |
+| `5` | `no-report` | 完了報告が無い・無効 |
+| `7` | `no-changes` | 完了報告はあるが作業ツリーに変更が無い(`pr-*` の run では判定しない) |
+| `0` | `ok` | 正常終了かつ完了報告あり |
+| `1` | — | done マーカーが無い・使い方不備 |
+
+`0` 以外の場合はレビューに進まず、出力された内容をユーザーに報告する(`7` は、変更が無いのが
+正しいタスクに限り検証に進んでよい。詳細は `agent-dispatch` skill §4)。
 
 ### state-sync — state.json の機械生成・追記同期
 
