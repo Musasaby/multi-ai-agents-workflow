@@ -173,9 +173,13 @@ if init:
              'updated_at': now, 'tasks': [new_entry(t) for t in tasks]}
 else:
     out = list(existing['tasks'])
+    out_by_id = {e['id']: e for e in out}
     for t in tasks:
         if t['id'] not in existing_status:
             out.append(new_entry(t))
+        elif out_by_id[t['id']]['title'] != by_id[t['id']]['title']:
+            out_by_id[t['id']]['title'] = by_id[t['id']]['title']
+            print('Updated title: ' + t['id'])
     for tid in existing_status:
         if tid not in by_id:
             print("state.json has task '" + tid + "' not present in tasks.md (not removed)", file=sys.stderr)
