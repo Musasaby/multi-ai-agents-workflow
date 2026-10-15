@@ -1,41 +1,21 @@
 ﻿# T3: group-advance(グループ完了後の PR 状態判定とブランチ切替, PowerShell版)。
-# gh を PATH 先頭に置いたスタブ(gh.cmd)で差し替え、PR 状態(NO_PR / OPEN / CLOSED / MERGED)
+# gh を lib.ps1 が PATH 先頭に置くスタブ(gh.cmd)で差し替え、PR 状態(NO_PR / OPEN / CLOSED / MERGED)
 # ごとの exit code と、MERGED 時のブランチ作成・切替・state.json 更新を検証する。
 . "$PSScriptRoot/lib.ps1"
 
-# --- gh スタブ(gh.cmd を PATH 先頭に置き、環境変数で挙動を切り替える) ---
-$ghStubDir = Join-Path ([System.IO.Path]::GetTempPath()) ("gh-stub-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
-$null = New-Item -ItemType Directory -Force $ghStubDir
-$stubCmd = @'
-@echo off
-if "%GH_STUB_CODE%"=="" set GH_STUB_CODE=0
-if not "%GH_STUB_LOG%"=="" echo %*>>"%GH_STUB_LOG%"
-if not "%GH_STUB_STDOUT%"=="" echo %GH_STUB_STDOUT%
-if not "%GH_STUB_STDERR%"=="" echo %GH_STUB_STDERR% 1>&2
-exit /b %GH_STUB_CODE%
-'@
-[System.IO.File]::WriteAllText((Join-Path $ghStubDir 'gh.cmd'), $stubCmd)
-$env:PATH = "$ghStubDir;$env:PATH"
-$script:GhStubLog = Join-Path $ghStubDir 'log.txt'
-
+# --- gh スタブ(lib.ps1 が PATH 先頭に置く。シナリオごとに Set-GhStubResult で挙動を設定する) ---
 # Set-GhStub <NO_PR|OPEN|CLOSED|MERGED|FAIL> [url] [code]
 function Set-GhStub {
     param([string]$Scenario, [string]$Url = '', [int]$Code = 0)
-    Remove-Item $script:GhStubLog -Force -ErrorAction SilentlyContinue
-    $env:GH_STUB_LOG = $script:GhStubLog
-    $env:GH_STUB_CODE = "$Code"
-    $env:GH_STUB_STDOUT = ''
-    $env:GH_STUB_STDERR = ''
     switch ($Scenario) {
         'NO_PR' {
             # 実 gh と同じ「PR が見つからない」メッセージと exit 1 を再現する
-            $env:GH_STUB_CODE = '1'
-            $env:GH_STUB_STDERR = 'no pull requests found for branch "develop/g1"'
+            Set-GhStubResult -Code 1 -Stderr 'no pull requests found for branch "develop/g1"'
         }
-        'OPEN'   { $env:GH_STUB_STDOUT = '{"state":"OPEN","url":"' + $Url + '"}' }
-        'CLOSED' { $env:GH_STUB_STDOUT = '{"state":"CLOSED","url":"' + $Url + '"}' }
-        'MERGED' { $env:GH_STUB_STDOUT = '{"state":"MERGED","url":"' + $Url + '"}' }
-        'FAIL'   { $env:GH_STUB_STDERR = 'gh stub failure' }
+        'OPEN'   { Set-GhStubResult -Stdout ('{"state":"OPEN","url":"' + $Url + '"}') }
+        'CLOSED' { Set-GhStubResult -Stdout ('{"state":"CLOSED","url":"' + $Url + '"}') }
+        'MERGED' { Set-GhStubResult -Stdout ('{"state":"MERGED","url":"' + $Url + '"}') }
+        'FAIL'   { Set-GhStubResult -Code $Code -Stderr 'gh stub failure' }
     }
 }
 
@@ -105,7 +85,7 @@ Invoke-TestCase "advance: PR なしは exit 7" {
     Invoke-Script group-advance.ps1
     Assert-Eq 7 $script:Code "exit code: $($script:Err)"
     Assert-Eq "NO_PR" $script:Out "stdout"
-    Assert-Contains ([System.IO.File]::ReadAllText($script:GhStubLog)) "view develop/g1" "gh called with the state branch"
+    Assert-Contains (Get-GhStubLog) "view develop/g1" "gh called with the state branch"
     Assert-Eq "develop/g1" (Get-StateBranch) "state.json unchanged"
     Assert-Eq "P" (Get-StateGroup) "group unchanged"
 }
@@ -241,7 +221,4 @@ Invoke-TestCase "advance: 全タスク完了で切替先が無ければ exit 1" 
     Assert-Eq "P" (Get-StateGroup) "state.json unchanged"
 }
 
-# PATH を元に戻し、スタブを削除してから集計する
-$env:PATH = ($env:PATH -replace [regex]::Escape("$ghStubDir;"), '')
-Remove-Item $ghStubDir -Recurse -Force -ErrorAction SilentlyContinue
 Show-Summary

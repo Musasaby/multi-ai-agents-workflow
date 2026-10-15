@@ -632,4 +632,11 @@ Invoke-TestCase "gen: 同じ行の参照ファイルも検証する" {
     Assert-Eq 1 $script:Code "inline missing reference -> exit 1"
 }
 
+# ---------- テスト環境の切り離し(Issue F-1) ----------
+
+Invoke-TestCase "テストの git はグローバル設定を読まない" {
+    $globalOut = & git config --global --list 2>&1
+    Assert-Eq "" ($globalOut -join "`n") "global config is empty"
+}
+
 Show-Summary

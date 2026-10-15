@@ -1,39 +1,21 @@
 #!/bin/bash
 # T3: group-advance(グループ完了後の PR 状態判定とブランチ切替, POSIX版)。
-# gh は PATH 先頭に置いたスタブで差し替え、PR 状態(NO_PR / OPEN / CLOSED / MERGED)ごとの
+# gh は lib.sh が PATH 先頭に置くスタブで差し替え、PR 状態(NO_PR / OPEN / CLOSED / MERGED)ごとの
 # exit code と、MERGED 時のブランチ作成・切替・state.json 更新を検証する。
 source "$(dirname "$0")/lib.sh"
 
-# --- gh スタブ(PATH 先頭に置き、環境変数で挙動を切り替える) ---
-GH_STUB_DIR="$(mktemp -d)"
-cat > "$GH_STUB_DIR/gh" <<'EOF'
-#!/bin/bash
-[ -n "${GH_STUB_LOG:-}" ] && printf '%s\n' "$*" >> "$GH_STUB_LOG"
-[ -n "${GH_STUB_STDOUT:-}" ] && printf '%s\n' "$GH_STUB_STDOUT"
-[ -n "${GH_STUB_STDERR:-}" ] && printf '%s\n' "$GH_STUB_STDERR" >&2
-exit "${GH_STUB_CODE:-0}"
-EOF
-chmod +x "$GH_STUB_DIR/gh"
-export PATH="$GH_STUB_DIR:$PATH"
-
+# --- gh スタブ(lib.sh が PATH 先頭に置く。シナリオごとに gh_stub_set で挙動を設定する) ---
 # gh_stub <NO_PR|OPEN|CLOSED|MERGED|FAIL> [url] [code]
 gh_stub() {
-    GH_STUB_LOG="$GH_STUB_DIR/log"
-    rm -f "$GH_STUB_LOG"
-    export GH_STUB_LOG GH_STUB_CODE GH_STUB_STDOUT GH_STUB_STDERR
-    GH_STUB_CODE=0
-    GH_STUB_STDOUT=''
-    GH_STUB_STDERR=''
     case "$1" in
         NO_PR)
             # 実 gh と同じ「PR が見つからない」メッセージと exit 1 を再現する
-            GH_STUB_CODE=1
-            GH_STUB_STDERR='no pull requests found for branch "develop/g1"'
+            gh_stub_set 1 '' 'no pull requests found for branch "develop/g1"'
             ;;
-        OPEN)   GH_STUB_STDOUT="{\"state\":\"OPEN\",\"url\":\"$2\"}" ;;
-        CLOSED) GH_STUB_STDOUT="{\"state\":\"CLOSED\",\"url\":\"$2\"}" ;;
-        MERGED) GH_STUB_STDOUT="{\"state\":\"MERGED\",\"url\":\"$2\"}" ;;
-        FAIL)   GH_STUB_CODE="$3"; GH_STUB_STDERR='gh stub failure' ;;
+        OPEN)   gh_stub_set 0 "{\"state\":\"OPEN\",\"url\":\"$2\"}" '' ;;
+        CLOSED) gh_stub_set 0 "{\"state\":\"CLOSED\",\"url\":\"$2\"}" '' ;;
+        MERGED) gh_stub_set 0 "{\"state\":\"MERGED\",\"url\":\"$2\"}" '' ;;
+        FAIL)   gh_stub_set "$3" '' 'gh stub failure' ;;
     esac
 }
 
@@ -98,15 +80,13 @@ with open(sys.argv[1], encoding='utf-8') as f:
 " "$(py_path "$PROJ/.agents/workflow/state.json")"
 }
 
-stub_log() { cat "${GH_STUB_LOG:-/dev/null}"; }
-
 t_advance_no_pr() {
     setup_advance
     gh_stub NO_PR
     run_script group-advance.sh
     assert_eq 7 "$CODE" "exit code: $ERR"
     assert_eq "NO_PR" "$OUT" "stdout"
-    assert_contains "$(stub_log)" "view develop/g1" "gh called with the state branch"
+    assert_contains "$(gh_stub_log)" "view develop/g1" "gh called with the state branch"
     assert_eq "develop/g1" "$(state_branch)" "state.json unchanged"
     assert_eq "P" "$(state_group)" "group unchanged"
 }
@@ -253,5 +233,4 @@ test_case "advance: 作業グループ未完了は exit 1" t_advance_group_incom
 test_case "advance: 未知のグループ名は exit 1" t_advance_unknown_group_rejected
 test_case "advance: gh 失敗は exit code を返す" t_advance_gh_failure_propagated
 test_case "advance: 全タスク完了で切替先が無ければ exit 1" t_advance_all_done_rejected
-rm -rf "$GH_STUB_DIR"
 summary

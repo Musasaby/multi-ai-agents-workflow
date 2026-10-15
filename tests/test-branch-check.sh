@@ -1,46 +1,21 @@
 #!/bin/bash
 # #32: branch-check(作業ブランチが使ってよいかの判定, POSIX版)。
-# gh は PATH 先頭に置いたスタブで差し替え、判定ごとの exit code と stdout、
+# gh は lib.sh が PATH 先頭に置くスタブで差し替え、判定ごとの exit code と stdout、
 # --state の判定が gh より先に行われること、何も書き換えないことを検証する。
 source "$(dirname "$0")/lib.sh"
 
-# --- gh スタブ(PATH 先頭に置き、環境変数で挙動を切り替える) ---
-GH_STUB_DIR="$(mktemp -d)"
-cat > "$GH_STUB_DIR/gh" <<'EOF'
-#!/bin/bash
-[ -n "${GH_STUB_LOG:-}" ] && printf '%s\n' "$*" >> "$GH_STUB_LOG"
-[ -n "${GH_STUB_STDOUT:-}" ] && printf '%s\n' "$GH_STUB_STDOUT"
-[ -n "${GH_STUB_STDERR:-}" ] && printf '%s\n' "$GH_STUB_STDERR" >&2
-exit "${GH_STUB_CODE:-0}"
-EOF
-chmod +x "$GH_STUB_DIR/gh"
-export PATH="$GH_STUB_DIR:$PATH"
-GH_STUB_LOG="$GH_STUB_DIR/log"
-export GH_STUB_LOG GH_STUB_CODE GH_STUB_STDOUT GH_STUB_STDERR
-
+# --- gh スタブ(lib.sh が PATH 先頭に置く。シナリオごとに gh_stub_set で挙動を設定する) ---
 # gh_stub <NONE|NO_PR_MESSAGE|MERGED|FAIL> [url]
 gh_stub() {
-    rm -f "$GH_STUB_LOG"
-    GH_STUB_CODE=0
-    GH_STUB_STDOUT=''
-    GH_STUB_STDERR=''
     case "$1" in
         # 実 gh は一致する PR が無いとき [] を出力して exit 0
-        NONE) GH_STUB_STDOUT='[]' ;;
+        NONE) gh_stub_set 0 '[]' '' ;;
         # 古い gh の「PR が見つからない」失敗(PR なしとして扱う)
-        NO_PR_MESSAGE)
-            GH_STUB_CODE=1
-            GH_STUB_STDERR='no pull requests found for branch "develop/g1"'
-            ;;
-        MERGED) GH_STUB_STDOUT="[{\"url\":\"$2\"}]" ;;
-        FAIL)
-            GH_STUB_CODE=4
-            GH_STUB_STDERR='HTTP 401: Bad credentials'
-            ;;
+        NO_PR_MESSAGE) gh_stub_set 1 '' 'no pull requests found for branch "develop/g1"' ;;
+        MERGED) gh_stub_set 0 "[{\"url\":\"$2\"}]" '' ;;
+        FAIL) gh_stub_set 4 '' 'HTTP 401: Bad credentials' ;;
     esac
 }
-
-stub_log() { cat "$GH_STUB_LOG" 2> /dev/null; }
 
 # 作業ブランチ develop/g1 に切り替え、state.json の branch を develop/g1 にする
 setup_work_branch() {
@@ -74,7 +49,7 @@ t_main_rejected() {
     assert_eq 2 "$CODE" "exit code: $ERR"
     assert_eq "" "$OUT" "stdout empty"
     assert_contains "$ERR" "main" "stderr explains"
-    assert_eq "" "$(stub_log)" "gh not called"
+    assert_eq "" "$(gh_stub_log)" "gh not called"
 }
 
 t_upstream_branch_rejected() {
@@ -101,7 +76,7 @@ t_merged() {
     run_script branch-check.sh
     assert_eq 3 "$CODE" "exit code: $ERR"
     assert_eq "MERGED https://example.com/pr/1" "$OUT" "stdout has the PR URL"
-    assert_contains "$(stub_log)" "pr list --head develop/g1 --state merged" "gh asked for merged PRs of the branch"
+    assert_contains "$(gh_stub_log)" "pr list --head develop/g1 --state merged" "gh asked for merged PRs of the branch"
     assert_eq "$before" "$(snapshot)" "nothing changed"
 }
 
@@ -130,7 +105,7 @@ t_open_only() {
     gh_stub NONE
     run_script branch-check.sh
     assert_eq 0 "$CODE" "exit code: $ERR"
-    assert_contains "$(stub_log)" "--state merged" "only merged PRs are asked for"
+    assert_contains "$(gh_stub_log)" "--state merged" "only merged PRs are asked for"
 }
 
 t_gh_failure() {
@@ -158,7 +133,7 @@ t_state_mismatch() {
     assert_eq 5 "$CODE" "exit code: $ERR"
     assert_contains "$ERR" "develop/g1" "stderr shows the current branch"
     assert_contains "$ERR" "develop/other" "stderr shows the state branch"
-    assert_eq "" "$(stub_log)" "gh not called"
+    assert_eq "" "$(gh_stub_log)" "gh not called"
 }
 
 t_state_match() {
@@ -208,7 +183,7 @@ t_unknown_argument() {
     run_script branch-check.sh --bogus
     assert_eq 1 "$CODE" "exit code"
     assert_contains "$ERR" "Usage" "usage shown"
-    assert_eq "" "$(stub_log)" "gh not called"
+    assert_eq "" "$(gh_stub_log)" "gh not called"
 }
 
 echo "test-branch-check.sh"
@@ -227,5 +202,4 @@ test_case "branch-check: state.json 無しは --state でも判定を飛ばす" 
 test_case "branch-check: main の判定は state.json の判定より先" t_main_before_state
 test_case "branch-check: detached HEAD は exit 1" t_detached_head
 test_case "branch-check: 不明な引数は exit 1" t_unknown_argument
-rm -rf "$GH_STUB_DIR"
 summary

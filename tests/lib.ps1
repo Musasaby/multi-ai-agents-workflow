@@ -4,6 +4,62 @@
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
+
+# テストの git を利用者のグローバル設定・システム設定から切り離す(Issue F-1)。
+# lib は Linux でも動くため、NULL デバイスのパスは $IsWindows で切り替える
+$env:GIT_CONFIG_NOSYSTEM = '1'
+$env:GIT_CONFIG_GLOBAL = if ($IsWindows) { 'NUL' } else { '/dev/null' }
+
+# gh スタブ(gh.cmd を PATH 先頭に置き、Set-GhStubResult で挙動を切り替える)。
+# 既定(Set-GhStubResult で設定していない状態)では、意図しない gh 呼び出しを
+# stderr に記録して exit 97 で失敗させる(利用先テストでの実 gh 呼び出し防止)
+$script:GhStubDir = Join-Path ([System.IO.Path]::GetTempPath()) ("gh-stub-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$null = New-Item -ItemType Directory -Force $script:GhStubDir
+$stubCmd = @'
+@echo off
+if not "%GH_STUB_LOG%"=="" echo %*>>"%GH_STUB_LOG%"
+if not "%GH_STUB_SET%"=="1" goto unexpected
+if "%GH_STUB_CODE%"=="" set GH_STUB_CODE=0
+if not "%GH_STUB_STDOUT%"=="" echo %GH_STUB_STDOUT%
+if not "%GH_STUB_STDERR%"=="" echo %GH_STUB_STDERR% 1>&2
+exit /b %GH_STUB_CODE%
+:unexpected
+echo gh stub: unexpected call: %* 1>&2
+exit /b 97
+'@
+[System.IO.File]::WriteAllText((Join-Path $script:GhStubDir 'gh.cmd'), $stubCmd)
+$env:PATH = "$($script:GhStubDir);$env:PATH"
+
+# gh スタブの挙動を設定する(-Code <code> -Stdout <stdout> -Stderr <stderr>)。
+# (Stdout / Stderr を指定しなければ出力なし。設定時に呼び出し記録も空にする)
+function Set-GhStubResult {
+    param([int]$Code = 0, [string]$Stdout = '', [string]$Stderr = '')
+    $env:GH_STUB_LOG = "$($script:GhStubDir)/log.txt"
+    $env:GH_STUB_SET = '1'
+    $env:GH_STUB_CODE = "$Code"
+    $env:GH_STUB_STDOUT = $Stdout
+    $env:GH_STUB_STDERR = $Stderr
+    Remove-Item $env:GH_STUB_LOG -Force -ErrorAction SilentlyContinue
+}
+
+# gh の呼び出し記録を返す(gh が呼ばれていなければ空文字列)
+function Get-GhStubLog {
+    if ($env:GH_STUB_LOG -and (Test-Path $env:GH_STUB_LOG)) {
+        return [System.IO.File]::ReadAllText($env:GH_STUB_LOG)
+    }
+    return ''
+}
+
+# スタブの挙動を既定(未設定 = 意図しない呼び出しは exit 97)に戻す
+function Reset-GhStub {
+    $env:GH_STUB_LOG = $null
+    $env:GH_STUB_SET = $null
+    $env:GH_STUB_CODE = $null
+    $env:GH_STUB_STDOUT = $null
+    $env:GH_STUB_STDERR = $null
+    Remove-Item "$($script:GhStubDir)/log.txt" -Force -ErrorAction SilentlyContinue
+}
+
 $script:RepoRoot = (Resolve-Path "$PSScriptRoot/..").Path
 $script:TemplateScripts = Join-Path $script:RepoRoot '_templates/workflow/scripts'
 $script:PassCount = 0
@@ -138,12 +194,21 @@ function Invoke-TestCase {
     param([string]$Name, [scriptblock]$Body)
     $script:CurrentTest = $Name
     Write-Host "  - $Name"
+    Reset-GhStub
     New-TestProject
     try { & $Body } catch { Add-Result $false "exception: $($_.Exception.Message)" }
     Remove-TestProject
 }
 
 function Show-Summary {
+    # gh スタブのディレクトリも PATH から外して削除する(消えなければ残留として検出する)
+    $env:PATH = ($env:PATH -replace [regex]::Escape("$($script:GhStubDir);"), '')
+    Remove-Item $script:GhStubDir -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path $script:GhStubDir) {
+        $script:FailCount++
+        $script:FailedNames += "gh スタブの残留: $($script:GhStubDir)"
+        Write-Host "    leftover temp dir: $($script:GhStubDir)"
+    }
     # 一時ディレクトリの残留検出(New-TestProject が作ったディレクトリがすべて消えていること)
     $leftovers = @($script:CreatedProjects | Where-Object { Test-Path $_ })
     if ($leftovers.Count -gt 0) {

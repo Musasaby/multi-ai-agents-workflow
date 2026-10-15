@@ -1,50 +1,24 @@
 ﻿# #32: branch-check(作業ブランチが使ってよいかの判定, PowerShell版)。
-# gh を PATH 先頭に置いたスタブ(gh.cmd)で差し替え、判定ごとの exit code と stdout、
+# gh を lib.ps1 が PATH 先頭に置くスタブ(gh.cmd)で差し替え、判定ごとの exit code と stdout、
 # -State の判定が gh より先に行われること、何も書き換えないことを検証する。
 . "$PSScriptRoot/lib.ps1"
 
-# --- gh スタブ(gh.cmd を PATH 先頭に置き、環境変数で挙動を切り替える) ---
-$ghStubDir = Join-Path ([System.IO.Path]::GetTempPath()) ("gh-stub-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
-$null = New-Item -ItemType Directory -Force $ghStubDir
-$stubCmd = @'
-@echo off
-if "%GH_STUB_CODE%"=="" set GH_STUB_CODE=0
-if not "%GH_STUB_LOG%"=="" echo %*>>"%GH_STUB_LOG%"
-if not "%GH_STUB_STDOUT%"=="" echo %GH_STUB_STDOUT%
-if not "%GH_STUB_STDERR%"=="" echo %GH_STUB_STDERR% 1>&2
-exit /b %GH_STUB_CODE%
-'@
-[System.IO.File]::WriteAllText((Join-Path $ghStubDir 'gh.cmd'), $stubCmd)
-$env:PATH = "$ghStubDir;$env:PATH"
-$script:GhStubLog = Join-Path $ghStubDir 'log.txt'
-
+# --- gh スタブ(lib.ps1 が PATH 先頭に置く。シナリオごとに Set-GhStubResult で挙動を設定する) ---
 # Set-GhStub <NONE|NO_PR_MESSAGE|MERGED|FAIL> [url]
 function Set-GhStub {
     param([string]$Scenario, [string]$Url = '')
-    Remove-Item $script:GhStubLog -Force -ErrorAction SilentlyContinue
-    $env:GH_STUB_LOG = $script:GhStubLog
-    $env:GH_STUB_CODE = '0'
-    $env:GH_STUB_STDOUT = ''
-    $env:GH_STUB_STDERR = ''
     switch ($Scenario) {
         # 実 gh は一致する PR が無いとき [] を出力して exit 0
-        'NONE' { $env:GH_STUB_STDOUT = '[]' }
+        'NONE' { Set-GhStubResult -Stdout '[]' }
         # 古い gh の「PR が見つからない」失敗(PR なしとして扱う)
         'NO_PR_MESSAGE' {
-            $env:GH_STUB_CODE = '1'
-            $env:GH_STUB_STDERR = 'no pull requests found for branch "develop/g1"'
+            Set-GhStubResult -Code 1 -Stderr 'no pull requests found for branch "develop/g1"'
         }
-        'MERGED' { $env:GH_STUB_STDOUT = '[{"url":"' + $Url + '"}]' }
+        'MERGED' { Set-GhStubResult -Stdout ('[{"url":"' + $Url + '"}]') }
         'FAIL' {
-            $env:GH_STUB_CODE = '4'
-            $env:GH_STUB_STDERR = 'HTTP 401: Bad credentials'
+            Set-GhStubResult -Code 4 -Stderr 'HTTP 401: Bad credentials'
         }
     }
-}
-
-function Get-StubLog {
-    if (Test-Path $script:GhStubLog) { return [System.IO.File]::ReadAllText($script:GhStubLog) }
-    return ''
 }
 
 function Invoke-Git {
@@ -85,7 +59,7 @@ Invoke-TestCase "branch-check: main 上は exit 2" {
     Assert-Eq 2 $script:Code "exit code: $($script:Err)"
     Assert-Eq "" $script:Out "stdout empty"
     Assert-Contains $script:Err "main" "stderr explains"
-    Assert-Eq "" (Get-StubLog) "gh not called"
+    Assert-Eq "" (Get-GhStubLog) "gh not called"
 }
 
 Invoke-TestCase "branch-check: config の upstream.branch 上も exit 2" {
@@ -106,7 +80,7 @@ Invoke-TestCase "branch-check: マージ済み PR ありは exit 3 と MERGED <U
     Invoke-Script branch-check.ps1
     Assert-Eq 3 $script:Code "exit code: $($script:Err)"
     Assert-Eq "MERGED https://example.com/pr/1" $script:Out "stdout has the PR URL"
-    Assert-Contains (Get-StubLog) "pr list --head develop/g1 --state merged" "gh asked for merged PRs of the branch"
+    Assert-Contains (Get-GhStubLog) "pr list --head develop/g1 --state merged" "gh asked for merged PRs of the branch"
     Assert-Eq $before (Get-Snapshot) "nothing changed"
 }
 
@@ -134,7 +108,7 @@ Invoke-TestCase "branch-check: OPEN の PR のみは exit 0" {
     Set-GhStub NONE
     Invoke-Script branch-check.ps1
     Assert-Eq 0 $script:Code "exit code: $($script:Err)"
-    Assert-Contains (Get-StubLog) "--state merged" "only merged PRs are asked for"
+    Assert-Contains (Get-GhStubLog) "--state merged" "only merged PRs are asked for"
 }
 
 Invoke-TestCase "branch-check: gh 失敗は exit 4" {
@@ -162,7 +136,7 @@ Invoke-TestCase "branch-check: -State で state.json と不一致は exit 5(gh �
     Assert-Eq 5 $script:Code "exit code: $($script:Err)"
     Assert-Contains $script:Err "develop/g1" "stderr shows the current branch"
     Assert-Contains $script:Err "develop/other" "stderr shows the state branch"
-    Assert-Eq "" (Get-StubLog) "gh not called"
+    Assert-Eq "" (Get-GhStubLog) "gh not called"
 }
 
 Invoke-TestCase "branch-check: -State で一致すれば exit 0" {
@@ -212,10 +186,7 @@ Invoke-TestCase "branch-check: 不明な引数は exit 1" {
     Invoke-Script branch-check.ps1 'bogus'
     Assert-Eq 1 $script:Code "exit code"
     Assert-Contains $script:Err "Usage" "usage shown"
-    Assert-Eq "" (Get-StubLog) "gh not called"
+    Assert-Eq "" (Get-GhStubLog) "gh not called"
 }
 
-# PATH を元に戻し、スタブを削除してから集計する
-$env:PATH = ($env:PATH -replace [regex]::Escape("$ghStubDir;"), '')
-Remove-Item $ghStubDir -Recurse -Force -ErrorAction SilentlyContinue
 Show-Summary
