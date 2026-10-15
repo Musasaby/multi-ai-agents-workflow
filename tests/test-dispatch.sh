@@ -314,6 +314,19 @@ t_check_log_truncated() {
     assert_contains "$OUT" "truncated during the run" "issue"
 }
 
+# #44: 切り詰められた output.log の末尾表示から NUL・CR を除く(stdout に NUL を流さない)
+t_check_log_truncated_display_no_nul() {
+    make_run 0 "$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    printf '\0\0\0%s\n' "$REPORT" > "$PROJ/.agents/workflow/runs/T1-1/output.log"
+    local nul_count
+    assert_contains "$( (cd "$PROJ" && .agents/workflow/scripts/dispatch-check.sh T1 1 2>/dev/null) )" \
+        "- テスト結果: 全件パス" "report body shown"
+    nul_count="$( (cd "$PROJ" && .agents/workflow/scripts/dispatch-check.sh T1 1 2>/dev/null) \
+        | LC_ALL=C tr -dc '\000' | wc -c | tr -d ' \n')"
+    assert_eq 0 "$nul_count" "no NUL bytes in stdout"
+}
+
 # dispatch-run が書いた guard.sha256 を dispatch-check が検証する(結合)
 t_run_then_check_ok() {
     write_state "T1:in_progress"
@@ -384,6 +397,7 @@ test_case "check: state.jsonの変更はexit 8" t_check_state_changed
 test_case "check: prompt.mdの削除はexit 8" t_check_prompt_deleted
 test_case "check: guard.sha256が無ければexit 8" t_check_guard_missing
 test_case "check: output.logの切り詰めはexit 8" t_check_log_truncated
+test_case "check: 切り詰められたoutput.logの表示にNULを含めない" t_check_log_truncated_display_no_nul
 test_case "run+check: 子が正常に完了すればexit 0" t_run_then_check_ok
 test_case "run+check: 子がprompt.mdを消せばexit 8" t_run_then_check_child_deletes_prompt
 test_case "check: 報告本文の→や$で始まる行は有効" t_check_report_body_symbols

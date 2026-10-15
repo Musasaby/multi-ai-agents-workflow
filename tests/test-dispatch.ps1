@@ -225,6 +225,16 @@ Invoke-TestCase "check: output.logの切り詰めはexit 8" {
     Assert-Contains $script:Out "truncated during the run" "issue"
 }
 
+# #44: 切り詰められた output.log の末尾表示から NUL を除く(sh 版と揃える)
+Invoke-TestCase "check: 切り詰められたoutput.logの表示にNULを含めない" {
+    New-Run 0 $report
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/T1-1/output.log" ("`0`0`0" + $report + "`n")
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-NotContains $script:Out ([string][char]0) "no NUL in output"
+    Assert-Contains $script:Out "テスト結果: 全件パス" "report body shown"
+}
+
 # dispatch-run が書いた guard.sha256 を dispatch-check が検証する(結合)
 Invoke-TestCase "run+check: 子が正常に完了すればexit 0" {
     Set-State 'T1:in_progress'
