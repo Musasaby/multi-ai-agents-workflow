@@ -11,6 +11,24 @@ export PYTHONIOENCODING=utf-8
 export GIT_CONFIG_NOSYSTEM=1
 export GIT_CONFIG_GLOBAL=/dev/null
 
+# gh スタブ(PATH 先頭に置き、gh_stub_set で挙動を切り替える)。
+# 既定(gh_stub_set で設定していない状態)では、意図しない gh 呼び出しを
+# stderr に記録して exit 97 で失敗させる(利用先テストでの実 gh 呼び出し防止)
+GH_STUB_DIR="$(mktemp -d)"
+cat > "$GH_STUB_DIR/gh" <<'EOF'
+#!/bin/bash
+[ -n "${GH_STUB_LOG:-}" ] && printf '%s\n' "$*" >> "$GH_STUB_LOG"
+if [ "${GH_STUB_SET:-}" = 1 ]; then
+    [ -n "${GH_STUB_STDOUT:-}" ] && printf '%s\n' "$GH_STUB_STDOUT"
+    [ -n "${GH_STUB_STDERR:-}" ] && printf '%s\n' "$GH_STUB_STDERR" >&2
+    exit "${GH_STUB_CODE:-0}"
+fi
+printf 'gh stub: unexpected call: %s\n' "$*" >&2
+exit 97
+EOF
+chmod +x "$GH_STUB_DIR/gh"
+export PATH="$GH_STUB_DIR:$PATH"
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEMPLATE_SCRIPTS="$REPO_ROOT/_templates/workflow/scripts"
 
@@ -147,6 +165,32 @@ print(','.join(t['id'] for t in s['tasks']))
 " "$(py_path "$PROJ/.agents/workflow/state.json")"
 }
 
+# gh スタブの挙動を設定する: gh_stub_set <code> <stdout> <stderr>
+# (stdout / stderr が空なら出力なし。設定時に呼び出し記録も空にする)
+gh_stub_set() {
+    export GH_STUB_SET=1
+    GH_STUB_CODE="$1"
+    GH_STUB_STDOUT="${2-}"
+    GH_STUB_STDERR="${3-}"
+    export GH_STUB_CODE GH_STUB_STDOUT GH_STUB_STDERR
+    GH_STUB_LOG="$GH_STUB_DIR/log"
+    export GH_STUB_LOG
+    rm -f "$GH_STUB_LOG"
+}
+
+# gh の呼び出し記録を返す(gh が呼ばれていなければ空文字列)
+gh_stub_log() {
+    if [ -n "${GH_STUB_LOG:-}" ] && [ -f "$GH_STUB_LOG" ]; then
+        cat "$GH_STUB_LOG"
+    fi
+}
+
+# スタブの挙動を既定(未設定 = 意図しない呼び出しは exit 97)に戻す
+gh_stub_reset() {
+    unset GH_STUB_LOG GH_STUB_SET GH_STUB_CODE GH_STUB_STDOUT GH_STUB_STDERR
+    rm -f "$GH_STUB_DIR/log"
+}
+
 _record() {
     if [ "$1" = ok ]; then
         PASS_COUNT=$((PASS_COUNT + 1))
@@ -182,6 +226,7 @@ assert_file_absent() { if [ ! -e "$1" ]; then _record ok; else _record ng "$2 (f
 test_case() {
     CURRENT_TEST="$1"
     echo "  - $1"
+    gh_stub_reset
     new_project
     "$2"
     cleanup_project
@@ -194,6 +239,9 @@ summary() {
     for dir in $CREATED_PROJECTS; do
         [ -n "$dir" ] && [ -e "$dir" ] && leftover="$leftover $dir"
     done
+    # gh スタブのディレクトリも削除する(消えなければ残留として検出する)
+    rm -rf "$GH_STUB_DIR"
+    [ -e "$GH_STUB_DIR" ] && leftover="$leftover $GH_STUB_DIR"
     if [ -n "$leftover" ]; then
         echo "    leftover temp dir(s):$leftover"
         FAIL_COUNT=$((FAIL_COUNT + 1))

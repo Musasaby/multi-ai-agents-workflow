@@ -66,4 +66,11 @@ Invoke-TestCase "モード未指定はexit 1" {
     Assert-Eq 1 $script:Code "exit code"
 }
 
+Invoke-TestCase "gh スタブ: 設定しないと gh 呼び出しは失敗する" {
+    # -DryRun を付け忘れると gh を実際に呼ぶ → lib の既定スタブが失敗させる(Issue F-2)
+    Invoke-Script upstream-issue.ps1 -Search "signal 241"
+    Assert-Eq 97 $script:Code "gh stub rejects the unexpected call: $($script:Err)"
+    Assert-Contains $script:Err "unexpected call" "stderr mentions the stub"
+}
+
 Show-Summary

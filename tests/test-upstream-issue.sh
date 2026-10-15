@@ -94,6 +94,13 @@ t_windows_abs_body_file() {
     assert_eq 0 "$CODE" "absolute body-file path accepted: $ERR"
 }
 
+t_default_stub_rejects_gh() {
+    # --dry-run を付け忘れると gh を実際に呼ぶ → lib の既定スタブが失敗させる(Issue F-2)
+    run_script upstream-issue.sh --search "signal 241"
+    assert_eq 97 "$CODE" "gh stub rejects the unexpected call: $ERR"
+    assert_contains "$ERR" "unexpected call" "stderr mentions the stub"
+}
+
 echo "test-upstream-issue.sh"
 test_case "search: https" t_search_https
 test_case "search: ssh" t_search_ssh
@@ -106,4 +113,5 @@ test_case "create: body-file必須" t_create_requires_body_file
 test_case "モード未指定はexit 1" t_no_mode
 test_case "値の欠けたオプションでハングしない" t_missing_value_no_hang
 test_case "body-file の絶対パス" t_windows_abs_body_file
+test_case "gh スタブ: 設定しないと gh 呼び出しは失敗する" t_default_stub_rejects_gh
 summary
