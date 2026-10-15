@@ -75,4 +75,12 @@ foreach ($rel in $files) {
 }
 Write-Host "EOL/BOM: $($files.Count) files checked"
 
+# sh / ps1 のテストケース名の一致検査(Issue の C-2)。結果(case-parity.ps1 自身の出力)を含めて合否を反映する
+$parityOut = & pwsh -NoProfile -File "$PSScriptRoot/case-parity.ps1"
+$parityOut | ForEach-Object { Write-Host $_ }
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "CASE PARITY ERROR: tests/case-parity.ps1 が失敗"
+    $failed = $true
+}
+
 if ($failed) { exit 1 } else { Write-Host "ALL CHECKS PASSED"; exit 0 }

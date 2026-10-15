@@ -1,0 +1,18 @@
+# case-parity.ps1 の許可リスト。1 行 1 件で <テストファイル名>: <ケース名>(# 以降はコメント)。
+# ケース名はオプション名の正規化後(--kebab-case → -KebabCase)の名前で書く。
+# <テストファイル名>: * の行は当該ファイルの全ケースを許可する(片方にしか無いテストファイル用)。
+
+# シグナル処理は Python の有無で挙動が分かれるため、sh(dispatch-run.sh)専用の確認
+test-dispatch.sh: run: SIGTERMはsignal:15(python経路)
+test-dispatch.sh: run: SIGTERMはsignal:15(フォールバック経路)
+test-dispatch.sh: run: 通常の非0は数値のまま(フォールバック経路)
+
+# Windows PowerShell 5.1 の UTF-16LE 出力は ps1(dispatch-run.ps1)専用の確認
+test-dispatch.ps1: check: UTF-16LEのoutput.log(Windows PowerShell 5.1)を読める
+
+# sh(tasks 系の .sh)は tasklib.py を Python で実行するため __pycache__ の生成を確かめる必要がある。
+# ps1 版は tasklib.ps1 を使い Python を実行しないため、この確認は ps1 に該当しない
+test-tasks.sh: __pycache__ を作らない
+
+# test-exitcode.sh は存在しない(sh 側では各テストが直接 exit code を断言する)
+test-exitcode.ps1: *
