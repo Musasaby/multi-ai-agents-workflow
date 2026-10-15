@@ -189,6 +189,13 @@ pwsh -NoProfile -File tests/syntax-check.ps1
 - git 管理下と未追跡(`.gitignore` 対象外)のテキストファイルについて、CRLF を含むもの・
   非 ASCII 文字を含むのに BOM が無い `.ps1`・BOM 付きの `.ps1` 以外のファイル(`.sh`・`.py`・`.md` 等)を失敗にする
 
+### CI
+
+GitHub Actions(`.github/workflows/test.yml`)が push と pull_request で全テストを実行します:
+`ubuntu-latest` で `bash tests/run-all.sh`、`windows-latest` で `pwsh -NoProfile -File tests/run-all.ps1` と
+`pwsh -NoProfile -File tests/syntax-check.ps1`。POSIX 版のシグナル終了テストなど Linux でしか
+通らない経路の結果は、この CI で確認します。
+
 ### 改行コード
 
 `.gitattributes` で全テキストファイルを作業ツリーでも LF に固定しています(`core.autocrlf=true` の
