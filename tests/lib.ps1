@@ -11,21 +11,26 @@ $script:FailCount = 0
 $script:FailedNames = @()
 $script:CurrentTest = ''
 $script:Proj = $null
+$script:CreatedProjects = [System.Collections.Generic.List[string]]::new()
 
 function New-TestProject {
     $script:Proj = Join-Path ([System.IO.Path]::GetTempPath()) ("wf-test-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $script:CreatedProjects.Add($script:Proj)
     $null = New-Item -ItemType Directory -Force "$script:Proj/.agents/workflow/scripts", "$script:Proj/.agents/workflow/runs"
     Copy-Item "$script:TemplateScripts/*" "$script:Proj/.agents/workflow/scripts/"
     Copy-Item "$script:RepoRoot/_templates/workflow/config.json" "$script:Proj/.agents/workflow/config.json"
     Push-Location $script:Proj
-    git init -q -b main 2>$null
-    git config user.email "test@example.com"
-    git config user.name "test"
-    git config core.autocrlf false
-    Set-Content -Path .gitignore -Value '.agents/' -NoNewline
-    git add .gitignore
-    git commit -q -m "init"
-    Pop-Location
+    try {
+        git init -q -b main 2>$null
+        git config user.email "test@example.com"
+        git config user.name "test"
+        git config core.autocrlf false
+        Set-Content -Path .gitignore -Value '.agents/' -NoNewline
+        git add .gitignore
+        git commit -q -m "init"
+    } finally {
+        Pop-Location
+    }
 }
 
 function Remove-TestProject {
@@ -99,9 +104,12 @@ function Invoke-Script {
     param([string]$Name, [Parameter(ValueFromRemainingArguments = $true)][string[]]$Rest)
     $errFile = [System.IO.Path]::GetTempFileName()
     Push-Location $script:Proj
-    $outLines = & pwsh -NoProfile -File ".agents/workflow/scripts/$Name" @Rest 2> $errFile
-    $script:Code = $LASTEXITCODE
-    Pop-Location
+    try {
+        $outLines = & pwsh -NoProfile -File ".agents/workflow/scripts/$Name" @Rest 2> $errFile
+        $script:Code = $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
     $script:Out = (@($outLines) -join "`n").Trim()
     $script:Err = [System.IO.File]::ReadAllText($errFile)
     Remove-Item $errFile -Force
@@ -136,6 +144,13 @@ function Invoke-TestCase {
 }
 
 function Show-Summary {
+    # 一時ディレクトリの残留検出(New-TestProject が作ったディレクトリがすべて消えていること)
+    $leftovers = @($script:CreatedProjects | Where-Object { Test-Path $_ })
+    if ($leftovers.Count -gt 0) {
+        $script:FailCount++
+        $script:FailedNames += "一時ディレクトリの残留: $($leftovers -join ' ')"
+        $leftovers | ForEach-Object { Write-Host "    leftover temp dir: $_" }
+    }
     Write-Host ""
     Write-Host "PASS: $($script:PassCount)  FAIL: $($script:FailCount)"
     if ($script:FailCount -gt 0) {

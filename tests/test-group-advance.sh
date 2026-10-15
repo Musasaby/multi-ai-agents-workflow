@@ -61,7 +61,7 @@ EOF
 # origin(bare)付きのリポジトリに develop/g1 ブランチを用意し、
 # state.json を「作業グループ P が完了・ブランチ develop/g1」に揃える
 setup_advance() {
-    new_project
+    # テストケースが作ったダミープロジェクト($PROJ)をそのまま使う(作り直さない)
     (
         cd "$PROJ"
         git init -q --bare -b main .agents/remote.git

@@ -61,15 +61,18 @@ $paTasks = @'
 # origin(bare)付きのリポジトリに develop/g1 ブランチを用意し、
 # state.json を「作業グループ P が完了・ブランチ develop/g1」に揃える
 function Initialize-AdvanceProject {
-    New-TestProject
+    # テストケースが作ったダミープロジェクト($script:Proj)をそのまま使う(作り直さない)
     Push-Location $script:Proj
-    git init -q --bare -b main .agents/remote.git 2>$null
-    git remote add origin .agents/remote.git
-    Set-Content a.txt 'a'; git add a.txt; git commit -q -m "init main"
-    git push -q -u origin main 2>$null
-    git checkout -q -b develop/g1 2>$null
-    Set-Content b.txt 'b'; git add b.txt; git commit -q -m "feat: g1"
-    Pop-Location
+    try {
+        git init -q --bare -b main .agents/remote.git 2>$null
+        git remote add origin .agents/remote.git
+        Set-Content a.txt 'a'; git add a.txt; git commit -q -m "init main"
+        git push -q -u origin main 2>$null
+        git checkout -q -b develop/g1 2>$null
+        Set-Content b.txt 'b'; git add b.txt; git commit -q -m "feat: g1"
+    } finally {
+        Pop-Location
+    }
     Set-Tasks $paTasks
     Set-State 'T1:done' 'T2:pending' 'T3:pending'
     Set-StateGroup P

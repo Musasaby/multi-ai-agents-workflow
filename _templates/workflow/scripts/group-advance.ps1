@@ -184,7 +184,7 @@ try {
     [System.IO.File]::WriteAllText((Join-Path (Get-Location) $statePath), ($state | ConvertTo-Json -Depth 10) + "`n", [System.Text.UTF8Encoding]::new($false))
 
     Write-Output "ADVANCED $Branch $nextGroup"
-    exit 0
 } finally {
     Remove-Item $errFile -Force -ErrorAction SilentlyContinue
 }
+exit 0
