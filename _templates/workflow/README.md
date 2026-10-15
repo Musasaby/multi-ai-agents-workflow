@@ -314,7 +314,9 @@ JSONを直接書くことはない。
   .agents/workflow/scripts/state-sync.sh --init --source "<計画ソース>"
   ```
   state.json が既に存在する場合はエラー(exit 1)。branch は git から自動取得する。
-- **追記同期**(タスクの途中追加時。既存タスクの `status`/`retries`/`commit` には触れない):
+- **追記同期**(タスクの途中追加時。既存タスクの `status`/`retries`/`commit` には触れない。
+  既存タスクの見出し(タイトル)を修正した場合は、tasks.md に合わせて state.json の `title`
+  も更新し、変更があったタスクごとに `Updated title: <ID>` を stdout に出力する):
   ```powershell
   .agents/workflow/scripts/state-sync.ps1
   ```

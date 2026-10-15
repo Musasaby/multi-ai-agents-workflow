@@ -179,7 +179,8 @@ Write-Output "--- git diff --stat"
 git diff --stat
 Write-Output "--- output.log (last $tailLines lines)"
 if (Test-Path $logPath) {
-    Get-Content $logPath -Tail $tailLines -Encoding utf8
+    # 切り詰められた output.log(先頭の NUL)がそのまま出力されるため行ごとに除く(sh 版と揃える)
+    Get-Content $logPath -Tail $tailLines -Encoding utf8 | ForEach-Object { $_.Replace([string][char]0, '') }
 } else {
     Write-Output "(output.log not found)"
 }

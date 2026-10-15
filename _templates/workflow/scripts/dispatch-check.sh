@@ -186,7 +186,8 @@ echo "--- git diff --stat"
 git diff --stat
 echo "--- output.log (last ${TAIL_LINES} lines)"
 if [ -f "$LOG_PATH" ]; then
-    tail -n "$TAIL_LINES" "$LOG_PATH"
+    # 切り詰められた output.log(先頭の NUL)をそのまま tail に渡すと stdout に NUL が流れるため除く
+    LC_ALL=C tr -d '\000\r' < "$LOG_PATH" | tail -n "$TAIL_LINES"
 else
     echo "(output.log not found)"
 fi

@@ -8,12 +8,12 @@ jobs:
   test-posix:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: bash tests/run-all.sh
 
   test-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: pwsh -NoProfile -File tests/run-all.ps1
       - run: pwsh -NoProfile -File tests/syntax-check.ps1

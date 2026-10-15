@@ -129,8 +129,15 @@ if ($Init) {
     foreach ($t in $existing.tasks) {
         $out += [ordered]@{ id = $t.id; title = $t.title; status = $t.status; retries = $t.retries; commit = $t.commit }
     }
+    $outById = @{}
+    foreach ($o in $out) { $outById[$o.id] = $o }
     foreach ($t in $tasks) {
-        if (-not $existingStatus.Contains($t.id)) { $out += New-TaskEntry $t }
+        if (-not $existingStatus.Contains($t.id)) {
+            $out += New-TaskEntry $t
+        } elseif ($outById[$t.id].title -cne $t.title) {
+            $outById[$t.id].title = $t.title
+            Write-Output "Updated title: $($t.id)"
+        }
     }
     foreach ($id in $existingStatus.Keys) {
         if (-not $byId.ContainsKey($id)) {

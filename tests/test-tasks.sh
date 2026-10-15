@@ -172,6 +172,27 @@ EOF
     assert_eq done "$(state_get T1 status)" "existing status kept"
 }
 
+t_sync_append_title_updated() {
+    basic_tasks
+    write_state "T1:done" "T2:done" "T3:pending" "T4:pending"
+    sed -i 's/^## T1: 一番目$/## T1: 改題済み/' "$PROJ/.agents/workflow/tasks.md"
+    run_script state-sync.sh
+    assert_eq 0 "$CODE" "title update succeeds: $ERR"
+    assert_eq "改題済み" "$(state_get T1 title)" "title updated"
+    assert_eq done "$(state_get T1 status)" "existing status kept"
+    assert_contains "$OUT" "Updated title: T1" "stdout mentions Updated title"
+}
+
+t_sync_append_title_unchanged_silent() {
+    basic_tasks
+    write_state "T1:done" "T2:done" "T3:pending" "T4:pending"
+    run_script state-sync.sh # 初回: タイトルを tasks.md の見出しに合わせる
+    assert_eq 0 "$CODE" "first sync succeeds: $ERR"
+    run_script state-sync.sh
+    assert_eq 0 "$CODE" "second sync succeeds: $ERR"
+    assert_not_contains "$OUT" "Updated title" "no Updated title when unchanged"
+}
+
 # ---------- グループ解析とグループ間依存の検証 (#30) ----------
 
 # 解析結果のグループ一覧: 標準出力に "T1=,T2=P,..." 形式
@@ -827,6 +848,8 @@ test_case "sync: init 依存行なしはexit 1" t_sync_init_missing_line_rejecte
 test_case "sync: init 循環はexit 1" t_sync_init_cycle_rejected
 test_case "sync: 追記 不正ならstate不変" t_sync_append_invalid_keeps_state
 test_case "sync: 追記 正常" t_sync_append_valid
+test_case "sync: 追記 既存タスクのタイトルを更新" t_sync_append_title_updated
+test_case "sync: 追記 タイトル不変なら Updated を出さない" t_sync_append_title_unchanged_silent
 test_case "sync: グループ区切りの解析" t_sync_group_parse
 test_case "sync: グループ欄は位置より優先" t_sync_group_field_overrides
 test_case "sync: 存在しないグループ名はexit 1" t_sync_group_unknown_rejected

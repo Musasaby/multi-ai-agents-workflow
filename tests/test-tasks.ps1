@@ -130,6 +130,27 @@ Invoke-TestCase "sync: 追記 正常" {
     Assert-Eq done (Get-StateTask T1).status "existing status kept"
 }
 
+Invoke-TestCase "sync: 追記 既存タスクのタイトルを更新" {
+    Set-Tasks $basicTasks
+    Set-State 'T1:done' 'T2:done' 'T3:pending' 'T4:pending'
+    Set-Tasks ((Get-TasksText) -replace '## T1: 一番目', '## T1: 改題済み')
+    Invoke-Script state-sync.ps1
+    Assert-Eq 0 $script:Code "title update succeeds: $($script:Err)"
+    Assert-Eq "改題済み" (Get-StateTask T1).title "title updated"
+    Assert-Eq done (Get-StateTask T1).status "existing status kept"
+    Assert-Contains $script:Out "Updated title: T1" "stdout mentions Updated title"
+}
+
+Invoke-TestCase "sync: 追記 タイトル不変なら Updated を出さない" {
+    Set-Tasks $basicTasks
+    Set-State 'T1:done' 'T2:done' 'T3:pending' 'T4:pending'
+    Invoke-Script state-sync.ps1 # 初回: タイトルを tasks.md の見出しに合わせる
+    Assert-Eq 0 $script:Code "first sync succeeds: $($script:Err)"
+    Invoke-Script state-sync.ps1
+    Assert-Eq 0 $script:Code "second sync succeeds: $($script:Err)"
+    Assert-NotContains $script:Out "Updated title" "no Updated title when unchanged"
+}
+
 # ---------- グループ解析とグループ間依存の検証 (#30) ----------
 
 # tasklib のグループ解析(Read-TaskList / Get-GroupOrder)を直接検証する
