@@ -90,4 +90,33 @@ Invoke-TestCase "gh スタブ: 設定しないと gh 呼び出しは失敗する
     Assert-Contains $script:Err "unexpected call" "stderr mentions the stub"
 }
 
+Invoke-TestCase "gh スタブ: search で引数が渡り stdout が出る" {
+    # -DryRun なしで search が gh を実際に呼ぶ → スタブの応答と引数を確かめる(Issue D-2)
+    Set-GhStubResult -Stdout '#123 first issue'
+    Invoke-Script upstream-issue.ps1 -Search signal-241
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Out "Repository: Musasaby/multi-ai-agents-workflow" "repo line kept"
+    Assert-Contains $script:Out "#123 first issue" "gh stdout passthrough"
+    $log = Get-GhStubLog
+    Assert-Contains $log "issue list -R Musasaby/multi-ai-agents-workflow --state all" "gh args: $log"
+    Assert-Contains $log "--search signal-241 --limit 20" "query and --limit 20 in sequence: $log"
+}
+
+Invoke-TestCase "gh スタブ: create で引数が渡る" {
+    Set-GhStubResult -Stdout 'https://upstream.example.com/issues/123'
+    Write-Utf8File "$script:Proj/body.md" "x`n"
+    Invoke-Script upstream-issue.ps1 -Create -Title t -BodyFile body.md
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Out "https://upstream.example.com/issues/123" "gh stdout passthrough"
+    $log = Get-GhStubLog
+    Assert-Contains $log "issue create -R Musasaby/multi-ai-agents-workflow --title t --body-file" "gh args: $log"
+}
+
+Invoke-TestCase "gh スタブ: gh 失敗時は同じ終了コード" {
+    Set-GhStubResult -Code 4 -Stderr 'HTTP 401: Bad credentials'
+    Invoke-Script upstream-issue.ps1 -Search x
+    Assert-Eq 4 $script:Code "gh exit code propagated: $($script:Err)"
+    Assert-Contains $script:Err "HTTP 401" "gh stderr passthrough"
+}
+
 Show-Summary
