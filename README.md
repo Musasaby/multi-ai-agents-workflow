@@ -161,12 +161,16 @@ Copy-Item README.md .agents/skills/README.md -Force
 
 ```bash
 # POSIX 版(bash + python3 + git)
-for t in tests/test-*.sh; do bash "$t" || echo "FAILED: $t"; done
+bash tests/run-all.sh
 ```
 ```powershell
 # PowerShell 版(pwsh 7 + git)
-Get-ChildItem tests/test-*.ps1 | ForEach-Object { pwsh -NoProfile -File $_.FullName; if ($LASTEXITCODE) { "FAILED: $($_.Name)" } }
+pwsh -NoProfile -File tests/run-all.ps1
 ```
+
+`run-all` は各テストファイルを名前順に直列実行し、各ファイルの結果(PASS / FAIL と所要秒数)を
+1 行ずつ出力します。最後に失敗したファイルの一覧を出し、1 本でも失敗すれば exit 1、
+すべて成功なら exit 0 になります。
 
 POSIX 版のシグナル終了のテスト(Python 経由の経路)は Linux でのみ実行されます(Windows ではスキップ)。
 
