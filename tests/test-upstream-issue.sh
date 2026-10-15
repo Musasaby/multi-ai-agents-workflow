@@ -101,6 +101,37 @@ t_default_stub_rejects_gh() {
     assert_contains "$ERR" "unexpected call" "stderr mentions the stub"
 }
 
+t_stub_search_args() {
+    # --dry-run なしで search が gh を実際に呼ぶ → スタブの応答と引数を確かめる(Issue D-2)
+    gh_stub_set 0 "#123 first issue" ""
+    run_script upstream-issue.sh --search signal-241
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "Repository: Musasaby/multi-ai-agents-workflow" "repo line kept"
+    assert_contains "$OUT" "#123 first issue" "gh stdout passthrough"
+    local log
+    log="$(gh_stub_log)"
+    assert_contains "$log" "issue list -R Musasaby/multi-ai-agents-workflow --state all" "gh args: $log"
+    assert_contains "$log" "--search signal-241 --limit 20" "query and --limit 20 in sequence: $log"
+}
+
+t_stub_create_args() {
+    gh_stub_set 0 "https://upstream.example.com/issues/123" ""
+    printf 'x\n' > "$PROJ/body.md"
+    run_script upstream-issue.sh --create --title t --body-file body.md
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "https://upstream.example.com/issues/123" "gh stdout passthrough"
+    local log
+    log="$(gh_stub_log)"
+    assert_contains "$log" "issue create -R Musasaby/multi-ai-agents-workflow --title t --body-file" "gh args: $log"
+}
+
+t_stub_failure_code() {
+    gh_stub_set 4 "" "HTTP 401: Bad credentials"
+    run_script upstream-issue.sh --search x
+    assert_eq 4 "$CODE" "gh exit code propagated: $ERR"
+    assert_contains "$ERR" "HTTP 401" "gh stderr passthrough"
+}
+
 echo "test-upstream-issue.sh"
 test_case "search: https" t_search_https
 test_case "search: ssh" t_search_ssh
@@ -114,4 +145,7 @@ test_case "モード未指定はexit 1" t_no_mode
 test_case "値の欠けたオプションでハングしない" t_missing_value_no_hang
 test_case "body-file の絶対パス" t_windows_abs_body_file
 test_case "gh スタブ: 設定しないと gh 呼び出しは失敗する" t_default_stub_rejects_gh
+test_case "gh スタブ: search で引数が渡り stdout が出る" t_stub_search_args
+test_case "gh スタブ: create で引数が渡る" t_stub_create_args
+test_case "gh スタブ: gh 失敗時は同じ終了コード" t_stub_failure_code
 summary

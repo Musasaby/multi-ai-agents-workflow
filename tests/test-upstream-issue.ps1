@@ -28,6 +28,12 @@ Invoke-TestCase "search: ssh" {
     Assert-NotContains $script:Out ".git" "suffix stripped"
 }
 
+Invoke-TestCase "search: .gitなし" {
+    Set-Upstream "https://github.com/someone/repo"
+    Invoke-Script upstream-issue.ps1 -Search x -DryRun
+    Assert-Contains $script:Out "someone/repo" "url without .git"
+}
+
 Invoke-TestCase "upstream未設定はexit 1" {
     Set-Upstream ""
     Invoke-Script upstream-issue.ps1 -Search x -DryRun
@@ -66,11 +72,51 @@ Invoke-TestCase "モード未指定はexit 1" {
     Assert-Eq 1 $script:Code "exit code"
 }
 
+Invoke-TestCase "値の欠けたオプションでハングしない" {
+    Invoke-Script upstream-issue.ps1 -Create -Title
+    Assert-Eq 1 $script:Code "option without value -> exit 1"
+}
+
+Invoke-TestCase "body-file の絶対パス" {
+    Write-Utf8File "$script:Proj/body.md" "x`n"
+    Invoke-Script upstream-issue.ps1 -Create -Title t -BodyFile (Join-Path $script:Proj 'body.md') -DryRun
+    Assert-Eq 0 $script:Code "absolute body-file path accepted: $($script:Err)"
+}
+
 Invoke-TestCase "gh スタブ: 設定しないと gh 呼び出しは失敗する" {
     # -DryRun を付け忘れると gh を実際に呼ぶ → lib の既定スタブが失敗させる(Issue F-2)
     Invoke-Script upstream-issue.ps1 -Search "signal 241"
     Assert-Eq 97 $script:Code "gh stub rejects the unexpected call: $($script:Err)"
     Assert-Contains $script:Err "unexpected call" "stderr mentions the stub"
+}
+
+Invoke-TestCase "gh スタブ: search で引数が渡り stdout が出る" {
+    # -DryRun なしで search が gh を実際に呼ぶ → スタブの応答と引数を確かめる(Issue D-2)
+    Set-GhStubResult -Stdout '#123 first issue'
+    Invoke-Script upstream-issue.ps1 -Search signal-241
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Out "Repository: Musasaby/multi-ai-agents-workflow" "repo line kept"
+    Assert-Contains $script:Out "#123 first issue" "gh stdout passthrough"
+    $log = Get-GhStubLog
+    Assert-Contains $log "issue list -R Musasaby/multi-ai-agents-workflow --state all" "gh args: $log"
+    Assert-Contains $log "--search signal-241 --limit 20" "query and --limit 20 in sequence: $log"
+}
+
+Invoke-TestCase "gh スタブ: create で引数が渡る" {
+    Set-GhStubResult -Stdout 'https://upstream.example.com/issues/123'
+    Write-Utf8File "$script:Proj/body.md" "x`n"
+    Invoke-Script upstream-issue.ps1 -Create -Title t -BodyFile body.md
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Out "https://upstream.example.com/issues/123" "gh stdout passthrough"
+    $log = Get-GhStubLog
+    Assert-Contains $log "issue create -R Musasaby/multi-ai-agents-workflow --title t --body-file" "gh args: $log"
+}
+
+Invoke-TestCase "gh スタブ: gh 失敗時は同じ終了コード" {
+    Set-GhStubResult -Code 4 -Stderr 'HTTP 401: Bad credentials'
+    Invoke-Script upstream-issue.ps1 -Search x
+    Assert-Eq 4 $script:Code "gh exit code propagated: $($script:Err)"
+    Assert-Contains $script:Err "HTTP 401" "gh stderr passthrough"
 }
 
 Show-Summary

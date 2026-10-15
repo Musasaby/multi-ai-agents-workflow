@@ -59,7 +59,7 @@ Invoke-TestCase "run: 正常終了はEXIT:0" {
     Assert-Contains ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.log")) "hello" "output.log"
 }
 
-Invoke-TestCase "run: 非0は数値のまま" {
+Invoke-TestCase "run: 通常の非0は数値のまま" {
     Set-Child 'exit 3'
     Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
     Assert-Eq "EXIT:3" (Get-DoneExit) "done marker"

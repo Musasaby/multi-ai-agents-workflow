@@ -98,6 +98,13 @@ Invoke-TestCase "コミットハッシュを小文字に正規化" {
     Assert-Eq abc1234 (Get-StateTask T1).commit "commit hash normalized to lowercase"
 }
 
+Invoke-TestCase "retries が null" {
+    Write-Utf8File "$script:Proj/.agents/workflow/state.json" '{"source":"s","branch":"b","updated_at":"x","tasks":[{"id":"T1","title":"t","status":"in_review","retries":null,"commit":null}]}'
+    Invoke-Script task-state.ps1 T1 retry
+    Assert-Eq 0 $script:Code "retries null treated as 0: $($script:Err)"
+    Assert-Eq 1 (Get-StateTask T1).retries "retries incremented from null"
+}
+
 Invoke-TestCase "動作名は大文字小文字を区別" {
     Set-State 'T1:pending'
     Assert-Reject 1 @('T1', 'START')
