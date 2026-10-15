@@ -61,7 +61,7 @@ $paTasks = @'
 # origin(bare)付きのリポジトリに develop/g1 ブランチを用意し、
 # state.json を「作業グループ P が完了・ブランチ develop/g1」に揃える
 function Initialize-AdvanceProject {
-    New-TestProject
+    # テストケースが作ったダミープロジェクト($script:Proj)をそのまま使う(作り直さない)
     Push-Location $script:Proj
     git init -q --bare -b main .agents/remote.git 2>$null
     git remote add origin .agents/remote.git
