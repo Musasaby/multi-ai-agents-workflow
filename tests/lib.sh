@@ -12,6 +12,7 @@ TEMPLATE_SCRIPTS="$REPO_ROOT/_templates/workflow/scripts"
 PASS_COUNT=0
 FAIL_COUNT=0
 FAILED_NAMES=()
+CREATED_PROJECTS=""
 
 # python3 は Windows ネイティブ版の場合 MSYS パス(/c/...)を解決できないため変換する
 py_path() {
@@ -21,6 +22,7 @@ py_path() {
 # 新しいダミープロジェクトを作り、そのパスを PROJ に設定する
 new_project() {
     PROJ="$(mktemp -d)"
+    CREATED_PROJECTS="$CREATED_PROJECTS $PROJ"
     mkdir -p "$PROJ/.agents/workflow/scripts" "$PROJ/.agents/workflow/runs"
     cp "$TEMPLATE_SCRIPTS"/* "$PROJ/.agents/workflow/scripts/"
     chmod +x "$PROJ/.agents/workflow/scripts/"*.sh
@@ -181,6 +183,17 @@ test_case() {
 }
 
 summary() {
+    # 一時ディレクトリの残留検出(new_project が作ったディレクトリがすべて消えていること)
+    local leftover=""
+    local dir
+    for dir in $CREATED_PROJECTS; do
+        [ -n "$dir" ] && [ -e "$dir" ] && leftover="$leftover $dir"
+    done
+    if [ -n "$leftover" ]; then
+        echo "    leftover temp dir(s):$leftover"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        FAILED_NAMES+=("一時ディレクトリの残留:$leftover")
+    fi
     echo
     echo "PASS: $PASS_COUNT  FAIL: $FAIL_COUNT"
     if [ "$FAIL_COUNT" -gt 0 ]; then
