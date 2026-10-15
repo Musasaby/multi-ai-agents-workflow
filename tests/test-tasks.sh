@@ -571,6 +571,14 @@ t_insert_preserves_crlf() {
     assert_contains "$(cat "$PROJ/.agents/workflow/tasks.md")" $'- **依存**: T1, T8\r' "CRLF kept"
 }
 
+# ---------- テスト環境の切り離し(Issue F-1) ----------
+
+t_test_git_reads_no_global_config() {
+    # lib.sh が GIT_CONFIG_NOSYSTEM / GIT_CONFIG_GLOBAL を設定しているため、
+    # git は利用者のグローバル設定を読まない(commit.gpgsign 等の影響を受けない)
+    assert_eq "" "$(git config --global --list 2>&1)" "global config is empty"
+}
+
 # ---------- next-task (#13) ----------
 
 t_next_first_ready_pending() {
@@ -851,4 +859,5 @@ test_case "gen: 参照ファイル欄が無ければ警告" t_gen_ref_files_abse
 test_case "gen: 参照ファイル なし は検証しない" t_gen_ref_files_none
 test_case "gen: @参照だけのAGENTS.mdは警告" t_gen_agents_md_at_only_warns
 test_case "gen: 同じ行の参照ファイルも検証する" t_gen_ref_files_inline
+test_case "テストの git はグローバル設定を読まない" t_test_git_reads_no_global_config
 summary

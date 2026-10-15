@@ -6,6 +6,11 @@
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
 
+# テストの git を利用者のグローバル設定・システム設定から切り離す(Issue F-1)。
+# テストに必要な設定(user.email 等)は new_project で各リポジトリのローカル設定に明示する
+export GIT_CONFIG_NOSYSTEM=1
+export GIT_CONFIG_GLOBAL=/dev/null
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEMPLATE_SCRIPTS="$REPO_ROOT/_templates/workflow/scripts"
 

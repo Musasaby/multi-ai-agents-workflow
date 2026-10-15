@@ -4,6 +4,11 @@
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
+
+# テストの git を利用者のグローバル設定・システム設定から切り離す(Issue F-1)。
+# lib は Linux でも動くため、NULL デバイスのパスは $IsWindows で切り替える
+$env:GIT_CONFIG_NOSYSTEM = '1'
+$env:GIT_CONFIG_GLOBAL = if ($IsWindows) { 'NUL' } else { '/dev/null' }
 $script:RepoRoot = (Resolve-Path "$PSScriptRoot/..").Path
 $script:TemplateScripts = Join-Path $script:RepoRoot '_templates/workflow/scripts'
 $script:PassCount = 0
