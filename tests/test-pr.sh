@@ -91,6 +91,11 @@ t_pr_no_tasks_rejected() {
     assert_eq 1 "$CODE" "exit code"
 }
 
+t_task_id_omitted() {
+    run_script dispatch-prompt-gen.sh
+    assert_eq 1 "$CODE" "exit code"
+}
+
 t_pr_no_origin_rejected() {
     setup_branch
     (cd "$PROJ" && git remote remove origin)
@@ -103,5 +108,6 @@ test_case "pr: プロンプト生成" t_pr_generates
 test_case "pr: 連番" t_pr_increments
 test_case "pr: main上はexit 1" t_pr_on_main_rejected
 test_case "pr: 対象タスクなしはexit 1" t_pr_no_tasks_rejected
+test_case "TaskId省略はexit 1" t_task_id_omitted
 test_case "pr: origin が無ければexit 1" t_pr_no_origin_rejected
 summary

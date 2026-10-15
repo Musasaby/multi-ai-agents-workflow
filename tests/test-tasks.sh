@@ -640,6 +640,19 @@ t_insert_before_space_separated() {
     assert_eq 0 "$CODE" "space separated --before: $ERR"
 }
 
+t_heading_case_sensitive() {
+    write_tasks <<'EOF'
+## T1: a
+- **依存**: なし
+
+## t2: lower
+- **依存**: T1
+EOF
+    run_script state-sync.sh --init --source test
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_eq "T1" "$(state_ids)" "lowercase heading ignored (same as sh)"
+}
+
 t_next_empty_state() {
     basic_tasks
     write_state
@@ -846,6 +859,7 @@ test_case "next: ブロックはexit 4" t_next_blocked
 test_case "next: 依存欄不正はexit 1" t_next_invalid_deps
 test_case "__pycache__ を作らない" t_no_pycache
 test_case "insert: 空白区切りの--before" t_insert_before_space_separated
+test_case "見出しは大文字小文字を区別" t_heading_case_sensitive
 test_case "next: tasks空はexit 1" t_next_empty_state
 test_case "gen: 不正なTaskIdはexit 1" t_gen_invalid_task_id
 test_case "gen: 空のquality_gateステップは載せない" t_gen_skips_empty_steps

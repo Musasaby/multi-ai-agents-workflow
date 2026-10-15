@@ -28,6 +28,12 @@ Invoke-TestCase "search: ssh" {
     Assert-NotContains $script:Out ".git" "suffix stripped"
 }
 
+Invoke-TestCase "search: .gitなし" {
+    Set-Upstream "https://github.com/someone/repo"
+    Invoke-Script upstream-issue.ps1 -Search x -DryRun
+    Assert-Contains $script:Out "someone/repo" "url without .git"
+}
+
 Invoke-TestCase "upstream未設定はexit 1" {
     Set-Upstream ""
     Invoke-Script upstream-issue.ps1 -Search x -DryRun
@@ -64,6 +70,17 @@ Invoke-TestCase "create: body-file必須" {
 Invoke-TestCase "モード未指定はexit 1" {
     Invoke-Script upstream-issue.ps1 -DryRun
     Assert-Eq 1 $script:Code "exit code"
+}
+
+Invoke-TestCase "値の欠けたオプションでハングしない" {
+    Invoke-Script upstream-issue.ps1 -Create -Title
+    Assert-Eq 1 $script:Code "option without value -> exit 1"
+}
+
+Invoke-TestCase "body-file の絶対パス" {
+    Write-Utf8File "$script:Proj/body.md" "x`n"
+    Invoke-Script upstream-issue.ps1 -Create -Title t -BodyFile (Join-Path $script:Proj 'body.md') -DryRun
+    Assert-Eq 0 $script:Code "absolute body-file path accepted: $($script:Err)"
 }
 
 Invoke-TestCase "gh スタブ: 設定しないと gh 呼び出しは失敗する" {

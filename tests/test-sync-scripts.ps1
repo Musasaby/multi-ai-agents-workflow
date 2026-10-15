@@ -55,6 +55,14 @@ Invoke-TestCase "-CopyMissing" {
     Assert-Eq "Write-Output old" ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/scripts/dispatch-run.ps1").Trim()) "differing file untouched"
 }
 
+Invoke-TestCase "-CopyMissing: scripts/ 未作成" {
+    Initialize-UserProject
+    Remove-Item -Recurse -Force "$script:Proj/.agents/workflow/scripts"
+    Invoke-Sync '-CopyMissing'
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-FileExists "$script:Proj/.agents/workflow/scripts/state-sync.ps1" "scripts dir created"
+}
+
 Invoke-TestCase "-Overwrite" {
     Initialize-UserProject
     Invoke-Sync '-Overwrite' 'scripts/dispatch-run.ps1'
