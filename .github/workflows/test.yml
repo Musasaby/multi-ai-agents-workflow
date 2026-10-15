@@ -1,0 +1,19 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-posix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash tests/run-all.sh
+
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pwsh -NoProfile -File tests/run-all.ps1
+      - run: pwsh -NoProfile -File tests/syntax-check.ps1

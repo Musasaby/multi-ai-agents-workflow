@@ -161,12 +161,20 @@ Copy-Item README.md .agents/skills/README.md -Force
 
 ```bash
 # POSIX 版(bash + python3 + git)
-for t in tests/test-*.sh; do bash "$t" || echo "FAILED: $t"; done
+bash tests/run-all.sh
 ```
 ```powershell
 # PowerShell 版(pwsh 7 + git)
-Get-ChildItem tests/test-*.ps1 | ForEach-Object { pwsh -NoProfile -File $_.FullName; if ($LASTEXITCODE) { "FAILED: $($_.Name)" } }
+pwsh -NoProfile -File tests/run-all.ps1
 ```
+
+`run-all` は各テストファイルを名前順に実行し、各ファイルの結果(PASS / FAIL と所要秒数)を
+1 行ずつ出力します。最後に失敗したファイルの一覧を出し、1 本でも失敗すれば exit 1、
+すべて成功なら exit 0 になります。
+
+既定は直列実行ですが、`--jobs <N>`(`run-all.ps1` は `-Jobs <N>`)を付けると
+テストファイル単位の並列実行になります。並列実行時も各ファイルの出力は混ぜず、
+実行後にファイルごとにまとめて出します。
 
 POSIX 版のシグナル終了のテスト(Python 経由の経路)は Linux でのみ実行されます(Windows ではスキップ)。
 
@@ -180,6 +188,13 @@ pwsh -NoProfile -File tests/syntax-check.ps1
 - `_templates/workflow/scripts/` と `tests/` の `.ps1` をパースし、`.sh` を `bash -n` で検査する
 - git 管理下と未追跡(`.gitignore` 対象外)のテキストファイルについて、CRLF を含むもの・
   非 ASCII 文字を含むのに BOM が無い `.ps1`・BOM 付きの `.ps1` 以外のファイル(`.sh`・`.py`・`.md` 等)を失敗にする
+
+### CI
+
+GitHub Actions(`.github/workflows/test.yml`)が push と pull_request で全テストを実行します:
+`ubuntu-latest` で `bash tests/run-all.sh`、`windows-latest` で `pwsh -NoProfile -File tests/run-all.ps1` と
+`pwsh -NoProfile -File tests/syntax-check.ps1`。POSIX 版のシグナル終了テストなど Linux でしか
+通らない経路の結果は、この CI で確認します。
 
 ### 改行コード
 
