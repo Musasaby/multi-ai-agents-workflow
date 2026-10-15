@@ -46,7 +46,7 @@ foreach ($p in @($tasksPath, $statePath)) {
 . "$PSScriptRoot/tasklib.ps1"
 
 # --- 前提チェック: 作業グループの完了判定(next-task と同じグループ判定) ---
-$lines = @(Split-TaskLines ([System.IO.File]::ReadAllText($tasksPath, [System.Text.Encoding]::UTF8)))
+$lines = @(Split-TaskLines ([System.IO.File]::ReadAllText((Join-Path (Get-Location) $tasksPath), [System.Text.Encoding]::UTF8)))
 $tasks = @(Read-TaskList $lines)
 try {
     [void](Resolve-TaskDeps $tasks -CheckCycles)
