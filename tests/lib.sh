@@ -15,6 +15,9 @@ export GIT_CONFIG_GLOBAL=/dev/null
 # 既定(gh_stub_set で設定していない状態)では、意図しない gh 呼び出しを
 # stderr に記録して exit 97 で失敗させる(利用先テストでの実 gh 呼び出し防止)
 GH_STUB_DIR="$(mktemp -d)"
+# ダミープロジェクトに .git が無い場合でも、git が親ディレクトリの本物のリポジトリにたどり着かないようにする
+GIT_CEILING_DIRECTORIES="$(dirname "$GH_STUB_DIR")"
+export GIT_CEILING_DIRECTORIES
 cat > "$GH_STUB_DIR/gh" <<'EOF'
 #!/bin/bash
 [ -n "${GH_STUB_LOG:-}" ] && printf '%s\n' "$*" >> "$GH_STUB_LOG"
@@ -27,7 +30,11 @@ printf 'gh stub: unexpected call: %s\n' "$*" >&2
 exit 97
 EOF
 chmod +x "$GH_STUB_DIR/gh"
-export PATH="$GH_STUB_DIR:$PATH"
+if command -v cygpath > /dev/null 2>&1; then
+    export PATH="$(cygpath -u "$GH_STUB_DIR"):$PATH"
+else
+    export PATH="$GH_STUB_DIR:$PATH"
+fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEMPLATE_SCRIPTS="$REPO_ROOT/_templates/workflow/scripts"
@@ -42,6 +49,21 @@ py_path() {
     if command -v cygpath > /dev/null 2>&1; then cygpath -m "$1"; else echo "$1"; fi
 }
 
+# <dir> が自分自身の git リポジトリであることを確かめる(親の本物のリポジトリに git を実行しないため)
+assert_own_repo() {
+    local dir="$1" expected actual
+    if command -v cygpath > /dev/null 2>&1; then
+        expected="$(cygpath -m "$dir")"
+    else
+        expected="$(cd "$dir" && pwd -P)"
+    fi
+    actual="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)"
+    if [ "$actual" != "$expected" ]; then
+        echo "FATAL: test project is not its own git repository: $dir (toplevel: ${actual:-none})" >&2
+        exit 1
+    fi
+}
+
 # 新しいダミープロジェクトを作り、そのパスを PROJ に設定する
 new_project() {
     PROJ="$(mktemp -d)"
@@ -50,16 +72,17 @@ new_project() {
     cp "$TEMPLATE_SCRIPTS"/* "$PROJ/.agents/workflow/scripts/"
     chmod +x "$PROJ/.agents/workflow/scripts/"*.sh
     cp "$REPO_ROOT/_templates/workflow/config.json" "$PROJ/.agents/workflow/config.json"
+    git -C "$PROJ" init -q -b main
+    assert_own_repo "$PROJ"
     (
-        cd "$PROJ"
-        git init -q -b main
+        cd "$PROJ" || exit 1
         git config user.email "test@example.com"
         git config user.name "test"
         git config core.autocrlf false
         printf '.agents/\n' > .gitignore
         git add .gitignore
         git commit -q -m "init"
-    )
+    ) || exit 1
 }
 
 cleanup_project() {
