@@ -112,10 +112,14 @@ PY
 }
 
 # 子を python にする(Windows ネイティブ python から呼ぶ bash は WSL の bash になることがあり、
-# その場合は Windows 側の環境変数を引き継がないため)
+# その場合は Windows 側の環境変数を引き継がないため)。$1 = child.py の本文(省略時は XDG_DATA_HOME の表示)
 set_py_child() {
     set_child ''
-    printf 'import os\nprint("DATA=" + os.environ.get("XDG_DATA_HOME", ""))\n' > "$PROJ/child.py"
+    if [ -n "$1" ]; then
+        printf '%s\n' "$1" > "$PROJ/child.py"
+    else
+        printf 'import os\nprint("DATA=" + os.environ.get("XDG_DATA_HOME", ""))\n' > "$PROJ/child.py"
+    fi
     python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" <<'PY'
 import json, sys
 p = sys.argv[1]
@@ -144,6 +148,67 @@ t_run_xdg_isolated() {
     set_py_child
     set_isolate true
     assert_contains "$(child_xdg)" "DATA=.agents/workflow/.config" "true: XDG isolated"
+}
+
+# T9(#46): 子の環境変数を NAME=<値>(\ は / に置換)で1行ずつ出力する子
+set_env_py_child() {
+    set_py_child 'import os
+print("TMPDIR=" + os.environ.get("TMPDIR", "").replace("\\", "/"))
+print("TEMP=" + os.environ.get("TEMP", "").replace("\\", "/"))
+print("TMP=" + os.environ.get("TMP", "").replace("\\", "/"))
+print("GIT_CEILING_DIRECTORIES=" + os.environ.get("GIT_CEILING_DIRECTORIES", "").replace("\\", "/"))'
+}
+
+# output.log から <変数名>=<値> の行の値を取り出す(CR を除く)
+child_env() { # $1 = 変数名
+    sed -n "s/^$1=//p" "$PROJ/.agents/workflow/runs/T1-1/output.log" | tr -d '\r'
+}
+
+# 値が .agents/workflow/runs/T1-1/tmp で終わる絶対パス(/ または <ドライブ>:/ 始まり)かを確かめる
+assert_run_tmp_path() { # $1 = 値, $2 = メッセージ
+    case "$1" in
+        /*/.agents/workflow/runs/T1-1/tmp|[A-Za-z]:/*/.agents/workflow/runs/T1-1/tmp) _record ok ;;
+        *) _record ng "$2 (expected / or drive-letter path ending with .agents/workflow/runs/T1-1/tmp, got '$1')" ;;
+    esac
+}
+
+# 呼び出し元の TMP 系環境変数を /caller/tmp にして dispatch-run を実行する
+run_with_caller_tmp() {
+    (
+        cd "$PROJ" &&
+        TMPDIR=/caller/tmp TEMP=/caller/tmp TMP=/caller/tmp GIT_CEILING_DIRECTORIES=/caller/tmp \
+            .agents/workflow/scripts/dispatch-run.sh T1 1
+    ) > /dev/null 2>&1
+}
+
+t_run_child_tmp_dir() {
+    set_env_py_child
+    run_with_caller_tmp
+    assert_run_tmp_path "$(child_env TMPDIR)" "child TMPDIR points to runs/T1-1/tmp"
+    assert_run_tmp_path "$(child_env TEMP)" "child TEMP points to runs/T1-1/tmp"
+    assert_run_tmp_path "$(child_env TMP)" "child TMP points to runs/T1-1/tmp"
+    if [ -d "$PROJ/.agents/workflow/runs/T1-1/tmp" ]; then _record ok; else _record ng "runs/T1-1/tmp directory exists"; fi
+}
+
+t_run_child_git_ceiling() {
+    set_env_py_child
+    run_with_caller_tmp
+    assert_run_tmp_path "$(child_env GIT_CEILING_DIRECTORIES)" "child GIT_CEILING_DIRECTORIES points to runs/T1-1/tmp"
+}
+
+t_run_caller_tmp_unchanged() {
+    set_env_py_child
+    local result
+    # 呼び出し元のシェル(このサブシェル)の TMPDIR/TEMP/TMP が実行後も書き換わらないことを確かめる
+    result="$(
+        export TMPDIR=/caller/tmp TEMP=/caller/tmp TMP=/caller/tmp
+        cd "$PROJ" || exit 1
+        .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1
+        printf 'TMPDIR=%s\nTEMP=%s\nTMP=%s\n' "$TMPDIR" "$TEMP" "$TMP"
+    )"
+    assert_contains "$result" "TMPDIR=/caller/tmp" "caller TMPDIR unchanged"
+    assert_contains "$result" "TEMP=/caller/tmp" "caller TEMP unchanged"
+    assert_contains "$result" "TMP=/caller/tmp" "caller TMP unchanged"
 }
 
 # ---------- dispatch-check ----------
@@ -446,6 +511,9 @@ test_case "run: SIGTERMはsignal:15(フォールバック経路)" t_run_signal_f
 test_case "run: 通常の非0は数値のまま(フォールバック経路)" t_run_exit_fallback
 test_case "run: isolate_xdg 未指定/false は XDG を引き継ぐ" t_run_xdg_inherited_by_default
 test_case "run: isolate_xdg true は XDG を切り替える" t_run_xdg_isolated
+test_case "run: 子の TMPDIR/TEMP/TMP は runs/<ID>-<試行>/tmp を指す" t_run_child_tmp_dir
+test_case "run: 子の GIT_CEILING_DIRECTORIES は runs/<ID>-<試行>/tmp を指す" t_run_child_git_ceiling
+test_case "run: 呼び出し元の TMPDIR/TEMP/TMP を書き換えない" t_run_caller_tmp_unchanged
 test_case "check: 正常" t_check_ok
 test_case "check: signalはexit 4" t_check_signal
 test_case "check: 非0はexit 4" t_check_nonzero
