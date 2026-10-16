@@ -10,6 +10,9 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 $env:GIT_CONFIG_NOSYSTEM = '1'
 $env:GIT_CONFIG_GLOBAL = if ($IsWindows) { 'NUL' } else { '/dev/null' }
 
+# ダミープロジェクトに .git が無い場合でも、git が親ディレクトリの本物のリポジトリにたどり着かないようにする
+$env:GIT_CEILING_DIRECTORIES = [System.IO.Path]::GetTempPath().TrimEnd('\', '/')
+
 # gh スタブ(gh.cmd を PATH 先頭に置き、Set-GhStubResult で挙動を切り替える)。
 # 既定(Set-GhStubResult で設定していない状態)では、意図しない gh 呼び出しを
 # stderr に記録して exit 97 で失敗させる(利用先テストでの実 gh 呼び出し防止)
@@ -69,15 +72,27 @@ $script:CurrentTest = ''
 $script:Proj = $null
 $script:CreatedProjects = [System.Collections.Generic.List[string]]::new()
 
+# $Dir が自分自身の git リポジトリであることを確かめる(親の本物のリポジトリに git を実行しないため)
+function Assert-OwnRepo {
+    param([string]$Dir)
+    $expected = ((Resolve-Path -LiteralPath $Dir).Path -replace '\\', '/').TrimEnd('/')
+    $actual = (git -C $Dir rev-parse --show-toplevel 2>$null)
+    if ($LASTEXITCODE -ne 0 -or "$actual" -ne $expected) {
+        [Console]::Error.WriteLine("FATAL: test project is not its own git repository: $Dir (toplevel: $actual)")
+        exit 1
+    }
+}
+
 function New-TestProject {
     $script:Proj = Join-Path ([System.IO.Path]::GetTempPath()) ("wf-test-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
     $script:CreatedProjects.Add($script:Proj)
     $null = New-Item -ItemType Directory -Force "$script:Proj/.agents/workflow/scripts", "$script:Proj/.agents/workflow/runs"
     Copy-Item "$script:TemplateScripts/*" "$script:Proj/.agents/workflow/scripts/"
     Copy-Item "$script:RepoRoot/_templates/workflow/config.json" "$script:Proj/.agents/workflow/config.json"
-    Push-Location $script:Proj
+    git -C $script:Proj init -q -b main 2>$null
+    Assert-OwnRepo $script:Proj
+    Push-Location $script:Proj -ErrorAction Stop
     try {
-        git init -q -b main 2>$null
         git config user.email "test@example.com"
         git config user.name "test"
         git config core.autocrlf false
