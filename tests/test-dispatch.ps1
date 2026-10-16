@@ -59,6 +59,15 @@ Invoke-TestCase "run: 正常終了はEXIT:0" {
     Assert-Contains ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.log")) "hello" "output.log"
 }
 
+Invoke-TestCase "run: 起動時の git 状態を git-state.txt に記録する" {
+    Set-Child 'Write-Output hello; exit 0'
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    $expected = "$(git -C "$script:Proj" rev-parse HEAD)".Trim()
+    $gitStateLines = [System.IO.File]::ReadAllLines("$script:Proj/.agents/workflow/runs/T1-1/git-state.txt")
+    Assert-Eq "head $expected" $gitStateLines[0] "git-state.txt first line"
+    Assert-Eq 4 $gitStateLines.Count "git-state.txt has 4 lines"
+}
+
 Invoke-TestCase "run: 通常の非0は数値のまま" {
     Set-Child 'exit 3'
     Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1

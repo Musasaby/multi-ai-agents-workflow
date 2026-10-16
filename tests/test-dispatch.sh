@@ -53,6 +53,17 @@ t_run_exit0() {
     assert_contains "$(cat "$PROJ/.agents/workflow/runs/T1-1/output.log")" "hello" "output.log"
 }
 
+t_run_git_state() {
+    set_child 'echo hello'
+    run_script dispatch-run.sh T1 1
+    local expected first lines
+    expected="$(git -C "$PROJ" rev-parse HEAD)"
+    first="$(head -1 "$PROJ/.agents/workflow/runs/T1-1/git-state.txt")"
+    assert_eq "head $expected" "$first" "git-state.txt first line"
+    lines="$(wc -l < "$PROJ/.agents/workflow/runs/T1-1/git-state.txt" | tr -d '[:space:]')"
+    assert_eq 4 "$lines" "git-state.txt has 4 lines"
+}
+
 t_run_exit_nonzero() {
     set_child 'exit 3'
     run_script dispatch-run.sh T1 1
@@ -373,6 +384,7 @@ t_check_permission_denied_colored() {
 echo "test-dispatch.sh"
 
 test_case "run: 正常終了はEXIT:0" t_run_exit0
+test_case "run: 起動時の git 状態を git-state.txt に記録する" t_run_git_state
 test_case "run: 通常の非0は数値のまま" t_run_exit_nonzero
 test_case "run: SIGTERMはsignal:15(python経路)" t_run_signal_python
 test_case "run: SIGTERMはsignal:15(フォールバック経路)" t_run_signal_fallback

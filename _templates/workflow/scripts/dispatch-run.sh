@@ -45,6 +45,10 @@ for f in "$PROMPT_PATH" .agents/workflow/state.json .agents/workflow/tasks.md .a
   printf '%s  %s\n' "$h" "$f" >> "$GUARD_PATH"
 done
 
+# 起動時の git 状態(HEAD・ブランチ・参照・設定)を git-state.txt に記録する。dispatch-check が
+# 実行後の状態と比べて、子がリポジトリのどこを変えたかを特定する(失敗しても起動は止めない)
+"$(dirname "$0")/git-state.sh" > "$RUN_DIR/git-state.txt"
+
 CMD_TEMPLATE=$(jq -r '.child_agent.command_template' .agents/workflow/config.json 2>/dev/null || \
   python3 -c "import json; print(json.load(open('.agents/workflow/config.json'))['child_agent']['command_template'])" 2>/dev/null || \
   sed -n 's/.*"command_template"[[:space:]]*:[[:space:]]*"\(.*\)"[[:space:]]*,\{0,1\}[[:space:]]*$/\1/p' .agents/workflow/config.json | sed 's/\\"/"/g')
