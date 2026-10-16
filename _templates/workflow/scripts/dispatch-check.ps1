@@ -1,7 +1,8 @@
 ﻿# 子エージェントの完了検知後に毎回実行し、終了状態と成果物の有無を機械的に判定する。
 # exit(複数に当たる場合は上にあるものを優先する):
 #   8=管理ファイルの改ざん(prompt.md・state.json・tasks.md・config.json が dispatch-run の起動時から
-#     変わった/消えた、guard.sha256・output.log が無い、output.log が実行中に切り詰められた)
+#     変わった/消えた、guard.sha256・output.log・git-state.txt が無い、output.log が実行中に
+#     切り詰められた、本物のリポジトリの git 状態(HEAD・ブランチ・参照・設定)が変わった)
 #   4=異常終了(非0・signal・crashed)
 #   6=権限拒否で中断(output.log に子CLIの権限拒否の記録がある)
 #   5=完了報告が無い・無効(最後の `## 完了報告` の後にツール実行の記録が続く、必須項目が無い・テンプレートのまま)
@@ -69,6 +70,39 @@ if (-not (Test-Path $guardPath)) {
         }
     }
 }
+
+# --- 本物のリポジトリの git 状態の検証(dispatch-run が起動時に git-state.txt に記録した値と比べる) ---
+# タスク種別の判定(完了報告の必須項目と変更0件の判定で使う)は、ここでも $isPr を使うため
+# この位置に置いている。PR 作成の run(タスクIDが pr- で始まる)は config を比べない
+# (子が git push -u で .git/config を正当に変えるため)
+$isPr = $TaskId.StartsWith('pr-')
+$required = if ($isPr) { @('PR URL') } else { @('変更ファイル', 'テスト結果') }
+# 各行を `-split ' ', 2` で名前と値に分けてハッシュテーブルに入れてから項目ごとに比べる
+function ConvertTo-StateMap {
+    param([string[]]$Lines)
+    $map = @{}
+    foreach ($line in $Lines) {
+        $line = "$line".TrimEnd("`r")
+        if (-not $line) { continue }
+        $name, $value = $line -split ' ', 2
+        $map["$name"] = "$value"
+    }
+    return $map
+}
+$gitStatePath = "$runDir/git-state.txt"
+if (-not (Test-Path $gitStatePath)) {
+    $guardIssues += 'git-state.txt not found (deleted, or the run was not started by dispatch-run)'
+} else {
+    $recordedState = ConvertTo-StateMap @([System.IO.File]::ReadAllText((Resolve-Path $gitStatePath), [System.Text.Encoding]::UTF8) -split "`r?`n")
+    # git-state.ps1 の stderr は捨てる(失敗時は空出力になり、全項目が変わったと判定される)
+    $currentState = ConvertTo-StateMap @(& pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1" 2> $null)
+    foreach ($name in @('head', 'branch', 'refs', 'config')) {
+        if ($isPr -and $name -eq 'config') { continue }
+        if ("$($recordedState[$name])" -ne "$($currentState[$name])") {
+            $guardIssues += "git changed: $name"
+        }
+    }
+}
 $logText = $null
 if (-not (Test-Path $logPath)) {
     $guardIssues += "deleted: $logPath"
@@ -109,8 +143,6 @@ $toolFlags = @($rawLines | ForEach-Object { ($_ -match $toolRe) -or ($_ -match '
 # (子がテンプレートやドキュメントを表示しただけの行に一致させないため)。必須項目は
 # 通常のタスクが「変更ファイル」「テスト結果」、PR 作成の run(pr-*)が「PR URL」。
 # 値が同じ行に無い場合は、次の行からのインデントされた箇条書きを値とみなす。
-$isPr = $TaskId.StartsWith('pr-')
-$required = if ($isPr) { @('PR URL') } else { @('変更ファイル', 'テスト結果') }
 function Get-ReportResult {
     param([string[]]$Lines, [bool[]]$ToolFlags, [string[]]$Required)
     $last = -1

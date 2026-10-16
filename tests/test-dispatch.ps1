@@ -13,7 +13,8 @@ function Set-Child {
 
 function Get-DoneExit { return (Get-Content "$script:Proj/.agents/workflow/runs/T1-1/done" -Encoding utf8)[0] }
 
-# dispatch-run と同じ形式で guard.sha256 を書く(runs/<run>/prompt.md と管理ファイル)
+# dispatch-run と同じ形式で guard.sha256 を書き(runs/<run>/prompt.md と管理ファイル)、
+# dispatch-run と同じく git-state.ps1 の出力で git-state.txt も書く
 function Write-Guard {
     param([string]$Run)
     Push-Location $script:Proj
@@ -23,6 +24,10 @@ function Write-Guard {
     }
     Pop-Location
     Write-Utf8File "$script:Proj/.agents/workflow/runs/$Run/guard.sha256" (($lines -join "`n") + "`n")
+    Push-Location $script:Proj
+    $gitState = @(& pwsh -NoProfile -File .agents/workflow/scripts/git-state.ps1)
+    Pop-Location
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/$Run/git-state.txt" (($gitState -join "`n") + "`n")
 }
 
 function New-Run {
@@ -225,6 +230,15 @@ Invoke-TestCase "check: guard.sha256が無ければexit 8" {
     Assert-Contains $script:Out "guard.sha256 not found" "issue"
 }
 
+Invoke-TestCase "check: git-state.txt が無ければ exit 8" {
+    New-Run 0 $report
+    Remove-Item "$script:Proj/.agents/workflow/runs/T1-1/git-state.txt"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 8 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Guard: NG" "guard ng"
+    Assert-Contains $script:Out "git-state.txt not found" "issue"
+}
+
 Invoke-TestCase "check: output.logの切り詰めはexit 8" {
     New-Run 0 $report
     Write-Utf8File "$script:Proj/a.txt" "x`n"
@@ -259,6 +273,37 @@ Invoke-TestCase "run+check: 子がprompt.mdを消せばexit 8" {
     Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
     Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
     Assert-Eq 8 $script:Code "exit code: $($script:Out)"
+}
+
+# T8: 子が本物のリポジトリの git 状態(HEAD・ブランチ・参照・設定)を変えれば exit 8
+Invoke-TestCase "run+check: 子がコミットすれば exit 8(git changed: head)" {
+    Set-State 'T1:in_progress'
+    Set-Child "git commit -q --allow-empty -m x"
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 8 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Guard: NG" "guard ng"
+    Assert-Contains $script:Out "git changed: head" "issue"
+}
+
+Invoke-TestCase "run+check: 子が git config を変えれば exit 8(git changed: config)" {
+    Set-State 'T1:in_progress'
+    Set-Child "git config user.name x"
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 8 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Guard: NG" "guard ng"
+    Assert-Contains $script:Out "git changed: config" "issue"
+}
+
+Invoke-TestCase "run+check: 子がブランチを作れば exit 8(git changed: refs)" {
+    Set-State 'T1:in_progress'
+    Set-Child "git branch x"
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 8 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Guard: NG" "guard ng"
+    Assert-Contains $script:Out "git changed: refs" "issue"
 }
 
 Invoke-TestCase "check: 報告本文の→や$で始まる行は有効" {
