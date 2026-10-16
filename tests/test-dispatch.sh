@@ -148,7 +148,8 @@ t_run_xdg_isolated() {
 
 # ---------- dispatch-check ----------
 
-# dispatch-run と同じ形式で guard.sha256 を書く(runs/<run>/prompt.md と管理ファイル)
+# dispatch-run と同じ形式で guard.sha256 を書き(runs/<run>/prompt.md と管理ファイル)、
+# dispatch-run と同じく git-state.sh の出力で git-state.txt も書く
 write_guard() { # $1 = run 名(例: T1-1)
     local run="$1" f h
     (
@@ -159,6 +160,7 @@ write_guard() { # $1 = run 名(例: T1-1)
             printf '%s  %s\n' "$h" "$f" >> ".agents/workflow/runs/$run/guard.sha256"
         done
     )
+    (cd "$PROJ" && .agents/workflow/scripts/git-state.sh) > "$PROJ/.agents/workflow/runs/$run/git-state.txt"
 }
 
 make_run() { # $1 = EXIT 値, $2 = output.log の内容, $3 = run 名(省略時 T1-1)
@@ -316,6 +318,15 @@ t_check_guard_missing() {
     assert_contains "$OUT" "guard.sha256 not found" "issue"
 }
 
+t_check_git_state_missing() {
+    make_run 0 "$REPORT"
+    rm "$PROJ/.agents/workflow/runs/T1-1/git-state.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 8 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Guard: NG" "guard ng"
+    assert_contains "$OUT" "git-state.txt not found" "issue"
+}
+
 t_check_log_truncated() {
     make_run 0 "$REPORT"
     printf 'x\n' > "$PROJ/a.txt"
@@ -353,6 +364,50 @@ t_run_then_check_child_deletes_prompt() {
     run_script dispatch-run.sh T1 1
     run_script dispatch-check.sh T1 1
     assert_eq 8 "$CODE" "exit code: $OUT"
+}
+
+# git を実行する子を python にする(Windows で bash が WSL の bash に解決される場合があるため、
+# 既存の set_py_child と同じ python の子にする)。$1 = child.py の本文
+set_git_py_child() {
+    set_child ''
+    printf '%s\n' "$1" > "$PROJ/child.py"
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" <<'PY'
+import json, sys
+p = sys.argv[1]
+with open(p, encoding='utf-8') as f:
+    cfg = json.load(f)
+cfg['child_agent']['command_template'] = 'python3 ./child.py "{prompt}"'
+with open(p, 'w', encoding='utf-8') as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+PY
+}
+
+# T7: 子が本物のリポジトリの git 状態(HEAD・ブランチ・参照・設定)を変えれば exit 8
+t_run_then_check_child_commits() {
+    set_git_py_child 'import subprocess; subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "x"])'
+    run_script dispatch-run.sh T1 1
+    run_script dispatch-check.sh T1 1
+    assert_eq 8 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Guard: NG" "guard ng"
+    assert_contains "$OUT" "git changed: head" "issue"
+}
+
+t_run_then_check_child_changes_config() {
+    set_git_py_child 'import subprocess; subprocess.run(["git", "config", "user.name", "x"])'
+    run_script dispatch-run.sh T1 1
+    run_script dispatch-check.sh T1 1
+    assert_eq 8 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Guard: NG" "guard ng"
+    assert_contains "$OUT" "git changed: config" "issue"
+}
+
+t_run_then_check_child_creates_branch() {
+    set_git_py_child 'import subprocess; subprocess.run(["git", "branch", "x"])'
+    run_script dispatch-run.sh T1 1
+    run_script dispatch-check.sh T1 1
+    assert_eq 8 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Guard: NG" "guard ng"
+    assert_contains "$OUT" "git changed: refs" "issue"
 }
 
 t_check_report_body_symbols() {
@@ -408,10 +463,14 @@ test_case "check: PR作成のrunは変更0件でも正常" t_check_pr_run_withou
 test_case "check: state.jsonの変更はexit 8" t_check_state_changed
 test_case "check: prompt.mdの削除はexit 8" t_check_prompt_deleted
 test_case "check: guard.sha256が無ければexit 8" t_check_guard_missing
+test_case "check: git-state.txt が無ければ exit 8" t_check_git_state_missing
 test_case "check: output.logの切り詰めはexit 8" t_check_log_truncated
 test_case "check: 切り詰められたoutput.logの表示にNULを含めない" t_check_log_truncated_display_no_nul
 test_case "run+check: 子が正常に完了すればexit 0" t_run_then_check_ok
 test_case "run+check: 子がprompt.mdを消せばexit 8" t_run_then_check_child_deletes_prompt
+test_case "run+check: 子がコミットすれば exit 8(git changed: head)" t_run_then_check_child_commits
+test_case "run+check: 子が git config を変えれば exit 8(git changed: config)" t_run_then_check_child_changes_config
+test_case "run+check: 子がブランチを作れば exit 8(git changed: refs)" t_run_then_check_child_creates_branch
 test_case "check: 報告本文の→や$で始まる行は有効" t_check_report_body_symbols
 test_case "check: 表示されたソース中の権限拒否の文字列には反応しない" t_check_quoted_permission_text
 test_case "check: 色付きの権限拒否行もexit 6" t_check_permission_denied_colored

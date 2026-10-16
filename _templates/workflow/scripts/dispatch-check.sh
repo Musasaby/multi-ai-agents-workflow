@@ -5,7 +5,8 @@ set -uo pipefail
 # Usage: dispatch-check.sh <TaskId> [Attempt]
 # exit(複数に当たる場合は上にあるものを優先する):
 #   8=管理ファイルの改ざん(prompt.md・state.json・tasks.md・config.json が dispatch-run の起動時から
-#     変わった/消えた、guard.sha256・output.log が無い、output.log が実行中に切り詰められた)
+#     変わった/消えた、guard.sha256・output.log・git-state.txt が無い、output.log が実行中に
+#     切り詰められた、本物のリポジトリの git 状態(HEAD・ブランチ・参照・設定)が変わった)
 #   4=異常終了(非0・signal・crashed)
 #   6=権限拒否で中断(output.log に子CLIの権限拒否の記録がある)
 #   5=完了報告が無い・無効(最後の `## 完了報告` の後にツール実行の記録が続く、必須項目が無い・テンプレートのまま)
@@ -76,6 +77,32 @@ else
         fi
     done < <(LC_ALL=C tr -d '\r' < "$GUARD_PATH")
 fi
+
+# --- 本物のリポジトリの git 状態の検証(dispatch-run が起動時に git-state.txt に記録した値と比べる) ---
+# タスク種別の判定(完了報告の必須項目と変更0件の判定で使う case)は、ここでも IS_PR を使うため
+# この位置に置いている。PR 作成の run(IS_PR=true。タスクIDが pr- で始まる)は config を比べない
+# (子が git push -u で .git/config を正当に変えるため)
+case "$TASK_ID" in
+    pr-*) IS_PR=true; REQUIRED='PR URL' ;;
+    *) IS_PR=false; REQUIRED='変更ファイル|テスト結果' ;;
+esac
+GIT_STATE_PATH="$RUN_DIR/git-state.txt"
+if [ ! -f "$GIT_STATE_PATH" ]; then
+    GUARD_ISSUES="${GUARD_ISSUES}git-state.txt not found (deleted, or the run was not started by dispatch-run)
+"
+else
+    RECORDED_STATE="$(LC_ALL=C tr -d '\r' < "$GIT_STATE_PATH")"
+    CURRENT_STATE="$("$SCRIPT_DIR/git-state.sh" 2> /dev/null | LC_ALL=C tr -d '\r')"
+    for name in head branch refs config; do
+        if [ "$IS_PR" = true ] && [ "$name" = config ]; then continue; fi
+        recorded="$(printf '%s\n' "$RECORDED_STATE" | LC_ALL=C awk -v name="$name" '$1 == name { print $2 }')"
+        current="$(printf '%s\n' "$CURRENT_STATE" | LC_ALL=C awk -v name="$name" '$1 == name { print $2 }')"
+        if [ "$recorded" != "$current" ]; then
+            GUARD_ISSUES="${GUARD_ISSUES}git changed: $name
+"
+        fi
+    done
+fi
 if [ ! -f "$LOG_PATH" ]; then
     GUARD_ISSUES="${GUARD_ISSUES}deleted: $LOG_PATH
 "
@@ -107,10 +134,6 @@ DENIED_LINES="$(printf '%s\n' "$RAW_LOG" | LC_ALL=C awk -v esc="$ESC" '
 # `[tool_result]` 行に限る(報告本文の `→ 要確認` や `$ npm test` は対象外)。必須項目は
 # 通常のタスクが「変更ファイル」「テスト結果」、PR 作成の run(pr-*)が「PR URL」。
 # 値が同じ行に無い場合は、次の行からのインデントされた箇条書きを値とみなす。
-case "$TASK_ID" in
-    pr-*) IS_PR=true; REQUIRED='PR URL' ;;
-    *) IS_PR=false; REQUIRED='変更ファイル|テスト結果' ;;
-esac
 REPORT_RESULT="$(printf '%s\n' "$RAW_LOG" | LC_ALL=C awk -v esc="$ESC" -v required="$REQUIRED" '
     {
         raw = $0
