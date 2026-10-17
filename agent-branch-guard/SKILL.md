@@ -25,10 +25,10 @@ skill 名の指定がなくても発動するように、AGENTS.md の「マル�
    .agents/workflow/scripts/branch-check.sh
    ```
    exit code と対応は `_templates/workflow/README.md` の `branch-check` の節と一致する。
-   **この skill では `--state` を付けないため、exit 5 は出ない**(exit 5 は
+   **この skill では `--state` を付けないため、`Next: escalate reason=state-branch-mismatch`(exit 5)は出ない**(これは
    state.json の `branch` との不一致判定で、タスク実行側の `agent-dispatch` が対象)。
 
-2. exit code で分岐する:
+2. 出力の最後の `Next:` 行で分岐する:
 
    - **`Next: continue`**(exit 0。stdout `OK <ブランチ>`)→ 判定に問題なし。そのまま依頼の作業に進む
    - **`Next: switch-branch reason=main`**(exit 2。`main` 上)または
