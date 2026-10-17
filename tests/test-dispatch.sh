@@ -132,6 +132,19 @@ with open(p, 'w', encoding='utf-8') as f:
 PY
 }
 
+# T3(#53): idle_timeout_seconds を設定する($1 = 秒)
+set_idle_timeout() {
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" "$1" <<'PY'
+import json, sys
+p, v = sys.argv[1:3]
+with open(p, encoding='utf-8') as f:
+    cfg = json.load(f)
+cfg['child_agent']['idle_timeout_seconds'] = int(v)
+with open(p, 'w', encoding='utf-8') as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+PY
+}
+
 # 子を python にする(Windows ネイティブ python から呼ぶ bash は WSL の bash になることがあり、
 # その場合は Windows 側の環境変数を引き継がないため)。$1 = child.py の本文(省略時は XDG_DATA_HOME の表示)
 set_py_child() {
@@ -252,6 +265,29 @@ t_run_caller_tmp_unchanged() {
     assert_contains "$result" "TMPDIR=/caller/tmp" "caller TMPDIR unchanged"
     assert_contains "$result" "TEMP=/caller/tmp" "caller TEMP unchanged"
     assert_contains "$result" "TMP=/caller/tmp" "caller TMP unchanged"
+}
+
+# T3(#53): ログが idle_timeout_seconds 更新されなければ子を止めて EXIT:idle-timeout
+t_run_idle_timeout_kills_child() {
+    set_child 'echo start; sleep 30'
+    set_idle_timeout 2
+    local started elapsed
+    started="$SECONDS"
+    run_script dispatch-run.sh T1 1
+    elapsed=$((SECONDS - started))
+    if [ "$elapsed" -lt 20 ]; then _record ok; else _record ng "finished in under 20 seconds (elapsed=$elapsed)"; fi
+    assert_eq "EXIT:idle-timeout" "$(done_exit)" "done marker"
+    assert_file_exists "$PROJ/.agents/workflow/runs/T1-1/idle-timeout" "idle-timeout file"
+}
+
+# T3(#53): ログが更新され続ければ idle_timeout_seconds で止めない
+t_run_idle_timeout_not_triggered() {
+    set_child 'for i in 1 2 3 4 5; do echo "tick $i"; sleep 1; done'
+    set_idle_timeout 3
+    run_script dispatch-run.sh T1 1
+    assert_eq "EXIT:0" "$(done_exit)" "done marker"
+    assert_contains "$(cat "$PROJ/.agents/workflow/runs/T1-1/output.log")" "tick 5" "output.log"
+    assert_file_absent "$PROJ/.agents/workflow/runs/T1-1/idle-timeout" "no idle-timeout file"
 }
 
 # ---------- dispatch-check ----------
@@ -693,6 +729,8 @@ test_case "run: 子の TMPDIR/TEMP/TMP は runs/<ID>-<試行>/tmp を指す" t_r
 test_case "run: 子の GIT_CEILING_DIRECTORIES は runs/<ID>-<試行> を指す" t_run_child_git_ceiling
 test_case "run: 子が TMPDIR 直下で実行した git は本物のリポジトリを見つけない" t_run_child_git_no_repo
 test_case "run: 呼び出し元の TMPDIR/TEMP/TMP を書き換えない" t_run_caller_tmp_unchanged
+test_case "run: ログが idle_timeout_seconds 更新されなければ子を止めて EXIT:idle-timeout" t_run_idle_timeout_kills_child
+test_case "run: ログが更新され続ければ idle_timeout_seconds で止めない" t_run_idle_timeout_not_triggered
 test_case "check: 正常" t_check_ok
 test_case "check: signalはexit 4" t_check_signal
 test_case "check: 非0はexit 4" t_check_nonzero
