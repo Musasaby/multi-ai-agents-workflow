@@ -3,7 +3,8 @@ set -uo pipefail
 
 # 子エージェントの起動までの事前チェックを順に行い、デタッチ起動する。失敗した段階で止める
 # (止めたときは state.json を変えず、子も起動しない)。
-# Usage: dispatch-start.sh <TaskId> [Attempt]
+# Usage: dispatch-start.sh <TaskId> [Attempt] | dispatch-start.sh --pr
+#   --pr: PR 作成の run(pr-<N>-1)を起動する(タスクの状態確認・task-state は行わず、ウォームアップもしない)
 # exit:
 #   0=起動した / 1=使い方不備
 #   11〜15=branch-check --state の 1〜5(stdout の Next: 行はそのまま流す)
@@ -17,8 +18,15 @@ set -uo pipefail
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
 
-TASK_ID="${1:?Usage: dispatch-start.sh <TaskId> [Attempt]}"
-ATTEMPT="${2:-1}"
+PR_MODE=false
+if [ "${1:-}" = "--pr" ]; then
+    PR_MODE=true
+    TASK_ID="pr"
+    ATTEMPT=1
+else
+    TASK_ID="${1:?Usage: dispatch-start.sh <TaskId> [Attempt] | dispatch-start.sh --pr}"
+    ATTEMPT="${2:-1}"
+fi
 if ! [[ "$TASK_ID" =~ ^[A-Za-z0-9_-]+$ ]] || ! [[ "$ATTEMPT" =~ ^[0-9]+$ ]]; then
     echo "Invalid TaskId/Attempt: '$TASK_ID' '$ATTEMPT'" >&2
     exit 1
@@ -46,7 +54,7 @@ if [ -n "$DIRTY" ]; then
     exit 20
 fi
 
-# 3. タスクの状態
+# 3. タスクの状態(--pr では行わない)
 STATE_PATH=".agents/workflow/state.json"
 if command -v cygpath > /dev/null 2>&1; then STATE_PATH="$(cygpath -m "$PWD/$STATE_PATH")"; fi
 STATUS="$(python3 -c "
@@ -57,8 +65,8 @@ for t in s['tasks']:
     if t['id'] == sys.argv[2]:
         print(t['status']); break
 " "$STATE_PATH" "$TASK_ID" 2> /dev/null)"
-case "$STATUS" in
-    pending|in_progress) ;;
+case "$PR_MODE:$STATUS" in
+    true:*|*:pending|*:in_progress) ;;
     *)
         echo "Task $TASK_ID cannot be started (status: ${STATUS:-<absent>})" >&2
         echo "Next: escalate reason=task-status"
@@ -110,7 +118,7 @@ fi
 
 # 3b. ウォームアップ(このサイクルの最初の dispatch のときだけ)
 WARMUP="$(cfg_get warmup_command)"
-if [ -n "$WARMUP" ] && ! compgen -G ".agents/workflow/runs/*/guard.sha256" > /dev/null; then
+if [ "$PR_MODE" = false ] && [ -n "$WARMUP" ] && ! compgen -G ".agents/workflow/runs/*/guard.sha256" > /dev/null; then
     if ! run_check_command "$WARMUP"; then
         echo "Next: escalate reason=warmup"
         exit 31
@@ -118,17 +126,31 @@ if [ -n "$WARMUP" ] && ! compgen -G ".agents/workflow/runs/*/guard.sha256" > /de
 fi
 
 # 4. プロンプト生成
-bash "$SCRIPT_DIR/dispatch-prompt-gen.sh" "$TASK_ID" "$ATTEMPT" > /dev/null
+if [ "$PR_MODE" = true ]; then
+    GEN_OUT="$(bash "$SCRIPT_DIR/dispatch-prompt-gen.sh" --pr)"
+else
+    GEN_OUT="$(bash "$SCRIPT_DIR/dispatch-prompt-gen.sh" "$TASK_ID" "$ATTEMPT")"
+fi
 CODE=$?
 if [ "$CODE" -ne 0 ]; then
     echo "Next: escalate reason=prompt-gen"
     exit $((40 + CODE))
 fi
 
-# 5. 状態を in_progress にする
-if ! bash "$SCRIPT_DIR/task-state.sh" "$TASK_ID" start; then
-    echo "Next: escalate reason=task-state"
-    exit 50
+if [ "$PR_MODE" = true ]; then
+    TASK_ID="$(printf '%s\n' "$GEN_OUT" | sed -n 's/^RunId: //p' | tr -d '\r' | head -n 1)"
+    if [ -z "$TASK_ID" ]; then
+        echo "dispatch-prompt-gen --pr did not report a RunId" >&2
+        echo "Next: escalate reason=prompt-gen"
+        exit 41
+    fi
+    RUN_DIR=".agents/workflow/runs/${TASK_ID}-${ATTEMPT}"
+else
+    # 5. 状態を in_progress にする
+    if ! bash "$SCRIPT_DIR/task-state.sh" "$TASK_ID" start; then
+        echo "Next: escalate reason=task-state"
+        exit 50
+    fi
 fi
 
 # 6. デタッチ起動

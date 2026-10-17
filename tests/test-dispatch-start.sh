@@ -155,6 +155,54 @@ t_warmup_fail() {
     assert_eq pending "$(state_get T1 status)" "T1 status"
 }
 
+# --pr 用: origin(bare)付きで develop/t に1コミットし、T1 を done(commit=そのハッシュ)にする
+setup_pr() {
+    setup "T1:pending" "T2:pending"
+    (
+        cd "$PROJ"
+        git switch -q main
+        git init -q --bare -b main .agents/remote.git
+        git remote add origin .agents/remote.git
+        git push -q -u origin main
+        git switch -q develop/t
+        printf 'b\n' > b.txt; git add b.txt; git commit -q -m "feat: t1"
+    )
+    local h
+    h="$(git -C "$PROJ" rev-parse --short HEAD)"
+    python3 - "$(py_path "$PROJ/.agents/workflow/state.json")" "$h" <<'PY'
+import json, sys
+p, h = sys.argv[1:3]
+with open(p, encoding='utf-8') as f:
+    s = json.load(f)
+for t in s['tasks']:
+    if t['id'] == 'T1':
+        t['status'] = 'done'
+        t['commit'] = h
+with open(p, 'w', encoding='utf-8', newline='\n') as f:
+    json.dump(s, f, ensure_ascii=False, indent=2)
+    f.write('\n')
+PY
+}
+
+t_pr_ok() {
+    setup_pr
+    run_script dispatch-start.sh --pr
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "Run: pr-" "Run line"
+    assert_eq "Next: wait" "$(printf '%s\n' "$OUT" | tail -1)" "last line"
+    local run
+    run="$(printf '%s\n' "$OUT" | sed -n 's/^Run: //p' | tr -d '\r')"
+    wait_done "$run"
+    assert_file_exists "$PROJ/.agents/workflow/runs/$run/done" "done within 30s"
+}
+
+t_pr_on_main() {
+    setup "T1:done" "T2:pending"
+    git -C "$PROJ" switch -q main
+    run_script dispatch-start.sh --pr
+    assert_eq 12 "$CODE" "exit code: $ERR"
+}
+
 echo "test-dispatch-start.sh"
 test_case "start: 起動して prompt.md・in_progress・done ができる" t_start_ok
 test_case "start: 作業ツリーが汚れていれば exit 20" t_dirty_tree
@@ -164,4 +212,6 @@ test_case "start: done のタスクは exit 21" t_done_task
 test_case "start: healthcheck_command が失敗すれば exit 30" t_healthcheck_fail
 test_case "start: warmup_command は最初の dispatch だけ実行する" t_warmup_once
 test_case "start: warmup_command が失敗すれば exit 31" t_warmup_fail
+test_case "start: --pr は pr-<N> の run を起動する" t_pr_ok
+test_case "start: --pr で main 上なら exit 12" t_pr_on_main
 summary
