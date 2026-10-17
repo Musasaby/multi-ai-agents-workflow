@@ -443,6 +443,40 @@ Invoke-TestCase "check: 権限拒否とプロジェクト外アクセスが両�
     Assert-Contains $script:Out "Outside access: yes" "flag"
 }
 
+# T14(#46): sh 版(test-dispatch.sh)と同じ名前の3ケース
+Invoke-TestCase "check: tool_use 行のホームディレクトリ参照は exit 6" {
+    New-Run 0 ($report + "`n" + '[tool_use] bash: {"command": "cat ~/x.log"}')
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 6 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Verdict: outside-access" "verdict"
+    Assert-Contains $script:Out "Outside access: yes" "flag"
+    Assert-Contains $script:Out "~/x.log" "line shown"
+}
+
+Invoke-TestCase "check: 色付きツール実行行の USERPROFILE・AppData の Temp 参照は exit 6" {
+    New-Run 0 ("$esc[0m`$ $esc[0mGet-Content `$env:USERPROFILE\x.log`n" + $report) 'T1-2'
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 2
+    Assert-Eq 6 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Verdict: outside-access" "verdict"
+    Assert-Contains $script:Out "Outside access: yes" "flag"
+    New-Run 0 ("$esc[0m`$ $esc[0mls C:\Users\u\AppData\Local\Temp`n" + $report) 'T1-3'
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 3
+    Assert-Eq 6 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Verdict: outside-access" "verdict"
+    Assert-Contains $script:Out "Outside access: yes" "flag"
+}
+
+Invoke-TestCase "check: HOMEBREW_PREFIX や env:TEMP は検出しない" {
+    New-Run 0 ("$esc[0m`$ $esc[0mecho `$HOMEBREW_PREFIX`n$esc[0m`$ $esc[0mGet-ChildItem `$env:TEMP`n" + $report)
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Outside access: no" "flag"
+}
+
 Invoke-TestCase "check: UTF-16LEのoutput.log(Windows PowerShell 5.1)を読める" {
     New-Run 0 $report
     Write-Utf8File "$script:Proj/a.txt" "x`n"

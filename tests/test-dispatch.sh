@@ -543,6 +543,45 @@ ${ESC}[0m\$ ${ESC}[0mbash -c \"bash tests/x.sh > /tmp/dsp-sh.log\""
     assert_contains "$OUT" "Outside access: yes" "flag"
 }
 
+# T14: ホームディレクトリ・AppData の Temp への参照も検出する(exit 6)
+t_check_outside_access_tool_use_home() {
+    make_run 0 "$REPORT
+[tool_use] bash: {\"command\": \"cat ~/x.log\"}"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 6 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Verdict: outside-access" "verdict"
+    assert_contains "$OUT" "Outside access: yes" "flag"
+    assert_contains "$OUT" "~/x.log" "line shown"
+}
+
+t_check_outside_access_userprofile_temp() {
+    make_run 0 "${ESC}[0m\$ ${ESC}[0mGet-Content \$env:USERPROFILE\\x.log
+$REPORT" T1-2
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 2
+    assert_eq 6 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Verdict: outside-access" "verdict"
+    assert_contains "$OUT" "Outside access: yes" "flag"
+    make_run 0 "${ESC}[0m\$ ${ESC}[0mls C:\\Users\\u\\AppData\\Local\\Temp
+$REPORT" T1-3
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 3
+    assert_eq 6 "$CODE" "exit code: $OUT (appdata temp)"
+    assert_contains "$OUT" "Verdict: outside-access" "verdict (appdata temp)"
+    assert_contains "$OUT" "Outside access: yes" "flag (appdata temp)"
+}
+
+t_check_outside_access_home_not_detected() {
+    make_run 0 "${ESC}[0m\$ ${ESC}[0mecho \$HOMEBREW_PREFIX
+${ESC}[0m\$ ${ESC}[0mGet-ChildItem \$env:TEMP
+$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Outside access: no" "flag"
+}
+
 echo "test-dispatch.sh"
 
 test_case "run: 正常終了はEXIT:0" t_run_exit0
@@ -588,4 +627,7 @@ test_case "check: ツール実行行の /tmp への書き込みは exit 6(outsid
 test_case "check: runs/<ID>/tmp 配下へのアクセスは検出しない" t_check_outside_access_runs_tmp_ok
 test_case "check: ツールの出力中の /tmp には反応しない" t_check_outside_access_tool_output_ignored
 test_case "check: 権限拒否とプロジェクト外アクセスが両方あれば permission-denied" t_check_outside_access_with_permission_denied
+test_case "check: tool_use 行のホームディレクトリ参照は exit 6" t_check_outside_access_tool_use_home
+test_case "check: 色付きツール実行行の USERPROFILE・AppData の Temp 参照は exit 6" t_check_outside_access_userprofile_temp
+test_case "check: HOMEBREW_PREFIX や env:TEMP は検出しない" t_check_outside_access_home_not_detected
 summary
