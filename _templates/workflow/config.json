@@ -2,6 +2,7 @@
   "child_agent": {
     "command_template": "opencode run \"{prompt}\"",
     "timeout_seconds": 1800,
+    "idle_timeout_seconds": 600,
     "isolate_xdg": false
   },
   "test_command": "",
