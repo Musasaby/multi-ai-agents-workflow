@@ -20,185 +20,56 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
 
 ## 手順
 
-### 1. 事前チェック
+### 1. 起動(dispatch-start)
 
-- `branch-check --state`(PowerShell: `.agents/workflow/scripts/branch-check.ps1 -State` /
-  POSIX: `branch-check.sh --state`)を実行し、現在のブランチが作業に使ってよいかを機械的に判定する
-  (マージ済みブランチ・`main`・state.json の `branch` との不一致を検出する)。
-  **出力の最後の行が `Next: continue` 以外なら dispatch しない**。`Next:` 行(
-  `switch-branch reason=main`・`switch-branch reason=merged`・
-  `escalate reason=state-branch-mismatch` など。`Next:` 行が無いときは使い方の誤りか
-  git の失敗)と stderr の内容をユーザーに伝えて、中断する。
-  `Next:` 行の一覧は `.agents/workflow/README.md` の「Next: 行」の節にある
-  ```powershell
-  .agents/workflow/scripts/branch-check.ps1 -State
-  ```
-  ```bash
-  .agents/workflow/scripts/branch-check.sh --state
-  ```
-- `git status` で作業ツリーがクリーンであることを確認(未コミット変更があれば中断してユーザーに報告)
-- state.json の対象タスクが `pending` または `in_progress`(リトライ)であることを確認
-- 依存タスク(`依存:` 欄)がすべて `done` であることを確認
-- 子エージェントCLIの疎通確認: コマンドテンプレートの先頭コマンドに `--version` 等を付けて実行し、正常終了することを確認。失敗した場合はエラー出力を添えて中断しユーザーに報告する
-  - 疎通確認は `dispatch-run` と同じ環境で行う。`config.json` の `child_agent.isolate_xdg` が
-    `false`(既定)なら、そのまま `<コマンドテンプレートの先頭コマンド> --version` を実行する
-  - **`isolate_xdg` が `true` の場合**(sandbox 環境で `~/.config` や `~/.local/share` 配下の作成が拒否される問題を回避するため、`dispatch-run` が `XDG_CONFIG_HOME` と `XDG_DATA_HOME` をプロジェクト内ディレクトリに切り替える設定)は、同じ設定で疎通確認する。この設定では `~/.local/share/<CLI>/auth.json` 等の認証情報が見えなくなるため、認証が必要な CLI は失敗しうる:
-    ```powershell
-    # PowerShell
-    $env:XDG_CONFIG_HOME = ".agents/workflow/.config"
-    $env:XDG_DATA_HOME = ".agents/workflow/.config"
-    <コマンドテンプレートの先頭コマンド> --version   # バージョン番号が返れば疎通OK
-    ```
-    ```bash
-    # POSIX シェル
-    XDG_CONFIG_HOME=.agents/workflow/.config XDG_DATA_HOME=.agents/workflow/.config <コマンドテンプレートの先頭コマンド> --version
-    ```
-- 初回dispatch前に、親側で quality_gate の typecheck コマンド(config.json の quality_gate.steps 内の blocking な typecheck の command)を1回実行してデーモンを起動しキャッシュを温めておく。具体例: `./gradlew compileDebugKotlin`
-
-### 2. プロンプト生成(生成スクリプトの実行とexit code分岐)
-
-プロンプトの組み立ては親エージェント(LLM)が行わない。定型文(実装ルール・テスト検証指示・
-完了報告フォーマット等)は `.agents/workflow/scripts/dispatch-prompt-template.md` に
-テンプレートとして配布済みであり、`dispatch-prompt-gen`(PowerShell:
-`.agents/workflow/scripts/dispatch-prompt-gen.ps1` / POSIX: `dispatch-prompt-gen.sh`)が
-tasks.md・config.json・依存タスクの完了報告を機械結合して
-`.agents/workflow/runs/<タスクID>-<試行回数>/prompt.md` を生成する。
+`dispatch-start`(PowerShell: `.agents/workflow/scripts/dispatch-start.ps1 -TaskId <ID> [-Attempt <n>]` /
+POSIX: `dispatch-start.sh <ID> [<n>]`)を1回実行する。事前チェック(`branch-check --state`・作業ツリーの
+クリーン確認・タスクの状態・疎通確認・初回のウォームアップ)、プロンプト生成、`task-state start`、
+デタッチ起動をスクリプトが順に行う。
 
 ```powershell
-# PowerShell(初回 = Attempt省略で1、リトライは -Attempt <n>)
-.agents/workflow/scripts/dispatch-prompt-gen.ps1 -TaskId T3
-.agents/workflow/scripts/dispatch-prompt-gen.ps1 -TaskId T3 -Attempt 2
+.agents/workflow/scripts/dispatch-start.ps1 -TaskId T3
 ```
 ```bash
-# POSIX
-.agents/workflow/scripts/dispatch-prompt-gen.sh T3
-.agents/workflow/scripts/dispatch-prompt-gen.sh T3 2
+.agents/workflow/scripts/dispatch-start.sh T3
 ```
 
-**exit code で機械的に分岐する**(親はこのexit codeだけを見て判断すればよく、生成された
-プロンプト全文を会話に読み込む必要はない):
+stdout の最後の `Next:` 行で機械的に分岐する(exit code の帯と reason は
+`.agents/workflow/README.md` の dispatch-start の節):
 
-- **exit 0**: 生成成功。`runs/<タスクID>-<試行回数>/prompt.md` を読まずに、そのまま
-  §3 のデタッチ起動へ進む
-- **exit 2**: 引き継ぎガード失敗(依存タスクが `done` でない、または依存タスクの
-  `report.md` が見つからない)。stderr に欠落内容が列挙されるので、それをそのまま
-  ユーザーに報告し、**dispatch は行わない**(古い prompt.md は生成スクリプト側で
-  削除済み)
-- **その他非0**(exit 1: tasks.md/state.json不備・タスクID未検出、exit 3:
-  リトライなのに fix-notes.md が無い 等): stderr のエラー内容を添えてユーザーに
-  報告し、dispatch は行わない
+- **`Next: wait`**: 起動できた。ユーザーに Run ID・`Log:`・`Watch:` の行を報告して §2 へ進む
+- **`Next: switch-branch` / `Next: escalate`**: 起動していない。reason と stderr の内容をユーザーに
+  説明して中断する
 
-**親は生成されたプロンプトの全文を会話に読み込まない**(読み込むとスクリプト化による
-トークン節約が無意味になる)。異常が疑われる場合のみ、`runs/<タスクID>-<試行回数>/prompt.md`
-の先頭数十行を確認するにとどめる。
+**親は生成された prompt.md の全文を会話に読み込まない**(読み込むとスクリプト化によるトークン節約が
+無意味になる)。異常が疑われる場合のみ、先頭数十行を確認するにとどめる。
 
-**フォールバック(手動プロンプト作成)**: 以下のいずれかに該当する場合のみ、親が
-`runs/<タスクID>-<試行回数>/prompt.md` を直接作成してよい(生成スクリプトをバイパスする):
+**リトライ(試行回数 2 以上)**: 先に、レビュー指摘事項を `runs/<タスクID>-<試行回数>/fix-notes.md` に
+親が保存する(ここだけは親の LLM 出力)。生成スクリプトがそれをプロンプト冒頭に結合する。
+`fix-notes.md` が無いと失敗する。
 
-- リトライ時のレビュー指摘事項が複雑でテンプレートに収まらない場合
-- 生成スクリプト自体が異常終了する(exit 1 等)場合の暫定対応
+**フォールバック(手動プロンプト作成)**: 指摘事項が複雑で fix-notes に収まらない場合のみ、
+`dispatch-prompt-gen` を使わず、親が `runs/<タスクID>-<試行回数>/prompt.md` を直接書く。
+`## 実装ルール`・テスト検証指示・完了報告フォーマットは `dispatch-prompt-template.md` に準じる。
+書いたら `task-state <ID> start` の後、`dispatch-run` を直接デタッチ起動する
+(`run_in_background` での直接起動は行わない):
 
-手動作成の場合も、`## 実装ルール`(AGENTS.md準拠・コミット禁止)・テスト検証指示・
-完了報告フォーマットは `dispatch-prompt-template.md` の内容に準じること。
+```powershell
+Start-Process pwsh -ArgumentList "-NoProfile -File .agents/workflow/scripts/dispatch-run.ps1 -TaskId T1 -Attempt 2"
+```
+```bash
+nohup .agents/workflow/scripts/dispatch-run.sh T1 2 > /dev/null 2>&1 &
+```
 
-修正依頼(リトライ)の場合、レビュー指摘事項は `runs/<タスクID>-<試行回数>/fix-notes.md` に
-親が保存し(要件の例外事項。ここだけは親のLLM出力)、生成スクリプトがそれを
-プロンプト冒頭に結合する。`fix-notes.md` が無い状態で `-Attempt 2` 以上を実行すると
-exit 3 になる。
+**Claude Code を子エージェントとして使う場合**: `command_template` に
+`--output-format stream-json --verbose` を指定すると、`dispatch-run` が出力を1行ずつ人が読める
+テキストとして `output.log` に逐次書き出すため、実行中の閲覧が機能する
+(生 JSON は `output.jsonl` に残る)。既定の `text` は子 CLI 側でバッファリングされる。
 
-### 3. 実行
+`config.json` の `child_agent.timeout_seconds` は**親側ポーリング**(§2)で管理する。
+タイムアウトを超えた場合はタスクを `in_progress` のままユーザーに報告する。
 
-- state.json の対象タスクを `in_progress` に更新する(state.json の状態は親が JSON を直接編集せず、必ず `task-state`(PowerShell:
-`.agents/workflow/scripts/task-state.ps1` / POSIX: `task-state.sh`)で更新する。
-  許されない遷移は exit 1 で拒否され、state.json は変わらない):
-  ```powershell
-  .agents/workflow/scripts/task-state.ps1 T1 start
-  ```
-  ```bash
-  .agents/workflow/scripts/task-state.sh T1 start
-  ```
-- **デタッチ起動**: 子エージェントを親プロセスの管理外で起動し、親のタイムアウト制限
-  (例: OpenCode の10分上限)や親プロセス終了による子プロセスの巻き添え終了を防ぐため、
-  `Start-Process`(PowerShell) / `nohup`+`&`(POSIX) でラッパースクリプトを起動する。
-  `run_in_background` での直接起動は行わない
-- **ラッパースクリプト**が存在しない場合(例: clone 直後で `/agents-md-setup` 未実行)、
-  `_templates/workflow/scripts/dispatch-run.ps1`(または `.sh`)から
-  `.agents/workflow/scripts/` にコピーする。
-  POSIX 環境ではコピー後に `chmod +x .agents/workflow/scripts/dispatch-run.sh` を実行する。
-  **既存のスクリプトは上書きしない**(利用先でカスタマイズ済みの可能性があるため)。
-  同様に、`_templates/workflow/scripts/` 配下の他のファイル(`dispatch-prompt-gen.ps1/.sh`、
-  `dispatch-prompt-template.md`、共通部品 `tasklib.ps1/.py` 等)のうち未配置のものも
-  `.agents/workflow/scripts/` にコピーする。
-- **ラッパースクリプト**(PowerShell: `.agents/workflow/scripts/dispatch-run.ps1`)が
-  以下の責務を担う:
-  - プロンプトを `.agents/workflow/runs/<タスクID>-<試行回数>/prompt.md` から読み込む
-  - 子の一時ディレクトリを設定する: `TMPDIR`・`TEMP`・`TMP` を
-    `.agents/workflow/runs/<タスクID>-<試行回数>/tmp/`(起動時に作成)に設定し、子が `mktemp` 等で
-    作る一時ファイルをプロジェクト内に置かせる。`GIT_CEILING_DIRECTORIES` にはその親である
-    `.agents/workflow/runs/<タスクID>-<試行回数>/`(`tmp/` そのものではない)を設定する。
-    git は ceiling と同じディレクトリが cwd のときも探索を止めないため、その下の `tmp/` の中で
-    実行された `git` が本物のリポジトリを探索でたどり着かないようにする
-  - 起動時の git 状態(HEAD・ブランチ・参照・config の SHA-256)を
-    `.agents/workflow/runs/<タスクID>-<試行回数>/git-state.txt` に記録する(失敗しても起動は止めない)。
-    dispatch-check が実行後の状態と比べて、子が `git commit` や `git config` で
-    リポジトリのどこを変えたかを機械的に特定できる
-  - `child_agent.isolate_xdg` が `true` のときだけ、`XDG_CONFIG_HOME` / `XDG_DATA_HOME` をプロジェクト内ディレクトリに設定する(既定の `false` では呼び出し元の設定をそのまま使い、CLI の認証情報も引き継ぐ)
-  - **PowerShellのコンソールエンコーディングをUTF-8に設定する**(`[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` および `$OutputEncoding = [System.Text.Encoding]::UTF8` をスクリプト冒頭で実行)。
-    `Start-Process` でデタッチ起動した子コンソールはOSのシステムロケール既定コードページ(日本語Windowsでは932/Shift_JIS)を引き継ぐため、未設定だとUTF-8で出力するCLIのstdout/stderrをリダイレクトする際に文字化けする
-  - stdin を閉じて CLI(`$null | <CLI> run $prompt`)を実行し、stdout/stderr を
-    `.agents/workflow/runs/<タスクID>-<試行回数>/output.log` に書き出す
-  - CLI 終了後、exit code と終了時刻(ISO 8601)を
-    `.agents/workflow/runs/<タスクID>-<試行回数>/done` に書き出す
-- **`done` マーカーの仕様**:
-  - パス: `.agents/workflow/runs/<タスクID>-<試行回数>/done`
-  - 内容(2行):
-    ```
-    EXIT:<exit code(数値) | signal:<シグナル番号> | crashed:<エラーメッセージ>>
-    END:<ISO 8601形式の終了時刻(例: 2026-07-09T15:30:00.0000000+09:00)>
-    ```
-  - `EXIT` の値:
-    - 数値: 子CLIの exit code(`0` が正常終了)
-    - `signal:<番号>`: 子CLIがシグナルで強制終了された(例: `signal:15` = SIGTERM)。
-      **POSIX 版(`dispatch-run.sh`)のみ**が記録する。従来はシグナル死が `EXIT:241`
-      (= 256 - 15)のように記録され、「241 で終了」と区別できなかった。Windows には
-      シグナルの仕組みが無いため、`dispatch-run.ps1` での強制終了は通常の非0終了(数値)として
-      記録される
-    - `crashed:<メッセージ>`: ラッパースクリプト自体が例外で異常終了した(PowerShell 版)
-    - `idle-timeout`: `child_agent.idle_timeout_seconds` の間 `output.log` が更新されず、
-      `dispatch-run` が子を止めた
-  - 例:
-    ```
-    EXIT:0
-    END:2026-07-09T15:30:00.0000000+09:00
-    ```
-- **デタッチ起動の実行例**:
-  ```powershell
-  # PowerShell: Start-Process でラッパースクリプトを非同期起動
-  Start-Process pwsh -ArgumentList "-NoProfile -File .agents/workflow/scripts/dispatch-run.ps1 -TaskId T1 -Attempt 1"
-  ```
-  ```bash
-  # POSIX: nohup ＋ & でデタッチ起動
-  nohup .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1 &
-  ```
-  (XDG環境変数の切り替えは `isolate_xdg` に従ってラッパースクリプト内で行われるため、起動コマンド側での設定は不要)
-- 起動直後、ユーザーが別ターミナル/別セッションでリアルタイム閲覧できるよう、以下のいずれかのコマンドを提示する(親エージェント自身が実行し続ける必要はない):
-  ```powershell
-  Get-Content .agents/workflow/runs/T1-1/output.log -Wait -Tail 20
-  ```
-  ```bash
-  tail -f .agents/workflow/runs/T1-1/output.log
-  ```
-  **Claude Code を子エージェントとして使う場合**: `command_template` に
-  `--output-format stream-json --verbose` を指定すると、`dispatch-run` が
-  出力を1行ずつパースして人が読めるテキストとして `output.log` に逐次書き出す
-  (生JSONは `output.jsonl` に残る)ため、上記コマンドでの実行中閲覧が機能する。
-  デフォルトの `--output-format text` は子CLI側でバッファリングされ実行中の
-  逐次閲覧ができないため、実行中のログ閲覧が必要な場合は `stream-json` を使うこと。
-- `config.json` の `child_agent.timeout_seconds` は**親側ポーリング**(§4)で管理する。
-  タイムアウトを超えた場合はタスクを `in_progress` のままユーザーに報告する
-  (ログファイルには打ち切り時点までの出力が残るため、途中経過の確認に使える)
-
-### 4. 完了検知と結果検証
+### 2. 完了検知と結果検証
 
 - **ポーリングによる完了検知**: 親は一定間隔(推奨: 30秒)で `done` マーカーファイルの
   存在を確認する。マーカーが存在すれば終了と判断し、マーカーの内容(exit code / 終了時刻)と
@@ -327,7 +198,7 @@ exit 3 になる。
     **レビューに進まず**、その旨を指示に含めて再dispatchする(`max_fix_retries` の範囲内)
   - 変更ファイル一覧と実際の diff が大きく食い違う場合は異常としてユーザーに報告
 
-### 5. 状態更新
+### 3. 状態更新
 
 検証を通過したら `task-state <タスクID> review` で state.json を `in_review` に更新し、子エージェントの完了報告を
 `.agents/workflow/runs/<タスクID>-<試行回数>/report.md` に保存して、レビューフェーズ
@@ -340,11 +211,11 @@ exit 3 になる。
 - **報告・説明はすべて日本語で行うこと**(AGENTS.md の再掲。このskillは実行のたびに
   読み込まれるため、ここに明記しておくことで日本語指定の効きを強くする)。子エージェントの
   出力が英語であっても、親がユーザーに向けて要約・報告する内容は日本語にすること
-- **デタッチ起動直後**(§3完了時)に最低限報告する項目:
+- **デタッチ起動直後**(§1完了時)に最低限報告する項目:
   - タスクID・試行回数(例: `T3-1`)
   - ログファイルパス(`output.log` の絶対/相対パス)
-  - 実行中ログをリアルタイム閲覧するコマンド(§3で提示するもの)
-- **完了検知後**(§4完了時)に最低限報告する項目:
+  - 実行中ログをリアルタイム閲覧するコマンド(§1の `Watch:` 行)
+- **完了検知後**(§2完了時)に最低限報告する項目:
   - exit code(`done` マーカーの内容)と `dispatch-check` の判定(Verdict)
   - テスト結果の検証結果(全件パスか、失敗があればその概要)
   - 次のフェーズ(レビューへ進む/再dispatchする/ユーザーへエスカレーションする)のどれになったか
