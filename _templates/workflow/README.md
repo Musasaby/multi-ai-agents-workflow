@@ -283,11 +283,11 @@ nohup .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1 &
 
 ### dispatch-check — 完了検知後の終了状態・成果物の判定
 
-`done` マーカーを検知したら毎回実行する。終了状態の区分(`ok` / `nonzero` / `signal` /
-`crashed`)、管理ファイルの改ざん検知(`Guard:`)、権限拒否の有無(`Permission denied:`)、
-プロジェクト外アクセスの検出(`Outside access:`)、完了報告の判定(`Completion report:`)、
-変更件数(`Changes:`)、`git status --porcelain`、
-`git diff --stat`、`output.log` の末尾30行をまとめて出力する。
+`done` マーカーを検知したら毎回実行する。終了状態の区分(`ok` / `nonzero` / `idle-timeout` /
+`signal` / `crashed`)、管理ファイルの改ざん検知(`Guard:`)、権限拒否の有無(`Permission denied:`)、
+プロジェクト外アクセスの検出(`Outside access:`)、子CLI自身のログのエラー(`CLI log:` と
+`Provider error:`)、完了報告の判定(`Completion report:`)、変更件数(`Changes:`)、
+`git status --porcelain`、`git diff --stat`、`output.log` の末尾30行をまとめて出力する。
 
 - **改ざん検知**: `dispatch-run` は起動時に `prompt.md`・`state.json`・`tasks.md`・`config.json` の
   SHA-256 を `runs/<タスクID>-<試行回数>/guard.sha256` に記録する。`dispatch-check` はこれと
@@ -314,7 +314,19 @@ nohup .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1 &
   `$ ` / `→ ` / `← ` / `✱ ` / `✗ ` / `⚙ ` / `! `、stream-json の `[tool_use]` / `[tool_result]` 行)が
   続く場合は無効(報告本文の色なしの `→ 要確認` や `$ npm test` はツール実行とみなさない)。必須項目は通常のタスクが
   `- 変更ファイル:` と `- テスト結果:`、PR 作成の run(`pr-*`)が `- PR URL:`。値が空・
-  `<...>` のまま(テンプレート)の場合も無効
+  `<...>` のまま(テンプレート)の場合も無効。報告が無い場合は `missing` で、最後のツール実行の
+  記録より後に子が何も出力せず終わった場合は
+  `missing (no output after the last tool call; the model may have hit the output token limit)` になる
+  (#50: 推論だけで出力トークン上限に達した打ち切り。opencode はエラーにせず exit 0 で終わるため、
+  区分は `ok` でも完了報告は欠けている)
+- **子CLI自身のログのエラー**: config.json の `child_agent.cli_log`(子CLI自身のログファイルのパス。
+  先頭の `~/` はホームディレクトリで展開する)を読む。`CLI log:` には設定したパスを出し、
+  未設定なら `(not configured)`、パスのファイルが無ければ `<パス> (not found)`。次にそのログの
+  末尾200行のうち `ERROR` を含む行の最後の5行を字下げして出す。`Provider error:` はプロバイダー起因の
+  失敗かどうか(`yes` / `no` / `unknown`)で、5行のいずれかが `usage limit`・`rate limit`・
+  `endpoint is unavailable`・429(前後に英数字を続けない。`.429Z` のようなタイムスタンプ等に
+  一致させないため)を含めば `yes`、含まなければ `no`、`cli_log` が未設定・ファイルが無ければ `unknown`。
+  利用上限・レート制限・エンドポイント障害の切り分け用の参考情報で、Verdict・exit code には影響しない
 - **権限拒否**: 行頭が `! permission requested:` で `auto-rejecting` を含む行(opencode の拒否の記録)が
   あれば権限拒否とみなす(子が表示したソース中の同じ文字列には反応しない)
 - Windows PowerShell 5.1 が UTF-16LE で書いた `output.log` も BOM を見て読む(PowerShell 版)
@@ -331,7 +343,7 @@ exit code(複数に当たる場合は上の行を優先する):
 | exit | Verdict | 意味 |
 |------|---------|------|
 | `8` | `tampered` | 管理ファイルの改ざん・git 状態の変化(上記の `Guard:`。`git changed: <名前>` を含む) |
-| `4` | `abnormal-exit` | 異常終了(非0・`signal:*`・`crashed:*`) |
+| `4` | `abnormal-exit` | 異常終了(非0・`idle-timeout`(子が `child_agent.idle_timeout_seconds` の間無応答で `dispatch-run` が止めた。上述の通りシグナル死の記録より優先される)・`signal:*`・`crashed:*`) |
 | `6` | `permission-denied` / `outside-access` | 権限拒否で中断(`Permission denied: yes`)、またはプロジェクト外アクセスの検出(`Outside access: yes`) |
 | `5` | `no-report` | 完了報告が無い・無効 |
 | `7` | `no-changes` | 完了報告はあるが作業ツリーに変更が無い(`pr-*` の run では判定しない) |
