@@ -52,6 +52,8 @@
 | `child_agent.command_template` | 子エージェントCLIのコマンドテンプレート。`{prompt}` がタスクプロンプトに展開される | `opencode run "{prompt}"` |
 | `child_agent.timeout_seconds` | 子エージェント実行のタイムアウト(秒) | `1800` |
 | `child_agent.isolate_xdg` | `true` なら `dispatch-run` が子CLIの `XDG_CONFIG_HOME` / `XDG_DATA_HOME` を `.agents/workflow/.config` に切り替える(sandbox で `~/.config` 等に書けない環境向け)。切り替えると `~/.local/share/<CLI>/auth.json` 等の認証情報が見えなくなる。未指定は `false` | `false` |
+| `child_agent.idle_timeout_seconds` | 子のログ(`output.log`)が更新されない時間の上限(秒)。超えると `dispatch-run` が子を止め、`done` に `EXIT:idle-timeout` を記録する(`dispatch-check` は exit 4)。未指定・0 以下は無効。POSIX 版は python3 経路のみ対応 | `600` |
+| `child_agent.cli_log` | 子CLI自身のログファイルのパス(先頭の `~/` はホームディレクトリ。例: opencode は `~/.local/share/opencode/log/opencode.log`)。`dispatch-check` がエラー行を出す | 未指定 |
 | `test_command` | 子エージェントに実行させるテストコマンド。空ならタスクごとに親が指定 | `""` |
 | `branch_per_group` | tasks.md にグループ区切り(`<!-- グループ <名前> -->`)がある場合に、グループ単位の PR 作成・ブランチ切替(next-task の exit 6 と `group-advance`)を必須手順にする。`false` ならグループを解釈せず全タスクを1つのまとまりとして扱う。config.json が無い・読めない場合の既定値も `true` | `true` |
 | `verify_before_commit` | コミット直前に親がテストコマンドを1回実行する最終ゲート | `false` |
@@ -253,6 +255,11 @@ POSIX 版は、Python 経由の起動では子の負の returncode を、bash �
 Windows にはシグナルの仕組みが無いため、PowerShell 版での強制終了は通常の非0終了として記録される。
 親プロセスのタイムアウト・終了に巻き込まれないよう `Start-Process` / `nohup` 等で
 デタッチ起動する。
+
+子の無応答タイムアウトもある。config.json の `child_agent.idle_timeout_seconds`(秒)を設定すると、
+`dispatch-run` は1秒ごとに `output.log` の最終更新時刻を見て、指定時間更新されなければ
+`runs/<タスクID>-<試行回数>/idle-timeout`(中身は秒数)を書き出し、子をプロセスツリーごと止める。
+このとき `done` の `EXIT` は `idle-timeout` になる(シグナル死の記録より優先)。
 
 子の一時ファイルの置き場所も `dispatch-run` が設定する: 子プロセスには `TMPDIR`・`TEMP`・`TMP`
 を `runs/<タスクID>-<試行回数>/tmp/`(起動時に作成する)に設定するため、子が `mktemp` 等で作る
