@@ -64,6 +64,27 @@ t_run_git_state() {
     assert_eq 4 "$lines" "git-state.txt has 4 lines"
 }
 
+t_run_git_state_no_exec() {
+    set_child 'echo hello'
+    chmod -x "$PROJ/.agents/workflow/scripts/git-state.sh"
+    run_script dispatch-run.sh T1 1
+    local expected first lines
+    expected="$(git -C "$PROJ" rev-parse HEAD)"
+    first="$(head -1 "$PROJ/.agents/workflow/runs/T1-1/git-state.txt")"
+    assert_eq "head $expected" "$first" "git-state.txt first line"
+    lines="$(wc -l < "$PROJ/.agents/workflow/runs/T1-1/git-state.txt" | tr -d '[:space:]')"
+    assert_eq 4 "$lines" "git-state.txt has 4 lines"
+}
+
+t_run_git_state_from_subdir() {
+    set_child 'echo hello'
+    mkdir -p "$PROJ/sub"
+    (cd "$PROJ/sub" && ../.agents/workflow/scripts/dispatch-run.sh T1 1) > /dev/null 2>&1
+    local lines
+    lines="$(wc -l < "$PROJ/.agents/workflow/runs/T1-1/git-state.txt" | tr -d '[:space:]')"
+    assert_eq 4 "$lines" "git-state.txt has 4 lines"
+}
+
 t_run_exit_nonzero() {
     set_child 'exit 3'
     run_script dispatch-run.sh T1 1
@@ -414,6 +435,16 @@ t_check_git_state_missing() {
     assert_contains "$OUT" "git-state.txt not found" "issue"
 }
 
+t_check_git_state_no_exec() {
+    make_run 0 "$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    chmod -x "$PROJ/.agents/workflow/scripts/git-state.sh"
+    (cd "$PROJ" && git commit --allow-empty -q -m x)
+    run_script dispatch-check.sh T1 1
+    assert_eq 8 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "git changed: head" "issue"
+}
+
 t_check_log_truncated() {
     make_run 0 "$REPORT"
     printf 'x\n' > "$PROJ/a.txt"
@@ -608,6 +639,8 @@ echo "test-dispatch.sh"
 
 test_case "run: 正常終了はEXIT:0" t_run_exit0
 test_case "run: 起動時の git 状態を git-state.txt に記録する" t_run_git_state
+test_case "run: git-state.sh に実行権限が無くても git-state.txt を4行で書く" t_run_git_state_no_exec
+test_case "run: プロジェクトルート以外から相対パスで起動しても git-state.txt を書く" t_run_git_state_from_subdir
 test_case "run: 通常の非0は数値のまま" t_run_exit_nonzero
 test_case "run: SIGTERMはsignal:15(python経路)" t_run_signal_python
 test_case "run: SIGTERMはsignal:15(フォールバック経路)" t_run_signal_fallback
@@ -636,6 +669,7 @@ test_case "check: state.jsonの変更はexit 8" t_check_state_changed
 test_case "check: prompt.mdの削除はexit 8" t_check_prompt_deleted
 test_case "check: guard.sha256が無ければexit 8" t_check_guard_missing
 test_case "check: git-state.txt が無ければ exit 8" t_check_git_state_missing
+test_case "check: git-state.sh に実行権限が無くても git 状態の変化を検出する" t_check_git_state_no_exec
 test_case "check: output.logの切り詰めはexit 8" t_check_log_truncated
 test_case "check: 切り詰められたoutput.logの表示にNULを含めない" t_check_log_truncated_display_no_nul
 test_case "run+check: 子が正常に完了すればexit 0" t_run_then_check_ok

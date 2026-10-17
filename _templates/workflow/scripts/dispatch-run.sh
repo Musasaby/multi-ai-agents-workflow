@@ -6,7 +6,8 @@ if ! [[ "$TASK_ID" =~ ^[A-Za-z0-9_-]+$ ]] || ! [[ "$ATTEMPT" =~ ^[0-9]+$ ]]; the
   echo "Invalid TaskId/Attempt: '$TASK_ID' '$ATTEMPT'" >&2
   exit 1
 fi
-cd "$(dirname "$0")/../../.."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR/../../.."
 # child_agent.isolate_xdg が true のときだけ、子CLIの設定・データの置き場所をプロジェクト内に切り替える
 # (sandbox で ~/.config 等に書けない環境向け)。既定(未指定・false)は呼び出し元の XDG をそのまま使う。
 # 切り替えると ~/.local/share/<CLI>/auth.json 等の認証情報が見えなくなる点に注意。
@@ -58,8 +59,9 @@ for f in "$PROMPT_PATH" .agents/workflow/state.json .agents/workflow/tasks.md .a
 done
 
 # 起動時の git 状態(HEAD・ブランチ・参照・設定)を git-state.txt に記録する。dispatch-check が
-# 実行後の状態と比べて、子がリポジトリのどこを変えたかを特定する(失敗しても起動は止めない)
-"$(dirname "$0")/git-state.sh" > "$RUN_DIR/git-state.txt"
+# 実行後の状態と比べて、子がリポジトリのどこを変えたかを特定する(失敗しても起動は止めない)。
+# 実行権限に頼らず bash で呼ぶ(リポジトリ上のスクリプトは mode 100644 のため)
+bash "$SCRIPT_DIR/git-state.sh" > "$RUN_DIR/git-state.txt"
 
 CMD_TEMPLATE=$(jq -r '.child_agent.command_template' .agents/workflow/config.json 2>/dev/null || \
   python3 -c "import json; print(json.load(open('.agents/workflow/config.json'))['child_agent']['command_template'])" 2>/dev/null || \

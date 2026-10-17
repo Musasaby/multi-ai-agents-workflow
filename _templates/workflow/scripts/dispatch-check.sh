@@ -93,7 +93,8 @@ if [ ! -f "$GIT_STATE_PATH" ]; then
 "
 else
     RECORDED_STATE="$(LC_ALL=C tr -d '\r' < "$GIT_STATE_PATH")"
-    CURRENT_STATE="$("$SCRIPT_DIR/git-state.sh" 2> /dev/null | LC_ALL=C tr -d '\r')"
+    # 実行権限に頼らず bash で呼ぶ(リポジトリ上のスクリプトは mode 100644 のため)
+    CURRENT_STATE="$(bash "$SCRIPT_DIR/git-state.sh" 2> /dev/null | LC_ALL=C tr -d '\r')"
     for name in head branch refs config; do
         if [ "$IS_PR" = true ] && [ "$name" = config ]; then continue; fi
         recorded="$(printf '%s\n' "$RECORDED_STATE" | LC_ALL=C awk -v name="$name" '$1 == name { print $2 }')"
