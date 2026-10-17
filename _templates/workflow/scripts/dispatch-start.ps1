@@ -1,6 +1,7 @@
 ﻿# 子エージェントの起動までの事前チェックを順に行い、デタッチ起動する。失敗した段階で止める
 # (止めたときは state.json を変えず、子も起動しない)。
-# Usage: dispatch-start.ps1 -TaskId <TaskId> [-Attempt <N>]
+# Usage: dispatch-start.ps1 -TaskId <TaskId> [-Attempt <N>] | dispatch-start.ps1 -Pr
+#   -Pr: PR 作成の run(pr-<N>-1)を起動する(タスクの状態確認・task-state は行わず、ウォームアップもしない)
 # exit:
 #   0=起動した / 1=使い方不備
 #   11〜15=branch-check -State の 1〜5(stdout の Next: 行はそのまま流す)
@@ -11,9 +12,17 @@
 # stdout の最後の行には次のアクションを示す `Next:` 行を出す(wait / escalate reason=<理由> 等。
 # 使い方不備の exit 1 では出さない)
 param(
-    [Parameter(Mandatory = $true)][string]$TaskId,
-    [int]$Attempt = 1
+    [string]$TaskId = '',
+    [int]$Attempt = 1,
+    [switch]$Pr
 )
+if ($Pr) {
+    $TaskId = 'pr'
+    $Attempt = 1
+} elseif (-not $TaskId) {
+    [Console]::Error.WriteLine("Usage: dispatch-start.ps1 -TaskId <TaskId> [-Attempt <N>] | dispatch-start.ps1 -Pr")
+    exit 1
+}
 if ($TaskId -cnotmatch '^[A-Za-z0-9_-]+$' -or $Attempt -lt 1) {
     [Console]::Error.WriteLine("Invalid TaskId/Attempt: '$TaskId' '$Attempt'")
     exit 1
@@ -43,14 +52,16 @@ if ($dirty.Count -gt 0) {
 
 # 3. タスクの状態
 $status = ''
-try {
-    $state = Get-Content '.agents/workflow/state.json' -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json
-    $task = @($state.tasks | Where-Object { $_.id -ceq $TaskId }) | Select-Object -First 1
-    if ($task) { $status = "$($task.status)" }
-} catch {
-    $status = ''
+if (-not $Pr) {
+    try {
+        $state = Get-Content '.agents/workflow/state.json' -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json
+        $task = @($state.tasks | Where-Object { $_.id -ceq $TaskId }) | Select-Object -First 1
+        if ($task) { $status = "$($task.status)" }
+    } catch {
+        $status = ''
+    }
 }
-if ($status -ne 'pending' -and $status -ne 'in_progress') {
+if (-not $Pr -and $status -ne 'pending' -and $status -ne 'in_progress') {
     $shown = if ($status) { $status } else { '<absent>' }
     [Console]::Error.WriteLine("Task $TaskId cannot be started (status: $shown)")
     Write-Output "Next: escalate reason=task-status"
@@ -107,7 +118,7 @@ if ($healthcheck) {
 
 # 3b. ウォームアップ(このサイクルの最初の dispatch のときだけ)
 $warmup = Get-ChildCfg 'warmup_command'
-if ($warmup -and -not (Test-Path '.agents/workflow/runs/*/guard.sha256')) {
+if (-not $Pr -and $warmup -and -not (Test-Path '.agents/workflow/runs/*/guard.sha256')) {
     if (-not (Invoke-CheckCommand $warmup)) {
         Write-Output "Next: escalate reason=warmup"
         exit 31
@@ -115,18 +126,33 @@ if ($warmup -and -not (Test-Path '.agents/workflow/runs/*/guard.sha256')) {
 }
 
 # 4. プロンプト生成
-$null = & pwsh -NoProfile -File "$PSScriptRoot/dispatch-prompt-gen.ps1" -TaskId $TaskId -Attempt $Attempt
+if ($Pr) {
+    $genOut = @(& pwsh -NoProfile -File "$PSScriptRoot/dispatch-prompt-gen.ps1" -Pr)
+} else {
+    $genOut = @(& pwsh -NoProfile -File "$PSScriptRoot/dispatch-prompt-gen.ps1" -TaskId $TaskId -Attempt $Attempt)
+}
 $code = $LASTEXITCODE
 if ($code -ne 0) {
     Write-Output "Next: escalate reason=prompt-gen"
     exit (40 + $code)
 }
 
-# 5. 状態を in_progress にする
-& pwsh -NoProfile -File "$PSScriptRoot/task-state.ps1" $TaskId start
-if ($LASTEXITCODE -ne 0) {
-    Write-Output "Next: escalate reason=task-state"
-    exit 50
+if ($Pr) {
+    $runIdLine = $genOut | ForEach-Object { "$_" } | Where-Object { $_ -match '^RunId: ' } | Select-Object -First 1
+    $TaskId = if ($runIdLine) { ($runIdLine -replace '^RunId: ', '').Trim() } else { '' }
+    if (-not $TaskId) {
+        [Console]::Error.WriteLine("dispatch-prompt-gen -Pr did not report a RunId")
+        Write-Output "Next: escalate reason=prompt-gen"
+        exit 41
+    }
+    $runDir = ".agents/workflow/runs/$TaskId-$Attempt"
+} else {
+    # 5. 状態を in_progress にする
+    & pwsh -NoProfile -File "$PSScriptRoot/task-state.ps1" $TaskId start
+    if ($LASTEXITCODE -ne 0) {
+        Write-Output "Next: escalate reason=task-state"
+        exit 50
+    }
 }
 
 # 6. デタッチ起動

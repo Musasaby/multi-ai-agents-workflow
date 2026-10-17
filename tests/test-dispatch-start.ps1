@@ -147,4 +147,42 @@ Invoke-TestCase "start: warmup_command が失敗すれば exit 31" {
     Assert-Eq pending (Get-StateTask T1).status "T1 status"
 }
 
+# -Pr 用: origin(bare)付きで develop/t に1コミットし、T1 を done(commit=そのハッシュ)にする
+function Initialize-PrProject {
+    Initialize-StartProject 'T1:pending', 'T2:pending'
+    Push-Location $script:Proj
+    git switch -q main 2>$null
+    git init -q --bare -b main .agents/remote.git 2>$null
+    git remote add origin .agents/remote.git
+    git push -q -u origin main 2>$null
+    git switch -q develop/t 2>$null
+    Set-Content b.txt 'b'; git add b.txt; git commit -q -m "feat: t1"
+    $h = "$(git rev-parse --short HEAD)".Trim()
+    Pop-Location
+    $path = "$script:Proj/.agents/workflow/state.json"
+    $state = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $t1 = $state.tasks | Where-Object { $_.id -ceq 'T1' }
+    $t1.status = 'done'
+    $t1.commit = $h
+    Write-Utf8File $path ($state | ConvertTo-Json -Depth 10)
+}
+
+Invoke-TestCase "start: -Pr は pr-<N> の run を起動する" {
+    Initialize-PrProject
+    Invoke-Script dispatch-start.ps1 '-Pr'
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Out "Run: pr-" "Run line"
+    Assert-Eq "Next: wait" (Get-LastLine $script:Out) "last line"
+    $run = (($script:Out -split "`n" | Where-Object { $_ -match '^Run: ' } | Select-Object -First 1) -replace '^Run: ', '').Trim()
+    Wait-Done $run
+    Assert-FileExists "$script:Proj/.agents/workflow/runs/$run/done" "done within 30s"
+}
+
+Invoke-TestCase "start: -Pr で main 上なら exit 12" {
+    Initialize-StartProject 'T1:done', 'T2:pending'
+    Invoke-Git switch -q main
+    Invoke-Script dispatch-start.ps1 '-Pr'
+    Assert-Eq 12 $script:Code "exit code: $($script:Err)"
+}
+
 Show-Summary
