@@ -48,18 +48,18 @@ exit 6(作業グループ完了)を返したら、以下の手順に**必ず**�
    .agents/workflow/scripts/group-advance.sh --branch "develop/<作業名>-<グループ名>"
    ```
 2. exit code で分岐する:
-   - **exit 7(PR 未作成)**: 「PR作成(子への単発依頼)」を必ず実行し、PR URL を
-     ユーザーに報告して停止する(マージはユーザーが行う)
-   - **exit 8(マージ待ち。stdout に `OPEN <PR URL>`)**: PR がオープンのため
+   - **`Next: create-pr`**(exit 7。PR 未作成): 「PR作成(子への単発依頼)」を必ず実行し、
+     PR URL をユーザーに報告して停止する(マージはユーザーが行う)
+   - **`Next: wait-merge`**(exit 8。マージ待ち。stdout に `OPEN <PR URL>`): PR がオープンのため
      「マージ待ち」であることを PR URL とともに報告して停止する。マージ完了の連絡を
      受けて group-advance を再実行する
-   - **exit 9(PR が未マージのまま閉鎖)**: エスカレーションする(PR が閉じられた理由と
-     再作成の要否をユーザーに確認する)
-   - **exit 0(次グループへの切替完了)**: stdout の `ADVANCED <新ブランチ名> <新グループ名>`
-     を確認する(state.json の `branch` / `group` は group-advance が更新済み)。
-     state.json がコミット対象のプロジェクトでは、この更新を新ブランチで
-     `chore: <新グループ名> グループの作業を開始` としてコミットしてから(`git status --porcelain`
-     が空になることを確認する)、新グループのタスクのループに進む
+   - **`Next: escalate reason=pr-closed`**(exit 9。PR が未マージのまま閉鎖):
+     エスカレーションする(PR が閉じられた理由と再作成の要否をユーザーに確認する)
+   - **`Next: continue`**(exit 0。次グループへの切替完了): stdout の
+     `ADVANCED <新ブランチ名> <新グループ名>` を確認する(state.json の `branch` / `group` は
+     group-advance が更新済み)。state.json がコミット対象のプロジェクトでは、この更新を
+     新ブランチで `chore: <新グループ名> グループの作業を開始` としてコミットしてから
+     (`git status --porcelain` が空になることを確認する)、新グループのタスクのループに進む
 
 ## フロー
 
@@ -79,18 +79,13 @@ exit 6(作業グループ完了)を返したら、以下の手順に**必ず**�
 ### 次のタスクの選び方
 
 ループの各周回の先頭で `next-task`(PowerShell: `.agents/workflow/scripts/next-task.ps1`
-/ POSIX: `next-task.sh`)を実行し、exit code で分岐する。tasks.md の記述順や ID 順、
-state.json の並び順で次のタスクを決めない(挿入したタスクの順序が崩れるため)。
-
-- **exit 0**: stdout の `<タスクID> <status>` に従う。`pending` / `in_progress` →
-  `/agent-dispatch <タスクID>`、`in_review` → `/agent-review-commit <タスクID>`
-- **exit 3**: 全タスク `done`。手順3(サマリー報告)へ進む
-- **exit 4**: 実行できるタスクが無い(`failed` や未完了の依存で止まっている)。stderr の
-  内容を添えてユーザーにエスカレーションする
-- **exit 1**: tasks.md / state.json の不備(依存欄の不正など)。stderr の内容を添えて
-  ユーザーに報告する
-- **exit 6**: 作業グループの全タスクが `done`(stdout に作業グループ名)。グループ境界なので
-  「グループ単位の PR とブランチ切替」の手順(group-advance の実行と exit code 分岐)へ進む
+/ POSIX: `next-task.sh`)を実行し、stdout の最後の `Next:` 行に従う: `dispatch <ID>` →
+`/agent-dispatch <ID>`、`review <ID>` → `/agent-review-commit <ID>`、`finish` →
+手順3、`group-advance` → 「グループ単位の PR とブランチ切替」、`escalate` →
+reason と stderr をユーザーに説明する。`Next:` 行が無ければ stderr を添えて報告する。
+語彙の一覧は `.agents/workflow/README.md` の「Next: 行」の節。
+tasks.md の記述順や ID 順、state.json の並び順で次のタスクを決めない
+(挿入したタスクの順序が崩れるため)。
 
 ## レビュー中に派生タスクが見つかった場合
 
