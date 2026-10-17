@@ -29,7 +29,7 @@
 │   ├── fix-notes.md     リトライ時のレビュー指摘(親が作成)
 │   ├── guard.sha256     起動時の管理ファイルの SHA-256(dispatch-run が作成、dispatch-check が改ざん検知に使う)
 │   ├── git-state.txt    起動時の git 状態の4行(git-state の出力。dispatch-run が作成、dispatch-check が改ざん検知に使う)
-│   ├── tmp/             子エージェントの一時ディレクトリ(TMPDIR・TEMP・TMP・GIT_CEILING_DIRECTORIES がここを指す)
+│   ├── tmp/             子エージェントの一時ディレクトリ(TMPDIR・TEMP・TMP がここを指す。GIT_CEILING_DIRECTORIES はその親の runs/<タスクID>-<試行回数>/ を指す)
 │   ├── output.log       子エージェントの出力
 │   ├── done             完了マーカー(EXIT/END の2行)
 │   ├── exit-signal      シグナル番号の一時ファイル(POSIX版のみ。done 書き出し時に削除)
@@ -256,8 +256,10 @@ Windows にはシグナルの仕組みが無いため、PowerShell 版での強�
 
 子の一時ファイルの置き場所も `dispatch-run` が設定する: 子プロセスには `TMPDIR`・`TEMP`・`TMP`
 を `runs/<タスクID>-<試行回数>/tmp/`(起動時に作成する)に設定するため、子が `mktemp` 等で作る
-一時ファイルはプロジェクト内の `tmp/` に置かれる。`GIT_CEILING_DIRECTORIES` も同じ値に設定し、
-`tmp/` の中で実行された `git` が本物のリポジトリを探索でたどり着かないようにする。PowerShell 版は
+一時ファイルはプロジェクト内の `tmp/` に置かれる。`GIT_CEILING_DIRECTORIES` には `tmp/` の親である
+`runs/<タスクID>-<試行回数>/` を設定する(`tmp/` そのものではない)。git は ceiling と同じ
+ディレクトリが cwd のときも探索を止めないため、その下の `tmp/` で実行された `git` が本物の
+リポジトリを探索でたどり着かないようにする。PowerShell 版は
 呼び出し元の `TEMP` 系環境変数の元の値を保存しておき、ラッパーの終了時(finally)に元に戻す。
 
 起動時の git 状態(HEAD・ブランチ・参照・config の SHA-256。「git-state」節の4行)を
@@ -283,7 +285,10 @@ nohup .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1 &
 - **改ざん検知**: `dispatch-run` は起動時に `prompt.md`・`state.json`・`tasks.md`・`config.json` の
   SHA-256 を `runs/<タスクID>-<試行回数>/guard.sha256` に記録する。`dispatch-check` はこれと
   現在の内容を比べ、変更・削除を検知する。`guard.sha256`・`output.log`・`git-state.txt` が無い場合や、
-  `output.log` に NUL バイトがある(実行中に空にされた)場合も改ざんとみなす
+  `output.log` に NUL バイトがある(実行中に空にされた)場合も改ざんとみなす。
+  `git-state.txt not found` は、この版より前の `dispatch-run`(起動時に `git-state.txt` を記録しない版)
+  で起動した run を更新後の `dispatch-check` で判定した場合にも記録される。その場合は run を
+  やり直す(再 dispatch)
 - **git 状態の比較**: `dispatch-check` は `git-state.txt`(dispatch-run が起動時に記録)と現在の
   `git-state` の出力を比べ、`head`・`branch`・`refs`・`config` のいずれかが変わっていれば
   `git changed: <名前>` を改ざん検知の問題に加える(例: 子が `git commit` や `git config` で

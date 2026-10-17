@@ -133,8 +133,10 @@ exit 3 になる。
   - プロンプトを `.agents/workflow/runs/<タスクID>-<試行回数>/prompt.md` から読み込む
   - 子の一時ディレクトリを設定する: `TMPDIR`・`TEMP`・`TMP` を
     `.agents/workflow/runs/<タスクID>-<試行回数>/tmp/`(起動時に作成)に設定し、子が `mktemp` 等で
-    作る一時ファイルをプロジェクト内に置かせる。`GIT_CEILING_DIRECTORIES` も同じ値に設定し、
-    `tmp/` の中で実行された `git` が本物のリポジトリを探索でたどり着かないようにする
+    作る一時ファイルをプロジェクト内に置かせる。`GIT_CEILING_DIRECTORIES` にはその親である
+    `.agents/workflow/runs/<タスクID>-<試行回数>/`(`tmp/` そのものではない)を設定する。
+    git は ceiling と同じディレクトリが cwd のときも探索を止めないため、その下の `tmp/` の中で
+    実行された `git` が本物のリポジトリを探索でたどり着かないようにする
   - 起動時の git 状態(HEAD・ブランチ・参照・config の SHA-256)を
     `.agents/workflow/runs/<タスクID>-<試行回数>/git-state.txt` に記録する(失敗しても起動は止めない)。
     dispatch-check が実行後の状態と比べて、子が `git commit` や `git config` で
