@@ -354,6 +354,23 @@ Invoke-TestCase "check: 必須項目が無い完了報告は無効(exit 5)" {
     Assert-Contains $script:Out "missing field: テスト結果" "reason"
 }
 
+# #55: 必須項目行の区切りは全角コロンでも有効
+Invoke-TestCase "check: 全角コロンの必須項目も有効(exit 0)" {
+    New-Run 0 "## 完了報告`n- 変更ファイル：`n  - a.txt`n- テストコマンド: bash tests/test.sh`n- テスト結果： 全件パス"
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Completion report: found" "report"
+}
+
+# #55: PR URL 行の区切りが全角コロンでも有効
+Invoke-TestCase "check: 全角コロンのPR URLも有効(exit 0)" {
+    New-Run 0 "## 完了報告`n- PR URL： https://github.com/o/r/pull/1" 'pr-1-1'
+    Invoke-Script dispatch-check.ps1 -TaskId pr-1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Completion report: found" "report"
+}
+
 Invoke-TestCase "check: 箇条書きの値・CRLF・ANSIを含む完了報告は有効" {
     New-Run 0 "$esc[0m`$ $esc[0mbash tests/test.sh`r`n## 完了報告`r`n- 変更ファイル:`r`n  - ``a.txt```r`n- テスト結果: 全件パス`r"
     Write-Utf8File "$script:Proj/a.txt" "x`n"
