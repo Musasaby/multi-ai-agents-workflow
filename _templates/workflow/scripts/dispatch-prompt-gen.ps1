@@ -177,6 +177,46 @@ if ($refStart -lt 0) {
     }
 }
 
+# --- 作業量の警告(タスクが1応答で処理しきれなそうなら計画の段階で気付けるようにする) ---
+# 1) 受け入れ基準が6件以上、2) (変更対象)の参照ファイルが4件以上。どちらも警告のみで生成は続ける。
+function Find-BulletField {
+    # `- **<名前>**:` の行位置・インデント・同一行の値(無ければ $null)を返す
+    param([string[]]$Lines, [string]$Name)
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i].TrimEnd("`r") -match ('^(\s*)-\s+\*\*' + [regex]::Escape($Name) + '\*\*:\s*(.*?)\s*$')) {
+            return [pscustomobject]@{ Start = $i; Indent = $Matches[1].Length; Inline = $Matches[2] }
+        }
+    }
+    return $null
+}
+$acField = Find-BulletField $sectionLines '受け入れ基準'
+if ($acField) {
+    $acCount = 0
+    for ($i = $acField.Start + 1; $i -lt $sectionLines.Count; $i++) {
+        $line = $sectionLines[$i].TrimEnd("`r")
+        if (-not $line.Trim()) { continue }
+        if (($line.Length - $line.TrimStart().Length) -le $acField.Indent) { break }
+        if ($line -match '^\s*-\s+\[[ xX]\]') { $acCount++ }
+    }
+    if ($acCount -gt 5) {
+        [Console]::Error.WriteLine("WARN: ${TaskId}: $acCount acceptance criteria (more than 5; consider splitting the task)")
+    }
+}
+$changedRefCount = 0
+if ($refStart -ge 0) {
+    # 参照ファイル欄は既存の検証で走査済み。同じ行の値と欄の下の行から変更対象を数える
+    $changedRefCount += [regex]::Matches($refInline, '[(（]変更対象').Count
+    for ($i = $refStart + 1; $i -lt $sectionLines.Count; $i++) {
+        $line = $sectionLines[$i].TrimEnd("`r")
+        if (-not $line.Trim()) { continue }
+        if (($line.Length - $line.TrimStart().Length) -le $refIndent) { break }
+        $changedRefCount += [regex]::Matches($line, '[(（]変更対象').Count
+    }
+}
+if ($changedRefCount -gt 3) {
+    [Console]::Error.WriteLine("WARN: ${TaskId}: $changedRefCount reference files marked 変更対象 (more than 3; consider splitting the task)")
+}
+
 # AGENTS.md が @ 参照だけのファイルなら警告する(opencode 等は @ を展開しないため、子にルールが届かない)
 if (Test-Path AGENTS.md -PathType Leaf) {
     $agentsLines = @(Get-Content AGENTS.md -Encoding UTF8 | Where-Object { $_.Trim() })
