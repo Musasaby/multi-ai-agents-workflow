@@ -131,6 +131,14 @@ exit 3 になる。
 - **ラッパースクリプト**(PowerShell: `.agents/workflow/scripts/dispatch-run.ps1`)が
   以下の責務を担う:
   - プロンプトを `.agents/workflow/runs/<タスクID>-<試行回数>/prompt.md` から読み込む
+  - 子の一時ディレクトリを設定する: `TMPDIR`・`TEMP`・`TMP` を
+    `.agents/workflow/runs/<タスクID>-<試行回数>/tmp/`(起動時に作成)に設定し、子が `mktemp` 等で
+    作る一時ファイルをプロジェクト内に置かせる。`GIT_CEILING_DIRECTORIES` も同じ値に設定し、
+    `tmp/` の中で実行された `git` が本物のリポジトリを探索でたどり着かないようにする
+  - 起動時の git 状態(HEAD・ブランチ・参照・config の SHA-256)を
+    `.agents/workflow/runs/<タスクID>-<試行回数>/git-state.txt` に記録する(失敗しても起動は止めない)。
+    dispatch-check が実行後の状態と比べて、子が `git commit` や `git config` で
+    リポジトリのどこを変えたかを機械的に特定できる
   - `child_agent.isolate_xdg` が `true` のときだけ、`XDG_CONFIG_HOME` / `XDG_DATA_HOME` をプロジェクト内ディレクトリに設定する(既定の `false` では呼び出し元の設定をそのまま使い、CLI の認証情報も引き継ぐ)
   - **PowerShellのコンソールエンコーディングをUTF-8に設定する**(`[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` および `$OutputEncoding = [System.Text.Encoding]::UTF8` をスクリプト冒頭で実行)。
     `Start-Process` でデタッチ起動した子コンソールはOSのシステムロケール既定コードページ(日本語Windowsでは932/Shift_JIS)を引き継ぐため、未設定だとUTF-8で出力するCLIのstdout/stderrをリダイレクトする際に文字化けする
@@ -254,14 +262,24 @@ exit 3 になる。
     `output.log` の末尾で作業がどこまで進んだか、完了報告があるか)をユーザーに報告し、
     再dispatch するか、成果物を引き取るかの判断を仰ぐ。`signal:*` の場合は、外部から
     強制終了された(メモリ逼迫・監督プロセス等)可能性が高いことも添える
-  - **exit 8**(管理ファイルの改ざん: `prompt.md`・`state.json`・`tasks.md`・`config.json` が
-    `dispatch-run` の起動時から変わった・消えた、`guard.sha256`・`output.log` が無い、
-    `output.log` が実行中に切り詰められた): レビューには進まない。`Guard:` 欄の内容を添えて
-    ユーザーに報告する。`state.json` / `tasks.md` が変わっている場合は、子の変更を戻すか
-    (`git diff` / アーカイブとの比較)をユーザーに確認する
-  - **exit 6**(権限拒否で中断: 子CLIがプロジェクト外へのアクセス等を拒否されて終わった):
-    レビューには進まない。`Permission denied:` 欄の拒否されたコマンドを添えてユーザーに報告する。
-    再dispatch する場合は、拒否された操作をしなくて済むよう fix-notes に方針を書く
+  - **exit 8**(管理ファイルの改ざん・git 状態の変化: `prompt.md`・`state.json`・`tasks.md`・
+    `config.json` が `dispatch-run` の起動時から変わった・消えた、`guard.sha256`・`output.log`・
+    `git-state.txt` が無い、`output.log` が実行中に切り詰められた): レビューには進まない。
+    `Guard:` 欄の内容を添えてユーザーに報告する。`state.json` / `tasks.md` が変わっている場合は、
+    子の変更を戻すか(`git diff` / アーカイブとの比較)をユーザーに確認する
+  - **exit 8 の `git changed:`**(本物のリポジトリの git 状態が変わった:
+    `git-state.txt` の記録と現在の git 状態の比較で検出): レビューには進まない。
+    `git log` / `git reflog` / `git config --local --list` で変化の内容(どのコミット・参照・設定が
+    変わったか)を確かめ、ユーザーに報告して復旧の要否を確認する
+  - **exit 6**(権限拒否で中断・プロジェクト外アクセスの検出: 子CLIがプロジェクト外への
+    アクセス等を拒否されて終わった): レビューには進まない。`Permission denied:` 欄の拒否された
+    コマンドを添えてユーザーに報告する。再dispatch する場合は、拒否された操作をしなくて済むよう
+    fix-notes に方針を書く
+  - **exit 6 の `Verdict: outside-access`**(プロジェクト外アクセスの検出:
+    `Outside access: yes`): レビューには進まない。`Outside access:` 欄の該当行を添えて
+    ユーザーに報告する。再dispatch する場合は、fix-notes に一時ファイルの置き場所(`$TMPDIR`)を
+    書く(dispatch-run が `$TMPDIR`・`$TEMP`・`$TMP` をプロジェクト内の
+    `runs/<タスクID>-<試行回数>/tmp/` に設定済みなので、子はそこに置くことで検出を避けられる)
   - **exit 5**(完了報告が無い・無効): `Completion report:` 欄の理由と成果物の有無を添えて
     ユーザーに報告する(子が途中で応答を終えた可能性がある)
   - **exit 7**(変更0件: 完了報告はあるが作業ツリーに変更が無い): タスクの受け入れ基準が
