@@ -596,6 +596,27 @@ ${ESC}[0m\$ ${ESC}[0mbash -c \"bash tests/x.sh > /tmp/dsp-sh.log\""
     assert_contains "$OUT" "Outside access: yes" "flag"
 }
 
+t_check_outside_access_tmp_uppercase_ok() {
+    # /tmp の参照は大文字小文字を区別する(/TMP は検出しない)
+    make_run 0 "${ESC}[0m\$ ${ESC}[0mls /TMP/x
+$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Outside access: no" "flag"
+}
+
+t_check_outside_access_home_redirect() {
+    # リダイレクト(`>`)の直後の ~/ もホームディレクトリの参照とみなす
+    make_run 0 "$REPORT
+${ESC}[0m\$ ${ESC}[0mbash tests/x.sh >~/out.log"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 6 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Verdict: outside-access" "verdict"
+    assert_contains "$OUT" "~/out.log" "line shown"
+}
+
 # T14: ホームディレクトリ・AppData の Temp への参照も検出する(exit 6)
 t_check_outside_access_tool_use_home() {
     make_run 0 "$REPORT
@@ -684,6 +705,8 @@ test_case "check: ツール実行行の /tmp への書き込みは exit 6(outsid
 test_case "check: runs/<ID>/tmp 配下へのアクセスは検出しない" t_check_outside_access_runs_tmp_ok
 test_case "check: ツールの出力中の /tmp には反応しない" t_check_outside_access_tool_output_ignored
 test_case "check: 権限拒否とプロジェクト外アクセスが両方あれば permission-denied" t_check_outside_access_with_permission_denied
+test_case "check: 大文字の /TMP は検出しない" t_check_outside_access_tmp_uppercase_ok
+test_case "check: リダイレクト直後の ~/ は exit 6" t_check_outside_access_home_redirect
 test_case "check: tool_use 行のホームディレクトリ参照は exit 6" t_check_outside_access_tool_use_home
 test_case "check: 色付きツール実行行の USERPROFILE・AppData の Temp 参照は exit 6" t_check_outside_access_userprofile_temp
 test_case "check: HOMEBREW_PREFIX や env:TEMP は検出しない" t_check_outside_access_home_not_detected

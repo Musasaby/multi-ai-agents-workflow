@@ -475,6 +475,25 @@ Invoke-TestCase "check: 権限拒否とプロジェクト外アクセスが両�
     Assert-Contains $script:Out "Outside access: yes" "flag"
 }
 
+Invoke-TestCase "check: 大文字の /TMP は検出しない" {
+    # /tmp の参照は大文字小文字を区別する(/TMP は検出しない)
+    New-Run 0 ("$esc[0m`$ $esc[0mls /TMP/x`n" + $report)
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Outside access: no" "flag"
+}
+
+Invoke-TestCase "check: リダイレクト直後の ~/ は exit 6" {
+    # リダイレクト(`>`)の直後の ~/ もホームディレクトリの参照とみなす
+    New-Run 0 ($report + "`n" + "$esc[0m`$ $esc[0mbash tests/x.sh >~/out.log")
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 6 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Verdict: outside-access" "verdict"
+    Assert-Contains $script:Out "~/out.log" "line shown"
+}
+
 # T14(#46): sh 版(test-dispatch.sh)と同じ名前の3ケース
 Invoke-TestCase "check: tool_use 行のホームディレクトリ参照は exit 6" {
     New-Run 0 ($report + "`n" + '[tool_use] bash: {"command": "cat ~/x.log"}')

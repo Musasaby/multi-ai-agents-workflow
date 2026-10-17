@@ -142,7 +142,7 @@ DENIED_LINES="$(printf '%s\n' "$RAW_LOG" | LC_ALL=C awk -v esc="$ESC" '
 OUTSIDE_LINES="$(printf '%s\n' "$RAW_LOG" | LC_ALL=C awk -v esc="$ESC" '
     BEGIN {
         outside_re = "(^|[ \t\"'\''=(<>])\\/(var\\/)?tmp([\\/ \t\"'\'');]|$)"
-        home_re = "(^|[ \t\"'\''=(])~\\/|\\$(\\{home\\}|home([^a-z0-9_]|$)|env:(home|userprofile)([^a-z0-9_]|$))|%userprofile%|appdata[\\\\/]local[\\\\/]temp"
+        home_re = "(^|[ \t\"'\''=(<>])~\\/|\\$(\\{home\\}|home([^a-z0-9_]|$)|env:(home|userprofile)([^a-z0-9_]|$))|%userprofile%|appdata[\\\\/]local[\\\\/]temp"
     }
     {
         raw = $0

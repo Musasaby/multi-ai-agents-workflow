@@ -149,12 +149,12 @@ $toolFlags = @($rawLines | ForEach-Object { ($_ -match $toolRe) -or ($_ -match '
 # Windows のユーザー一時ディレクトリ(AppData の Temp)への参照(大文字小文字を区別しない)。
 # $env:TEMP・%TEMP%・$TMPDIR は dispatch-run によりプロジェクト内を指すため検出しない
 $outsidePattern = '(^|[ \t"''=(<>])/(var/)?tmp([/ \t"'');]|$)'
-$homePattern = '(?i)(^|[ \t"''=(])~/|\$(\{home\}|home(?![a-z0-9_])|env:(home|userprofile)(?![a-z0-9_]))|%userprofile%|appdata[\\/]local[\\/]temp'
+$homePattern = '(?i)(^|[ \t"''=(<>])~/|\$(\{home\}|home(?![a-z0-9_])|env:(home|userprofile)(?![a-z0-9_]))|%userprofile%|appdata[\\/]local[\\/]temp'
 $outsideExecRe = '^' + [regex]::Escape($esc) + '\[[0-9;]*m(\$|→|←|✱|✗|⚙) ' + [regex]::Escape($esc) + '\[[0-9;]*m'
 $outsideLines = @()
 for ($i = 0; $i -lt $rawLines.Count; $i++) {
     $isToolExec = ($rawLines[$i] -match $outsideExecRe) -or ($rawLines[$i] -match '^\[tool_use\]')
-    if ($isToolExec -and (($cleanLines[$i] -match $outsidePattern) -or ($cleanLines[$i] -match $homePattern))) { $outsideLines += $cleanLines[$i] }
+    if ($isToolExec -and (($cleanLines[$i] -cmatch $outsidePattern) -or ($cleanLines[$i] -match $homePattern))) { $outsideLines += $cleanLines[$i] }
 }
 
 # --- 完了報告の判定 ---
