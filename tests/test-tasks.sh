@@ -252,7 +252,7 @@ t_sync_group_parse() {
     assert_eq ",P,A" "$(task_group_order)" "group order (default first)"
     run_script next-task.sh
     assert_eq 0 "$CODE" "next-task with groups: $ERR"
-    assert_eq "T1 pending" "$OUT" "default group task chosen"
+    assert_eq "T1 pending" "${OUT%%$'\n'*}" "default group task chosen"
 }
 
 t_sync_group_field_overrides() {
@@ -415,7 +415,8 @@ t_next_group_done_exit6() {
     set_state_group P
     run_script next-task.sh
     assert_eq 6 "$CODE" "exit code: $ERR"
-    assert_eq "P" "$OUT" "stdout shows the completed group name"
+    assert_eq "P" "${OUT%%$'\n'*}" "stdout shows the completed group name"
+    assert_eq "Next: group-advance" "${OUT##*$'\n'}" "next action after group completion"
 }
 
 t_next_group_advanced_to_next_group() {
@@ -424,7 +425,7 @@ t_next_group_advanced_to_next_group() {
     set_state_group A
     run_script next-task.sh
     assert_eq 0 "$CODE" "exit code: $ERR"
-    assert_eq "T2 pending" "$OUT" "task in the current group is chosen"
+    assert_eq "T2 pending" "${OUT%%$'\n'*}" "task in the current group is chosen"
 }
 
 t_next_group_missing_field_falls_back() {
@@ -432,7 +433,7 @@ t_next_group_missing_field_falls_back() {
     write_state "T1:done" "T2:pending" "T3:pending"   # group フィールド無し
     run_script next-task.sh
     assert_eq 0 "$CODE" "exit code: $ERR"
-    assert_eq "T2 pending" "$OUT" "first group with unfinished tasks is the work group"
+    assert_eq "T2 pending" "${OUT%%$'\n'*}" "first group with unfinished tasks is the work group"
 }
 
 t_next_group_unknown_name_falls_back() {
@@ -441,7 +442,7 @@ t_next_group_unknown_name_falls_back() {
     set_state_group ZZZ   # tasks.md に存在しないグループ名
     run_script next-task.sh
     assert_eq 0 "$CODE" "exit code: $ERR"
-    assert_eq "T1 pending" "$OUT" "first group with unfinished tasks (P) is the work group"
+    assert_eq "T1 pending" "${OUT%%$'\n'*}" "first group with unfinished tasks (P) is the work group"
 }
 
 t_next_default_group_done_exit6() {
@@ -450,7 +451,7 @@ t_next_default_group_done_exit6() {
     set_state_group ""   # 既定グループ(空文字列)
     run_script next-task.sh
     assert_eq 6 "$CODE" "exit code: $ERR"
-    assert_eq "" "$OUT" "stdout shows the default group (empty name)"
+    assert_eq "" "${OUT%%$'\n'*}" "stdout shows the default group (empty name)"
 }
 
 t_next_branch_per_group_false_chooses_all() {
@@ -460,7 +461,7 @@ t_next_branch_per_group_false_chooses_all() {
     set_branch_per_group false
     run_script next-task.sh
     assert_eq 0 "$CODE" "exit code: $ERR"
-    assert_eq "T2 pending" "$OUT" "task chosen from all tasks"
+    assert_eq "T2 pending" "${OUT%%$'\n'*}" "task chosen from all tasks"
 }
 
 t_next_no_separator_all_done_exit3() {
@@ -609,7 +610,8 @@ t_next_first_ready_pending() {
     write_state "T1:done" "T2:done" "T3:done" "T4:pending" "T8:pending"
     run_script next-task.sh
     assert_eq 0 "$CODE" "exit code: $ERR"
-    assert_eq "T8 pending" "$OUT" "T8 chosen before T4"
+    assert_eq "T8 pending" "${OUT%%$'\n'*}" "T8 chosen before T4"
+    assert_eq "Next: dispatch T8" "${OUT##*$'\n'}" "next action dispatches the chosen task"
 }
 
 t_next_resume_first() {
@@ -617,7 +619,8 @@ t_next_resume_first() {
     write_state "T1:done" "T2:in_review" "T3:pending" "T4:pending"
     run_script next-task.sh
     assert_eq 0 "$CODE" "exit code"
-    assert_eq "T2 in_review" "$OUT" "resume target"
+    assert_eq "T2 in_review" "${OUT%%$'\n'*}" "resume target"
+    assert_eq "Next: review T2" "${OUT##*$'\n'}" "next action reviews the resume target"
 }
 
 t_next_all_done() {
@@ -625,6 +628,7 @@ t_next_all_done() {
     write_state "T1:done" "T2:done" "T3:done" "T4:done"
     run_script next-task.sh
     assert_eq 3 "$CODE" "exit code"
+    assert_eq "Next: finish" "${OUT##*$'\n'}" "next action when all tasks are done"
 }
 
 t_next_blocked() {
@@ -633,6 +637,7 @@ t_next_blocked() {
     run_script next-task.sh
     assert_eq 4 "$CODE" "exit code"
     assert_contains "$ERR" "T1" "blocker listed"
+    assert_eq "Next: escalate reason=blocked" "${OUT##*$'\n'}" "next action when blocked"
 }
 
 t_next_invalid_deps() {

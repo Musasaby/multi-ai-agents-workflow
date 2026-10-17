@@ -8,7 +8,9 @@ set -euo pipefail
 # group(現在の作業グループ。無い/未知のグループ名なら「未完了タスクを含む最初のグループ」)
 # のタスクだけを候補にする。作業グループが全タスク done で他グループに未完了があれば
 # stdout に作業グループ名を出して exit 6(グループ境界で停止する合図)。
-# stdout: "<タスクID> <status>" / グループ完了時は "<作業グループ名>"
+# stdout: "<タスクID> <status>" / グループ完了時は "<作業グループ名>"。最後の行に "Next: <行動>" を出す
+#       (exit 0=dispatch/review <タスクID>、exit 3=finish、exit 4=escalate reason=blocked、
+#       exit 6=group-advance。exit 1 では出さない)
 # exit: 0=該当あり / 1=使い方・tasks.md/state.json 不備 / 3=全タスク done /
 #       4=実行可能なタスクなし / 6=作業グループ完了(他グループに未完了あり)
 
@@ -42,6 +44,10 @@ to_py_path() {
 
 python3 - "$(to_py_path "$SCRIPT_DIR")" "$(to_py_path "$TASKS_PATH")" "$(to_py_path "$STATE_PATH")" "$(to_py_path "$CONFIG_PATH")" <<'PY'
 import json, sys
+
+# stdout の行末を OS によらず LF に揃える(Windows ネイティブ Python は \r\n に変換するため。
+# 最終行を機械的に読む呼び出し側が CR を参照しなくて済む)
+sys.stdout.reconfigure(newline='\n')
 
 script_dir, tasks_path, state_path, config_path = sys.argv[1:5]
 sys.path.insert(0, script_dir)
@@ -88,10 +94,15 @@ def unfinished_group():
 for t in state_tasks:
     if t['status'] in ('in_progress', 'in_review'):
         print(t['id'] + ' ' + t['status'])
+        if t['status'] == 'in_review':
+            print('Next: review ' + t['id'])
+        else:
+            print('Next: dispatch ' + t['id'])
         sys.exit(0)
 
 if all(t['status'] == 'done' for t in state_tasks):
     print('All tasks are done', file=sys.stderr)
+    print('Next: finish')
     sys.exit(3)
 
 if group_mode:
@@ -108,6 +119,7 @@ if group_mode:
     if candidates and all(t['status'] == 'done' for t in candidates) \
             and any(t['status'] != 'done' for t in others):
         print(work_group)
+        print('Next: group-advance')
         sys.exit(6)
 else:
     candidates = state_tasks
@@ -122,6 +134,7 @@ for t in candidates:
     waiting = [d for d in graph[t['id']] if status.get(d) != 'done']
     if not waiting:
         print(t['id'] + ' pending')
+        print('Next: dispatch ' + t['id'])
         sys.exit(0)
     blocked.append(t['id'] + ': waiting for ' + ', '.join(d + '(' + status.get(d, 'missing') + ')' for d in waiting))
 
@@ -131,5 +144,6 @@ for b in blocked:
 for t in candidates:
     if t['status'] == 'failed':
         print('  ' + t['id'] + ': failed', file=sys.stderr)
+print('Next: escalate reason=blocked')
 sys.exit(4)
 PY
