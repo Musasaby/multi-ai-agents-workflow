@@ -484,6 +484,15 @@ Invoke-TestCase "next: 再開対象を優先" {
     Assert-Eq "Next: review T2" ($script:Out -split "`n")[-1] "next action reviews the resume target"
 }
 
+Invoke-TestCase "next: in_progressの再開はdispatch" {
+    Set-Tasks $basicTasks
+    Set-State 'T1:done' 'T2:in_progress' 'T3:pending' 'T4:pending'
+    Invoke-Script next-task.ps1
+    Assert-Eq 0 $script:Code "exit code"
+    Assert-Eq "T2 in_progress" ($script:Out -split "`n")[0] "resume target"
+    Assert-Eq "Next: dispatch T2" ($script:Out -split "`n")[-1] "next action dispatches the resume target"
+}
+
 Invoke-TestCase "next: 全完了はexit 3" {
     Set-Tasks $basicTasks
     Set-State 'T1:done' 'T2:done' 'T3:done' 'T4:done'

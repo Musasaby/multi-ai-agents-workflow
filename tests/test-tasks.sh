@@ -623,6 +623,15 @@ t_next_resume_first() {
     assert_eq "Next: review T2" "${OUT##*$'\n'}" "next action reviews the resume target"
 }
 
+t_next_resume_in_progress() {
+    basic_tasks
+    write_state "T1:done" "T2:in_progress" "T3:pending" "T4:pending"
+    run_script next-task.sh
+    assert_eq 0 "$CODE" "exit code"
+    assert_eq "T2 in_progress" "${OUT%%$'\n'*}" "resume target"
+    assert_eq "Next: dispatch T2" "${OUT##*$'\n'}" "next action dispatches the resume target"
+}
+
 t_next_all_done() {
     basic_tasks
     write_state "T1:done" "T2:done" "T3:done" "T4:done"
@@ -906,6 +915,7 @@ test_case "insert: --before必須" t_insert_requires_before
 test_case "insert: CRLF保持" t_insert_preserves_crlf
 test_case "next: 依存充足の最初のpending" t_next_first_ready_pending
 test_case "next: 再開対象を優先" t_next_resume_first
+test_case "next: in_progressの再開はdispatch" t_next_resume_in_progress
 test_case "next: 全完了はexit 3" t_next_all_done
 test_case "next: ブロックはexit 4" t_next_blocked
 test_case "next: 依存欄不正はexit 1" t_next_invalid_deps
