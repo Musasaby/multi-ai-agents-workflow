@@ -14,6 +14,8 @@
 #              して exit 0。stdout に "ADVANCED <新ブランチ名> <新グループ名>"
 # exit: 0=切替完了 / 1=使い方・前提不備 / 7=PR 未作成 / 8=マージ待ち / 9=PR 閉鎖(未マージ)
 #       git / gh の失敗時は何も書き換えず、その exit code を返す
+# stdout の最後の行は次アクションを示す "Next:" 行(0=continue / 7=create-pr / 8=wait-merge /
+# 9=escalate reason=pr-closed)。1 と git / gh の失敗をそのまま返す exit では出力しない
 param([string]$Branch)
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
@@ -134,6 +136,7 @@ try {
         $ghErr = [System.IO.File]::ReadAllText($errFile)
         if ($ghErr -match '(?i)no pull request') {
             Write-Output 'NO_PR'
+            Write-Output 'Next: create-pr'
             exit 7
         }
         Fail "gh pr view failed (exit $ghCode): $ghErr" $ghCode
@@ -149,9 +152,11 @@ try {
 
     if ($prState -ceq 'OPEN') {
         Write-Output "OPEN $prUrl"
+        Write-Output 'Next: wait-merge'
         exit 8
     }
     if ($prState -ceq 'CLOSED') {
+        Write-Output 'Next: escalate reason=pr-closed'
         Fail "PR for '$stateBranch' is CLOSED without merging (escalate: check why it was closed, then reopen or recreate the PR)" 9
     }
     if ($prState -cne 'MERGED') {
@@ -184,6 +189,7 @@ try {
     [System.IO.File]::WriteAllText((Join-Path (Get-Location) $statePath), ($state | ConvertTo-Json -Depth 10) + "`n", [System.Text.UTF8Encoding]::new($false))
 
     Write-Output "ADVANCED $Branch $nextGroup"
+    Write-Output 'Next: continue'
 } finally {
     Remove-Item $errFile -Force -ErrorAction SilentlyContinue
 }
