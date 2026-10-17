@@ -159,6 +159,36 @@ for ($i = 0; $i -lt $rawLines.Count; $i++) {
     if ($isToolExec -and (($cleanLines[$i] -cmatch $outsidePattern) -or ($cleanLines[$i] -match $homePattern))) { $outsideLines += $cleanLines[$i] }
 }
 
+# --- 子CLI自身のログのエラー検出(利用上限・エンドポイント障害などの切り分け用) ---
+# config.json の child_agent.cli_log(子CLI自身のログファイルのパス。先頭の ~/ はホームディレクトリ)
+# を読む(ConvertFrom-Json が読めない・cli_log が無い場合は未設定扱い)。末尾 200 行のうち ERROR を
+# 含む行の最後の 5 行と、プロバイダー起因かどうか(利用上限・レート制限・エンドポイント障害・429。
+# 429 の前後に英数字を許さないのは .429Z のようなタイムスタンプや16進の ID に一致させないため)を
+# 出力に表示するだけなので、判定(Verdict・exit code)には影響しない
+$cliLog = ''
+try {
+    $cfg = Get-Content '.agents/workflow/config.json' -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json
+    $cliLog = "$($cfg.child_agent.cli_log)"
+} catch {
+    $cliLog = ''
+}
+$providerError = 'unknown'
+$cliLogLines = @()
+if ($cliLog -ne '') {
+    $cliLogPath = if ($cliLog.StartsWith('~/')) { Join-Path $HOME $cliLog.Substring(2) } else { $cliLog }
+    if (-not (Test-Path -LiteralPath $cliLogPath -PathType Leaf)) {
+        $cliLog = "$cliLog (not found)"
+    } else {
+        $providerError = 'no'
+        $cliLogLines = @(Get-Content -LiteralPath $cliLogPath -Tail 200 -Encoding utf8 | Where-Object { $_ -cmatch 'ERROR' } | Select-Object -Last 5)
+        foreach ($line in $cliLogLines) {
+            if ($line.ToLowerInvariant() -match 'usage limit|rate limit|endpoint is unavailable|(^|[^0-9a-z])429([^0-9a-z]|$)') {
+                $providerError = 'yes'; break
+            }
+        }
+    }
+}
+
 # --- 完了報告の判定 ---
 # 最後に出現する `## 完了報告` だけを対象にし、その後にツール実行の記録が続く場合は無効とする
 # (子がテンプレートやドキュメントを表示しただけの行に一致させないため)。必須項目は
@@ -237,6 +267,11 @@ if ($outsideLines.Count -gt 0) {
 } else {
     Write-Output "Outside access: no"
 }
+Write-Output "CLI log: $(if ($cliLog) { $cliLog } else { '(not configured)' })"
+if ($cliLogLines.Count -gt 0) {
+    $cliLogLines | ForEach-Object { Write-Output "  $_" }
+}
+Write-Output "Provider error: $providerError"
 Write-Output "Completion report: $reportResult"
 Write-Output "Changes: $changeCount"
 Write-Output "Verdict: $verdict"

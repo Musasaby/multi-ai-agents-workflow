@@ -57,6 +57,16 @@ function Set-IdleTimeout {
     Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
 }
 
+# T8(#53): 子CLI自身のログファイルのパス(cli_log)を設定する($Value = パス。New-Run の前に呼ぶ)
+function Set-CliLog {
+    param([string]$Value)
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg.child_agent.PSObject.Properties.Remove('cli_log')
+    $cfg.child_agent | Add-Member -NotePropertyName cli_log -NotePropertyValue $Value
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+}
+
 function Get-ChildXdg {
     $env:XDG_DATA_HOME = 'C:/caller/xdg-data'
     try { Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1 } finally { Remove-Item Env:XDG_DATA_HOME -ErrorAction SilentlyContinue }
@@ -585,6 +595,40 @@ Invoke-TestCase "check: HOMEBREW_PREFIX や env:TEMP は検出しない" {
     Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
     Assert-Eq 0 $script:Code "exit code: $($script:Out)"
     Assert-Contains $script:Out "Outside access: no" "flag"
+}
+
+# T8(#53): sh 版(test-dispatch.sh)と同じ名前の3ケース
+# (cli_log は guard.sha256 の対象なので New-Run の前に設定する)
+Invoke-TestCase "check: CLI ログの利用上限エラーを Provider error: yes にする" {
+    Set-CliLog "$script:Proj/cli.log"
+    Write-Utf8File "$script:Proj/cli.log" ('timestamp=2026-10-17T03:07:49.892Z level=INFO message="ok"' + "`n" + 'timestamp=2026-10-17T03:07:50.429Z level=ERROR message="stream error" error.error="AI_APICallError: Go usage limit exceeded"' + "`n")
+    New-Run 0 $report
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Go usage limit exceeded" "error line shown"
+    Assert-Contains $script:Out "Provider error: yes" "provider flag"
+    Assert-NotContains $script:Out "level=INFO" "info line not shown"
+}
+
+Invoke-TestCase "check: CLI ログの ERROR がプロバイダー由来でなければ Provider error: no" {
+    Set-CliLog "$script:Proj/cli.log"
+    Write-Utf8File "$script:Proj/cli.log" ('timestamp=2026-10-17T03:07:50.429Z level=ERROR message="tool failed"' + "`n")
+    New-Run 0 $report
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out 'message="tool failed"' "error line shown"
+    Assert-Contains $script:Out "Provider error: no" "provider flag"
+}
+
+Invoke-TestCase "check: cli_log が未設定なら CLI log: (not configured)" {
+    New-Run 0 $report
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "CLI log: (not configured)" "not configured"
+    Assert-Contains $script:Out "Provider error: unknown" "provider flag"
 }
 
 Invoke-TestCase "check: UTF-16LEのoutput.log(Windows PowerShell 5.1)を読める" {
