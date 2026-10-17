@@ -66,132 +66,128 @@ nohup .agents/workflow/scripts/dispatch-run.sh T1 2 > /dev/null 2>&1 &
 テキストとして `output.log` に逐次書き出すため、実行中の閲覧が機能する
 (生 JSON は `output.jsonl` に残る)。既定の `text` は子 CLI 側でバッファリングされる。
 
-`config.json` の `child_agent.timeout_seconds` は**親側ポーリング**(§2)で管理する。
+`config.json` の `child_agent.timeout_seconds` は `dispatch-wait`(§2)が判定する。
 タイムアウトを超えた場合はタスクを `in_progress` のままユーザーに報告する。
 
 ### 2. 完了検知と結果検証
 
-- **ポーリングによる完了検知**: 親は一定間隔(推奨: 30秒)で `done` マーカーファイルの
-  存在を確認する。マーカーが存在すれば終了と判断し、マーカーの内容(exit code / 終了時刻)と
-  ログファイル末尾を確認する
+- **完了検知は `dispatch-wait` で行う**。`dispatch-wait` は `done` マーカーを待ち、
+  `config.json` の `child_agent.timeout_seconds` を超えたかを判定し、done を検知したら
+  `dispatch-check` を実行してその結果をそのまま返す
   ```powershell
-  # PowerShell: ポーリングループ例
-  $startTime = Get-Date
-  $donePath = ".agents/workflow/runs/T1-1/done"
-  $logPath = ".agents/workflow/runs/T1-1/output.log"
-  $timeout = (Get-Content .agents/workflow/config.json | ConvertFrom-Json).child_agent.timeout_seconds
-  while (-not (Test-Path $donePath)) {
-      $elapsed = ((Get-Date) - $startTime).TotalSeconds
-      if ($elapsed -gt $timeout) { Write-Warning "Timeout ($timeout 秒)"; break }
-      # ハング検知: ログファイルの最終更新が10分以上前なら警告
-      $log = Get-Item $logPath -ErrorAction SilentlyContinue
-      if ($log -and ((Get-Date) - $log.LastWriteTime).TotalMinutes -gt 10) {
-          Write-Warning "ログの更新が10分以上停止 - ハングの可能性"
-      }
-      Start-Sleep -Seconds 30
-  }
+  .agents/workflow/scripts/dispatch-wait.ps1 -TaskId T1 -Attempt 1 -MaxWait 480
   ```
   ```bash
-  # POSIX: ポーリングループ例
-  done=".agents/workflow/runs/T1-1/done"
-  log=".agents/workflow/runs/T1-1/output.log"
-  timeout=$(jq -r '.child_agent.timeout_seconds' .agents/workflow/config.json)
-  start=$(date +%s)
-  while [ ! -f "$done" ]; do
-    elapsed=$(( $(date +%s) - start ))
-    [ "$elapsed" -gt "$timeout" ] && echo "Timeout ($timeout 秒)" && break
-    # ハング検知: ログファイルの最終更新が10分以上前なら警告
-    if [ -f "$log" ] && [ "$(( $(date +%s) - $(stat -c %Y "$log") ))" -gt 600 ]; then
-      echo "警告: ログの更新が10分以上停止 - ハングの可能性"
-    fi
-    sleep 30
-  done
+  .agents/workflow/scripts/dispatch-wait.sh T1 1 --max-wait 480
   ```
-- **タイムアウト管理**: `config.json` の `child_agent.timeout_seconds`(デフォルト: 1800秒)を
-  親側のポーリングループ内で監視する。タイムアウト超過時はループを抜け、タスクを
-  `in_progress` のままユーザーに報告する
-- **ポーリング実行の上限への注意**: 上記のポーリングループは親エージェントのコマンド実行上限
-  (例: OpenCode の Bash/PowerShell ツールは最大10分)を超えると途中で打ち切られる。
-  1回のポーリング実行は親ツールのコマンド上限未満(例: 8分=480秒)で区切り、
-  `done` 未検出なら再度ポーリングコマンドを実行する。累計経過時間で `timeout_seconds` を
-  判定する。上記のサンプルコードは `timeout_seconds` が小さく1回のポーリング内で
-  完結する場合の例示であり、実際の利用時は適宜分割すること
-- **ハング検知**: ポーリングループ内で、ログファイルの最終更新時刻が10分以上前の場合に
-  警告を出力する。ハングの可能性があるためユーザーに報告する。`config.json` の
-  `child_agent.idle_timeout_seconds` が設定されている場合は、その時間 `output.log` が
-  更新されずに経過すると `dispatch-run` が子を止め、`done` マーカーが `EXIT:idle-timeout`
-  で書き出され、`dispatch-check` が異常終了(区分 `idle-timeout`)の exit 4 になる。
-  ハング検知をしたら(または `idle-timeout` で終了したら)、子のエラーの切り分けのために
+  `--max-wait`(`-MaxWait`)は親ツールのコマンド実行上限より短くする(例: 上限10分なら 480)。
+  出力の最後の `Next:` 行が `wait` なら、同じコマンドを再実行する(累計経過時間は
+  `dispatch-wait` が判定する)
+- **子のエラーの切り分け**: `child_agent.idle_timeout_seconds` が設定されている場合、その時間
+  `output.log` が更新されずに経過すると `dispatch-run` が子を止め、`done` マーカーが
+  `EXIT:idle-timeout` で書き出される。ハングや `idle-timeout` では、
   `child_agent.cli_log`(子CLI自身のログ。未設定なら子CLIのデフォルトのログ先。
   例: opencode は `~/.local/share/opencode/log/opencode.log`)の末尾の ERROR 行を
   確認する(`dispatch-check` も `CLI log:` 欄に出力する)。利用上限(usage/rate limit)・
   プロバイダー障害(エンドポイントの 429・unavailable 等)を表す行があれば、
   子の作業の失敗ではなくプロバイダー側の問題が原因である可能性が高い(`Provider error: yes`)
-- **完了検知後は毎回 `dispatch-check` を実行し、出力の最後の `Next:` 行で機械的に分岐する**
-  (`EXIT` の値を親が目視で解釈しない。非0終了の見落としを防ぐため)。
-  `dispatch-check` は終了状態の区分・管理ファイルの改ざん検知(Guard)・権限拒否の有無・
-  完了報告の判定・変更件数・`git status --porcelain`・`git diff --stat`・`output.log` の
-  末尾30行をまとめて出力する。完了報告は「`output.log` の最後の `## 完了報告`」だけを対象にし、
+- **出力の最後の `Next:` 行で機械的に分岐する**(`EXIT` の値を親が目視で解釈しない。
+  非0終了の見落としを防ぐため)。`dispatch-check` は終了状態の区分・管理ファイルの改ざん検知(Guard)・
+  権限拒否の有無・完了報告の判定・変更件数・`git status --porcelain`・`git diff --stat`・
+  `output.log` の末尾30行をまとめて出力し、完了報告を `report.md` に保存する(出力の `Report:` 行)。
+  完了報告は「`output.log` の最後の `## 完了報告`」だけを対象にし、
   その後にツール実行の記録が続く場合や、必須項目(`- 変更ファイル:` / `- テスト結果:`。
   PR 作成の run は `- PR URL:`。区切りは全角 `：` も可)が無い・テンプレートのままの場合は無効とする
-  (子がテンプレートを表示しただけの行を完了報告と誤認しないため)
-  ```powershell
-  .agents/workflow/scripts/dispatch-check.ps1 -TaskId T1 -Attempt 1
-  ```
-  ```bash
-  .agents/workflow/scripts/dispatch-check.sh T1 1
-  ```
-  - **`Next: review <ID>`(exit 0)**(正常終了かつ完了報告あり): 下記の検証に進む
-  - **`reason=abnormal-exit`(exit 4)**(異常終了: 非0・`signal:*`・`crashed:*`・`idle-timeout`): レビューには進まない。
-    出力された成果物の有無(`git status` / `git diff --stat` に変更があるか、
-    `output.log` の末尾で作業がどこまで進んだか、完了報告があるか)をユーザーに報告し、
-    再dispatch するか、成果物を引き取るかの判断を仰ぐ。`signal:*` の場合は、外部から
-    強制終了された(メモリ逼迫・監督プロセス等)可能性が高いことも添える
-  - **`reason=idle-timeout` / `reason=provider-error`(exit 4)**(子CLIが無応答に
-    なった・利用上限やプロバイダー障害に当たった): 子の作業の失敗ではないため
-    `task-state <タスクID> retry` は使わない(retries は増やさない。state.json は
-    `in_progress` のまま)。ユーザーに状況(利用上限・プロバイダー障害で中断した旨と
-    成果物の有無)を報告し、モデル(`config.json` の `child_agent.command_template`)の
-    切り替えの承認を得てから、`task-state <タスクID> start` のまま次の試行番号で
-    再dispatch する。試行番号 2 以上の再dispatch には `fix-notes.md` が要るため、
-    「前回はプロバイダーの利用上限(または障害)で中断した。作業ツリーの変更は無い」等の
-    事実を書く(レビュー指摘事項ではないが、テンプレート経由で子に引き継がれる)
-  - **`reason=tampered`(exit 8)**(管理ファイルの改ざん・git 状態の変化: `prompt.md`・`state.json`・`tasks.md`・
-    `config.json` が `dispatch-run` の起動時から変わった・消えた、`guard.sha256`・`output.log`・
-    `git-state.txt` が無い、`output.log` が実行中に切り詰められた): レビューには進まない。
-    `Guard:` 欄の内容を添えてユーザーに報告する。`state.json` / `tasks.md` が変わっている場合は、
-    子の変更を戻すか(`git diff` / アーカイブとの比較)をユーザーに確認する
-  - **`reason=tampered` で `Guard:` 欄に `git changed:` がある場合**(本物のリポジトリの git 状態が変わった:
-    `git-state.txt` の記録と現在の git 状態の比較で検出): レビューには進まない。
-    `git log` / `git reflog` / `git config --local --list` で変化の内容(どのコミット・参照・設定が
-    変わったか)を確かめ、ユーザーに報告して復旧の要否を確認する
-  - **`reason=permission-denied`(exit 6)**(権限拒否で中断・プロジェクト外アクセスの検出: 子CLIがプロジェクト外への
-    アクセス等を拒否されて終わった): レビューには進まない。`Permission denied:` 欄の拒否された
-    コマンドを添えてユーザーに報告する。再dispatch する場合は、拒否された操作をしなくて済むよう
-    fix-notes に方針を書く
-  - **`reason=outside-access`(exit 6)**(プロジェクト外アクセスの検出:
-    `Outside access: yes`): レビューには進まない。`Outside access:` 欄の該当行を添えて
-    ユーザーに報告する。再dispatch する場合は、fix-notes に一時ファイルの置き場所(`$TMPDIR`)を
-    書く(dispatch-run が `$TMPDIR`・`$TEMP`・`$TMP` をプロジェクト内の
-    `runs/<タスクID>-<試行回数>/tmp/` に設定済みなので、子はそこに置くことで検出を避けられる)
-  - **`reason=no-report`(exit 5)**(完了報告が無い・無効): `Completion report:` 欄の理由と成果物の有無を添えて
-    ユーザーに報告する(子が途中で応答を終えた可能性がある)。
-  - **`reason=token-limit`(exit 5)**: 子は最後のツール実行の後に応答を出力しきれずに
-    打ち切られた(出力トークン上限に達した)可能性が高い。確認方法:
-    opencode ならセッション DB(`~/.local/share/opencode/opencode.db` の `message` テーブル)で
-    該当セッションの最後の assistant メッセージを見て、`finish` が `length`(出力トークン上限で
-    打ち切り)であること、または `tokens` の `reasoning` が上限(例: 32000)に近いことを確かめる
-    (親がセッション DB を確かめられない場合は、ユーザーに確認を依頼する)。
-    この原因が濃厚な場合は、retries を消費する通常の再 dispatch の前に、次の対処のどれかを
-    ユーザーに提案する:
-    1. タスクを細かく分ける(`agent-task-plan` の追加モードでタスクを分割する)
-    2. 実装方法・設計判断を計画(`tasks.md`)に具体的に書き、子の調査・推論量を減らす
-    3. 子のモデルの推論量(思考モード・reasoning トークン上限等)を下げる
-  - **`reason=no-changes`(exit 7)**(変更0件: 完了報告はあるが作業ツリーに変更が無い): タスクの受け入れ基準が
-    ファイルの変更を求めているなら失敗として扱い、ユーザーに報告する。調査だけのタスクなど
-    変更が無いのが正しい場合に限り、下記の検証に進んでよい
-  - **`Next: wait`(exit 2)**: done マーカーが無い(まだ終了していない)。exit 1 は使い方不備
-  - **`Next:` 行が無い**(exit 1。使い方の誤り): stderr の内容をユーザーに伝える
+  (子がテンプレートを表示しただけの行を完了報告と誤認しないため)。`dispatch-check` 単体でも実行できる
+  (`dispatch-check.ps1 -TaskId T1 -Attempt 1` / `dispatch-check.sh T1 1`)
+
+#### `Next: review <ID>`
+
+正常終了かつ完了報告あり: 下記の検証に進む。
+
+#### `Next: escalate reason=timeout`
+
+経過が `child_agent.timeout_seconds` を超えた(`dispatch-wait` の exit 3)。タスクを
+`in_progress` のままユーザーに報告する。ハングの可能性があるため、`output.log` の末尾と
+`cli_log` の ERROR 行も添える。
+
+#### `Next: escalate reason=provider-error` / `reason=idle-timeout`
+
+子CLIが無応答になった・利用上限やプロバイダー障害に当たった。子の作業の失敗ではないため
+`task-state <タスクID> retry` は使わない(retries は増やさない。state.json は
+`in_progress` のまま)。ユーザーに状況(利用上限・プロバイダー障害で中断した旨と
+成果物の有無)を報告し、モデル(`config.json` の `child_agent.command_template`)の
+切り替えの承認を得てから、`task-state <タスクID> start` のまま次の試行番号で
+再dispatch する。試行番号 2 以上の再dispatch には `fix-notes.md` が要るため、
+「前回はプロバイダーの利用上限(または障害)で中断した。作業ツリーの変更は無い」等の
+事実を書く(レビュー指摘事項ではないが、テンプレート経由で子に引き継がれる)。
+
+#### `Next: escalate reason=abnormal-exit`
+
+異常終了(非0・`signal:*`・`crashed:*`): レビューには進まない。
+出力された成果物の有無(`git status` / `git diff --stat` に変更があるか、
+`output.log` の末尾で作業がどこまで進んだか、完了報告があるか)をユーザーに報告し、
+再dispatch するか、成果物を引き取るかの判断を仰ぐ。`signal:*` の場合は、外部から
+強制終了された(メモリ逼迫・監督プロセス等)可能性が高いことも添える。
+
+#### `Next: escalate reason=tampered`
+
+管理ファイルの改ざん・git 状態の変化(`prompt.md`・`state.json`・`tasks.md`・
+`config.json` が `dispatch-run` の起動時から変わった・消えた、`guard.sha256`・`output.log`・
+`git-state.txt` が無い、`output.log` が実行中に切り詰められた): レビューには進まない。
+`Guard:` 欄の内容を添えてユーザーに報告する。`state.json` / `tasks.md` が変わっている場合は、
+子の変更を戻すか(`git diff` / アーカイブとの比較)をユーザーに確認する。
+
+`Guard:` 欄に `git changed:` がある場合(本物のリポジトリの git 状態が変わった:
+`git-state.txt` の記録と現在の git 状態の比較で検出): レビューには進まない。
+`git log` / `git reflog` / `git config --local --list` で変化の内容(どのコミット・参照・設定が
+変わったか)を確かめ、ユーザーに報告して復旧の要否を確認する。
+
+#### `Next: escalate reason=permission-denied`
+
+権限拒否で中断(子CLIがプロジェクト外へのアクセス等を拒否されて終わった): レビューには進まない。
+`Permission denied:` 欄の拒否されたコマンドを添えてユーザーに報告する。
+再dispatch する場合は、拒否された操作をしなくて済むよう fix-notes に方針を書く。
+
+#### `Next: escalate reason=outside-access`
+
+プロジェクト外アクセスの検出(`Outside access: yes`): レビューには進まない。
+`Outside access:` 欄の該当行を添えてユーザーに報告する。再dispatch する場合は、
+fix-notes に一時ファイルの置き場所(`$TMPDIR`)を書く(dispatch-run が
+`$TMPDIR`・`$TEMP`・`$TMP` をプロジェクト内の `runs/<タスクID>-<試行回数>/tmp/` に
+設定済みなので、子はそこに置くことで検出を避けられる)。
+
+#### `Next: escalate reason=token-limit`
+
+子は最後のツール実行の後に応答を出力しきれずに打ち切られた(出力トークン上限に達した)
+可能性が高い。確認方法:
+opencode ならセッション DB(`~/.local/share/opencode/opencode.db` の `message` テーブル)で
+該当セッションの最後の assistant メッセージを見て、`finish` が `length`(出力トークン上限で
+打ち切り)であること、または `tokens` の `reasoning` が上限(例: 32000)に近いことを確かめる
+(親がセッション DB を確かめられない場合は、ユーザーに確認を依頼する)。
+この原因が濃厚な場合は、retries を消費する通常の再 dispatch の前に、次の対処のどれかを
+ユーザーに提案する:
+1. タスクを細かく分ける(`agent-task-plan` の追加モードでタスクを分割する)
+2. 実装方法・設計判断を計画(`tasks.md`)に具体的に書き、子の調査・推論量を減らす
+3. 子のモデルの推論量(思考モード・reasoning トークン上限等)を下げる
+
+#### `Next: escalate reason=no-report`
+
+完了報告が無い・無効: `Completion report:` 欄の理由と成果物の有無を添えて
+ユーザーに報告する(子が途中で応答を終えた可能性がある)。
+
+#### `Next: escalate reason=no-changes`
+
+変更0件(完了報告はあるが作業ツリーに変更が無い): タスクの受け入れ基準が
+ファイルの変更を求めているなら失敗として扱い、ユーザーに報告する。調査だけのタスクなど
+変更が無いのが正しい場合に限り、下記の検証に進んでよい。
+
+#### `Next:` 行が無い
+
+exit 1(使い方の誤り): stderr の内容をユーザーに伝える。
+
+#### 検証
+
 - 完了確認後、子エージェントの出力(`output.log`)と `git status` / `git diff --stat` を突き合わせる:
   - 完了報告フォーマットが出力に含まれているか
   - テスト結果が「全件パス」か。失敗が残っている・テスト結果の記載がない場合は
@@ -200,9 +196,10 @@ nohup .agents/workflow/scripts/dispatch-run.sh T1 2 > /dev/null 2>&1 &
 
 ### 3. 状態更新
 
-検証を通過したら `task-state <タスクID> review` で state.json を `in_review` に更新し、子エージェントの完了報告を
-`.agents/workflow/runs/<タスクID>-<試行回数>/report.md` に保存して、レビューフェーズ
-(`/agent-review-commit`)に引き継ぐ。この `report.md` は後続タスクの `dispatch-prompt-gen`
+検証を通過したら `task-state <タスクID> review` で state.json を `in_review` に更新し、レビューフェーズ
+(`/agent-review-commit`)に引き継ぐ。子エージェントの完了報告は `dispatch-check` が
+`.agents/workflow/runs/<タスクID>-<試行回数>/report.md` に保存済み(出力の `Report:` 行。手で保存しない)。
+この `report.md` は後続タスクの `dispatch-prompt-gen`
 実行時に引き継ぎ資料として機械結合されるため、削除しないこと(`runs/` は `.gitignore`
 済みでコミットはされない)。`output.log` も同様に残す(リトライ時の比較や事後調査に使えるため)。
 
