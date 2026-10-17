@@ -8,6 +8,7 @@ set -uo pipefail
 #   0=起動した / 1=使い方不備
 #   11〜15=branch-check --state の 1〜5(stdout の Next: 行はそのまま流す)
 #   20=作業ツリーが汚れている / 21=タスクの状態が不正(pending / in_progress 以外、タスク無しを含む)
+#   30=疎通確認(healthcheck_command)の失敗 / 31=ウォームアップ(warmup_command)の失敗
 #   41〜43=dispatch-prompt-gen の 1〜3(依存未完了・report.md の欠落は 42)
 #   50=task-state の失敗
 # stdout の最後の行には次のアクションを示す `Next:` 行を出す(wait / escalate reason=<理由> 等。
@@ -64,6 +65,57 @@ case "$STATUS" in
         exit 21
         ;;
 esac
+
+# config.json の child_agent.<キー> を読む(読めなければ空)。bool は true のとき true と出す
+cfg_get() {
+    python3 -c "
+import json, sys
+try:
+    with open('.agents/workflow/config.json', encoding='utf-8') as f:
+        v = json.load(f)['child_agent'].get(sys.argv[1])
+except Exception:
+    v = None
+if v is True:
+    print('true')
+elif isinstance(v, str):
+    print(v)
+" "$1" 2> /dev/null | tr -d '\r'
+}
+
+# コマンドを実行し、失敗したら出力の末尾20行を stderr に出す($1=コマンド)
+run_check_command() {
+    local out code
+    out="$(
+        if [ "$(cfg_get isolate_xdg)" = true ]; then
+            export XDG_CONFIG_HOME=".agents/workflow/.config"
+            export XDG_DATA_HOME=".agents/workflow/.config"
+        fi
+        bash -c "$1" 2>&1
+    )"
+    code=$?
+    if [ "$code" -ne 0 ]; then
+        printf '%s\n' "$out" | tail -n 20 >&2
+    fi
+    return "$code"
+}
+
+# 3a. 疎通確認
+HEALTHCHECK="$(cfg_get healthcheck_command)"
+if [ -n "$HEALTHCHECK" ]; then
+    if ! run_check_command "$HEALTHCHECK"; then
+        echo "Next: escalate reason=healthcheck"
+        exit 30
+    fi
+fi
+
+# 3b. ウォームアップ(このサイクルの最初の dispatch のときだけ)
+WARMUP="$(cfg_get warmup_command)"
+if [ -n "$WARMUP" ] && ! compgen -G ".agents/workflow/runs/*/guard.sha256" > /dev/null; then
+    if ! run_check_command "$WARMUP"; then
+        echo "Next: escalate reason=warmup"
+        exit 31
+    fi
+fi
 
 # 4. プロンプト生成
 bash "$SCRIPT_DIR/dispatch-prompt-gen.sh" "$TASK_ID" "$ATTEMPT" > /dev/null
