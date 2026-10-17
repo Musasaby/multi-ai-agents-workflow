@@ -1,6 +1,6 @@
 ﻿# PowerShell セッション内で `& script.ps1` と直接呼んだときにも、成功時に $LASTEXITCODE が 0 になること。
 # (exit を呼ばずに終わるスクリプトは $LASTEXITCODE を更新しないため、直前の値や空のまま残る)
-# 動的検査は _templates/workflow/scripts/ の直接実行する .ps1(tasklib.ps1 以外)の全 11 本に
+# 動的検査は _templates/workflow/scripts/ の直接実行する .ps1(tasklib.ps1 以外)の全 12 本に
 # 1 件ずつある。静的検査(最後の行が exit で始まるか)は補助として残す。
 . "$PSScriptRoot/lib.ps1"
 
@@ -77,6 +77,28 @@ Invoke-TestCase "dispatch-check: 成功時に LASTEXITCODE=0" {
     Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
     Assert-Eq 0 (Invoke-InProcess dispatch-run.ps1 @{ TaskId = 'T1'; Attempt = 1 }) "run LASTEXITCODE"
     Assert-Eq 0 (Invoke-InProcess dispatch-check.ps1 @{ TaskId = 'T1'; Attempt = 1 }) "check LASTEXITCODE"
+}
+
+Invoke-TestCase "dispatch-wait: 成功時に LASTEXITCODE=0" {
+    # T13 のケース1と同じ run(EXIT:0・完了報告あり・a.txt の変更あり)。guard.sha256 と
+    # git-state.txt は dispatch-run と同じ形式で書く(test-dispatch-wait.ps1 と同じ作り方)
+    Set-Tasks "## T1: a`n- **依存**: なし`n"
+    Set-State 'T1:in_progress'
+    $run = "$script:Proj/.agents/workflow/runs/T1-1"
+    Write-Utf8File "$run/prompt.md" "prompt`n"
+    Write-Utf8File "$run/done" "EXIT:0`nEND:2026-01-01T00:00:00+09:00`n"
+    Write-Utf8File "$run/output.log" "作業しました`n## 完了報告`n- 変更ファイル: a.txt`n- テスト結果: 全件パス`n"
+    Push-Location $script:Proj
+    $guard = foreach ($f in @('.agents/workflow/runs/T1-1/prompt.md', '.agents/workflow/state.json', '.agents/workflow/tasks.md', '.agents/workflow/config.json')) {
+        $h = if (Test-Path -LiteralPath $f -PathType Leaf) { (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash.ToLowerInvariant() } else { '-' }
+        "$h  $f"
+    }
+    $gitState = @(& pwsh -NoProfile -File .agents/workflow/scripts/git-state.ps1)
+    Pop-Location
+    Write-Utf8File "$run/guard.sha256" (($guard -join "`n") + "`n")
+    Write-Utf8File "$run/git-state.txt" (($gitState -join "`n") + "`n")
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Assert-Eq 0 (Invoke-InProcess dispatch-wait.ps1 @{ TaskId = 'T1' }) "LASTEXITCODE"
 }
 
 Invoke-TestCase "branch-check: 成功時に LASTEXITCODE=0" {
