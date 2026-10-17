@@ -28,8 +28,15 @@ else
     TASK_ID="${1:?Usage: dispatch-start.sh <TaskId> [Attempt] | dispatch-start.sh --pr}"
     ATTEMPT="${2:-1}"
 fi
-if ! [[ "$TASK_ID" =~ ^[A-Za-z0-9_-]+$ ]] || ! [[ "$ATTEMPT" =~ ^[0-9]+$ ]]; then
+if ! [[ "$TASK_ID" =~ ^[A-Za-z0-9_-]+$ ]] || ! [[ "$ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then
     echo "Invalid TaskId/Attempt: '$TASK_ID' '$ATTEMPT'" >&2
+    exit 1
+fi
+
+# state.json・config.json の読み取りに python3 が要る(無いと状態が読めず、
+# 誤って「タスク無し」(exit 21)になるため始めに止める)
+if ! command -v python3 > /dev/null 2>&1; then
+    echo "python3 not found (required to read state.json and config.json)" >&2
     exit 1
 fi
 
@@ -54,6 +61,9 @@ else
     if [ -n "$DIRTY" ]; then
         echo "Working tree is not clean:" >&2
         printf '%s\n' "$DIRTY" >&2
+        if [ "$PR_MODE" = false ] && [ "$ATTEMPT" -ge 2 ] && [ ! -f "$RUN_DIR/fix-notes.md" ]; then
+            echo "fix-notes.md not found: $RUN_DIR/fix-notes.md (a retry with attempt >= 2 needs fix-notes.md)" >&2
+        fi
         echo "Next: escalate reason=dirty-tree"
         exit 20
     fi

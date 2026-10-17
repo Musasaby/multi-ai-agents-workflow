@@ -21,3 +21,6 @@ test-tasks.sh: __pycache__ を作らない
 
 # test-exitcode.sh は存在しない(sh 側では各テストが直接 exit code を断言する)
 test-exitcode.ps1: *
+
+test-dispatch-start.sh: start: 試行回数 0 は exit 1 # T57 で ps1 に追加
+test-dispatch-start.sh: start: リトライで fix-notes が無ければ stderr に案内を出す # T57 で ps1 に追加
