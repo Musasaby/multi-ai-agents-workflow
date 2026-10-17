@@ -835,6 +835,30 @@ t_gen_ref_files_inline() {
     assert_eq 1 "$CODE" "inline missing reference -> exit 1"
 }
 
+t_gen_ac_too_many_warns() {
+    printf 'x\n' > "$PROJ/a.txt"
+    ref_tasks $'- **受け入れ基準**:\n  - [ ] c1\n  - [ ] c2\n  - [ ] c3\n  - [ ] c4\n  - [ ] c5\n  - [ ] c6\n- **参照ファイル**:\n  - `a.txt`(全体)'
+    run_script dispatch-prompt-gen.sh T1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$ERR" "WARN: T1: 6 acceptance criteria (more than 5; consider splitting the task)" "warning"
+}
+
+t_gen_changed_ref_files_warns() {
+    for f in a b c d; do printf 'x\n' > "$PROJ/$f.txt"; done
+    ref_tasks $'- **参照ファイル**:\n  - `a.txt`(変更対象)\n  - `b.txt`(変更対象)\n  - `c.txt`(変更対象)\n  - `d.txt`(変更対象)'
+    run_script dispatch-prompt-gen.sh T1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$ERR" "WARN: T1: 4 reference files marked 変更対象 (more than 3; consider splitting the task)" "warning"
+}
+
+t_gen_workload_no_warn_5ac_3files() {
+    for f in a b c; do printf 'x\n' > "$PROJ/$f.txt"; done
+    ref_tasks $'- **受け入れ基準**:\n  - [ ] c1\n  - [ ] c2\n  - [ ] c3\n  - [ ] c4\n  - [ ] c5\n- **参照ファイル**:\n  - `a.txt`(変更対象)\n  - `b.txt`(変更対象)\n  - `c.txt`(全体)'
+    run_script dispatch-prompt-gen.sh T1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_not_contains "$ERR" "WARN" "no warning"
+}
+
 echo "test-tasks.sh"
 test_case "gen: 注記付き依存はexit 1" t_gen_annotation_rejected
 test_case "gen: 正しい形式は通る" t_gen_valid_forms_pass
@@ -896,5 +920,8 @@ test_case "gen: 参照ファイル欄が無ければ警告" t_gen_ref_files_abse
 test_case "gen: 参照ファイル なし は検証しない" t_gen_ref_files_none
 test_case "gen: @参照だけのAGENTS.mdは警告" t_gen_agents_md_at_only_warns
 test_case "gen: 同じ行の参照ファイルも検証する" t_gen_ref_files_inline
+test_case "gen: 受け入れ基準が6件以上なら警告" t_gen_ac_too_many_warns
+test_case "gen: 変更対象の参照ファイルが4件以上なら警告" t_gen_changed_ref_files_warns
+test_case "gen: 受け入れ基準5件・変更対象3件なら警告しない" t_gen_workload_no_warn_5ac_3files
 test_case "テストの git はグローバル設定を読まない" t_test_git_reads_no_global_config
 summary

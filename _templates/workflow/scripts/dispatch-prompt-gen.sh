@@ -233,6 +233,56 @@ if len(paths) > 5:
     print('WARN: ' + task_id + ': ' + str(len(paths)) + ' reference files (keep it to a few)', file=sys.stderr)
 PY
 
+# --- 作業量の警告(タスクが1応答で処理しきれなそうなら計画の段階で気付けるようにする) ---
+# 1) 受け入れ基準が6件以上、2) (変更対象)の参照ファイルが4件以上。どちらも警告のみで生成は続ける。
+python3 - "$TASK_ID" "$TASK_SECTION" <<'PY' || exit 1
+import re, sys
+task_id, section = sys.argv[1:3]
+lines = section.split('\n')
+
+def field_start(field):
+    field_re = re.compile(r'^(\s*)-\s+\*\*' + re.escape(field) + r'\*\*:\s*(.*?)\s*$')
+    for i, line in enumerate(lines):
+        m = field_re.match(line)
+        if m:
+            return i, len(m.group(1)), m.group(2)
+    return None
+
+# 受け入れ基準の件数
+fs = field_start('受け入れ基準')
+if fs is not None:
+    start_i, indent, inline = fs
+    count = 0
+    for line in lines[start_i + 1:]:
+        if not line.strip():
+            continue
+        if len(line) - len(line.lstrip()) <= indent:
+            break
+        if re.match(r'^\s*-\s+\[[ xX]\]', line):
+            count += 1
+    if count > 5:
+        print('WARN: ' + task_id + ': ' + str(count) + ' acceptance criteria (more than 5; consider splitting the task)', file=sys.stderr)
+
+def field_body(field):
+    fs = field_start(field)
+    if fs is None:
+        return
+    start_i, indent, inline = fs
+    yield inline
+    for line in lines[start_i + 1:]:
+        if not line.strip():
+            continue
+        if len(line) - len(line.lstrip()) <= indent:
+            break
+        yield line
+
+count = 0
+for line in field_body('参照ファイル'):
+    count += len(re.findall(r'[(（]変更対象', line))
+if count > 3:
+    print('WARN: ' + task_id + ': ' + str(count) + ' reference files marked 変更対象 (more than 3; consider splitting the task)', file=sys.stderr)
+PY
+
 # --- AGENTS.md が @ 参照だけのファイルなら警告する(opencode 等は @ を展開しないため、子にルールが届かない) ---
 if [ -f AGENTS.md ] && ! awk '/[^[:space:]]/ && !/^[[:space:]]*@/ { found = 1; exit } END { exit !found }' AGENTS.md; then
     echo "WARN: AGENTS.md only contains '@' references; child CLIs such as opencode do not expand them, so the child cannot read the rules" >&2
