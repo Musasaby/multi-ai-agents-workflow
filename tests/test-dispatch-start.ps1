@@ -104,4 +104,47 @@ Invoke-TestCase "start: done のタスクは exit 21" {
     Assert-FileAbsent "$script:Proj/.agents/workflow/runs/T1-1/done" "child not started"
 }
 
+function Set-ChildCfg { param([string]$Key, $Value)
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg.child_agent | Add-Member -NotePropertyName $Key -NotePropertyValue $Value -Force
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+}
+
+Invoke-TestCase "start: healthcheck_command が失敗すれば exit 30" {
+    Initialize-StartProject 'T1:pending', 'T2:pending'
+    Set-ChildCfg healthcheck_command 'exit 3'
+    Invoke-Script dispatch-start.ps1 -TaskId T1
+    Assert-Eq 30 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "Next: escalate reason=healthcheck" (Get-LastLine $script:Out) "last line"
+    Assert-Eq pending (Get-StateTask T1).status "T1 status"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/runs/T1-1/done" "child not started"
+}
+
+Invoke-TestCase "start: warmup_command は最初の dispatch だけ実行する" {
+    Initialize-StartProject 'T1:pending', 'T2:pending'
+    Set-ChildCfg warmup_command 'Add-Content .agents/warmup.log w'
+    Invoke-Script dispatch-start.ps1 -TaskId T1
+    Assert-Eq 0 $script:Code "exit code (T1): $($script:Err)"
+    Wait-Done T1-1
+    Assert-FileExists "$script:Proj/.agents/workflow/runs/T1-1/done" "T1 done"
+    Set-Report T1 1
+    Set-State 'T1:done' 'T2:pending'
+    Set-StateBranch develop/t
+    Invoke-Script dispatch-start.ps1 -TaskId T2
+    Assert-Eq 0 $script:Code "exit code (T2): $($script:Err)"
+    Wait-Done T2-1
+    Assert-FileExists "$script:Proj/.agents/workflow/runs/T2-1/done" "T2 done"
+    Assert-Eq 1 @(Get-Content "$script:Proj/.agents/warmup.log").Count "warmup.log lines"
+}
+
+Invoke-TestCase "start: warmup_command が失敗すれば exit 31" {
+    Initialize-StartProject 'T1:pending', 'T2:pending'
+    Set-ChildCfg warmup_command 'exit 1'
+    Invoke-Script dispatch-start.ps1 -TaskId T1
+    Assert-Eq 31 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "Next: escalate reason=warmup" (Get-LastLine $script:Out) "last line"
+    Assert-Eq pending (Get-StateTask T1).status "T1 status"
+}
+
 Show-Summary
