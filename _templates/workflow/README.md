@@ -289,7 +289,8 @@ origin が無い・fetch に失敗した場合は exit 1)。stdout に `RunId: p
 失敗した段階で止める(止めたときは state.json を変えず、子も起動しない)。手順:
 
 1. `branch-check --state`(非0なら stdout の `Next:` 行をそのまま流して止める)
-2. 作業ツリーがクリーンか
+2. 作業ツリーがクリーンか(試行回数 2 以上で `runs/<ID>-<N>/fix-notes.md` がある修正依頼では
+   確認しない。前の試行の変更を引き継ぐため)
 3. タスクの状態が `pending` / `in_progress` か
 4. 疎通確認(`child_agent.healthcheck_command`。空なら省略)
 5. ウォームアップ(`child_agent.warmup_command`。空なら省略。`guard.sha256` が1つも無い = サイクルの最初の dispatch のときだけ)
@@ -319,7 +320,7 @@ origin が無い・fetch に失敗した場合は exit 1)。stdout に `RunId: p
 | `0` | 起動した |
 | `1` | 使い方不備 |
 | `11`〜`15` | `branch-check --state` の exit 1〜5(stdout の `Next:` 行はそのまま流す) |
-| `20` | 作業ツリーが汚れている(`reason=dirty-tree`) |
+| `20` | 作業ツリーが汚れている(リトライで fix-notes.md がある場合を除く。`reason=dirty-tree`) |
 | `21` | タスクの状態が不正(`pending` / `in_progress` 以外、タスク無しを含む。`reason=task-status`) |
 | `30` / `31` | 疎通確認 / ウォームアップの失敗(`reason=healthcheck` / `warmup`。出力の末尾20行を stderr に出す) |
 | `41`〜`43` | `dispatch-prompt-gen` の exit 1〜3(`reason=prompt-gen`。依存未完了・report.md の欠落は 42。`--pr` で RunId が取れない場合は 41) |
