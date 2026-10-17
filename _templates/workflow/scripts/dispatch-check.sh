@@ -7,7 +7,7 @@ set -uo pipefail
 #   8=管理ファイルの改ざん(prompt.md・state.json・tasks.md・config.json が dispatch-run の起動時から
 #     変わった/消えた、guard.sha256・output.log・git-state.txt が無い、output.log が実行中に
 #     切り詰められた、本物のリポジトリの git 状態(HEAD・ブランチ・参照・設定)が変わった)
-#   4=異常終了(非0・signal・crashed)
+#   4=異常終了(非0・signal・crashed・idle-timeout)
 #   6=権限拒否で中断(output.log に子CLIの権限拒否の記録がある)、または、ツール実行の記録に
 #     プロジェクト外(/tmp・ホームディレクトリ等)へのアクセスがある
 #   5=完了報告が無い・無効(最後の `## 完了報告` の後にツール実行の記録が続く、必須項目が無い・テンプレートのまま)。
@@ -44,6 +44,7 @@ END_VALUE="$(LC_ALL=C tr -d '\r' < "$DONE_PATH" | LC_ALL=C sed -n 's/^END://p' |
 
 case "$EXIT_VALUE" in
     0) KIND=ok ;;
+    idle-timeout) KIND=idle-timeout ;;
     signal:*) KIND=signal ;;
     crashed:*) KIND=crashed ;;
     '') KIND=unknown ;;

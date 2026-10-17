@@ -338,6 +338,14 @@ t_check_signal() {
     assert_contains "$OUT" "step 67" "log tail shown"
 }
 
+t_check_idle_timeout() {
+    make_run idle-timeout "> build · glm-5.3"
+    run_script dispatch-check.sh T1 1
+    assert_eq 4 "$CODE" "exit code"
+    assert_contains "$OUT" "kind: idle-timeout" "kind"
+    assert_contains "$OUT" "Verdict: abnormal-exit" "verdict"
+}
+
 t_check_nonzero() {
     make_run 3 "$REPORT"
     run_script dispatch-check.sh T1 1
@@ -733,6 +741,7 @@ test_case "run: ログが idle_timeout_seconds 更新されなければ子を止
 test_case "run: ログが更新され続ければ idle_timeout_seconds で止めない" t_run_idle_timeout_not_triggered
 test_case "check: 正常" t_check_ok
 test_case "check: signalはexit 4" t_check_signal
+test_case "check: EXIT:idle-timeout は abnormal-exit(exit 4)" t_check_idle_timeout
 test_case "check: 非0はexit 4" t_check_nonzero
 test_case "check: crashedはexit 4" t_check_crashed
 test_case "check: 完了報告なしはexit 5" t_check_missing_report

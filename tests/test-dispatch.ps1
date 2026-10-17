@@ -255,6 +255,14 @@ Invoke-TestCase "check: signalはexit 4" {
     Assert-Contains $script:Out "step 67" "log tail shown"
 }
 
+Invoke-TestCase "check: EXIT:idle-timeout は abnormal-exit(exit 4)" {
+    New-Run idle-timeout "> build · glm-5.3"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 4 $script:Code "exit code"
+    Assert-Contains $script:Out "kind: idle-timeout" "kind"
+    Assert-Contains $script:Out "Verdict: abnormal-exit" "verdict"
+}
+
 Invoke-TestCase "check: 非0はexit 4" {
     New-Run 3 $report
     Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
