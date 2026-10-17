@@ -47,6 +47,16 @@ function Set-Isolate {
     Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
 }
 
+# T4(#53): idle_timeout_seconds を設定する($Value = 秒)
+function Set-IdleTimeout {
+    param([string]$Value)
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg.child_agent.PSObject.Properties.Remove('idle_timeout_seconds')
+    $cfg.child_agent | Add-Member -NotePropertyName idle_timeout_seconds -NotePropertyValue ([int]$Value)
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+}
+
 function Get-ChildXdg {
     $env:XDG_DATA_HOME = 'C:/caller/xdg-data'
     try { Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1 } finally { Remove-Item Env:XDG_DATA_HOME -ErrorAction SilentlyContinue }
@@ -192,6 +202,28 @@ print("GITRC=" + str(r.returncode))
     Invoke-RunWithCallerTmp
     $rc = (Get-ChildEnvValue 'GITRC').Trim()
     Add-Result ($rc -cmatch '^\d+$' -and $rc -ne '0') "git under TMPDIR must not find the caller repo (GITRC='$rc')"
+}
+
+# T3/T4(#53): ログが idle_timeout_seconds 更新されなければ子を止めて EXIT:idle-timeout
+Invoke-TestCase "run: ログが idle_timeout_seconds 更新されなければ子を止めて EXIT:idle-timeout" {
+    Set-Child 'Write-Output start; Start-Sleep 30'
+    Set-IdleTimeout 2
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    $sw.Stop()
+    Add-Result ($sw.Elapsed.TotalSeconds -lt 20) "finished in under 20 seconds (elapsed=$([int]$sw.Elapsed.TotalSeconds))"
+    Assert-Eq "EXIT:idle-timeout" (Get-DoneExit) "done marker"
+    Assert-FileExists "$script:Proj/.agents/workflow/runs/T1-1/idle-timeout" "idle-timeout file"
+}
+
+# T3/T4(#53): ログが更新され続ければ idle_timeout_seconds で止めない
+Invoke-TestCase "run: ログが更新され続ければ idle_timeout_seconds で止めない" {
+    Set-Child '1..5 | ForEach-Object { Write-Output "tick $_"; Start-Sleep 1 }'
+    Set-IdleTimeout 3
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq "EXIT:0" (Get-DoneExit) "done marker"
+    Assert-Contains ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.log")) "tick 5" "output.log"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/runs/T1-1/idle-timeout" "no idle-timeout file"
 }
 
 Invoke-TestCase "run: 呼び出し元の TMPDIR/TEMP/TMP を書き換えない" {
