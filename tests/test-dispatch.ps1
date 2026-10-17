@@ -244,6 +244,25 @@ Invoke-TestCase "check: 完了報告なしはexit 5" {
     Assert-Contains $script:Out "Completion report: missing" "report missing"
 }
 
+# #50: 最後のツール実行の後に何も出力していない(推論だけで出力トークン上限に達した)場合の理由
+Invoke-TestCase "check: 最後のツール実行の後に出力が無ければ理由に書く(exit 5)" {
+    $esc = [char]27
+    New-Run 0 "> build · glm-5.3`n`n$esc[0m→ $esc[0mRead a.txt`n$esc[0m→ $esc[0mRead b.txt"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 5 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "no output after the last tool call" "reason"
+}
+
+# ツール実行の後に本文があれば、理由を付けない(単なる報告漏れとして扱う)
+Invoke-TestCase "check: ツール実行の後に本文があれば理由を付けない(exit 5)" {
+    $esc = [char]27
+    New-Run 0 "$esc[0m→ $esc[0mRead a.txt`n考え中です"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 5 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Completion report: missing" "report missing"
+    Assert-NotContains $script:Out "no output after the last tool call" "reason absent"
+}
+
 Invoke-TestCase "check: doneなしはexit 1" {
     $null = New-Item -ItemType Directory -Force "$script:Proj/.agents/workflow/runs/T1-1"
     Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
