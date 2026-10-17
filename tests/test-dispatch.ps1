@@ -63,10 +63,22 @@ function Set-EnvChild {
     )
 }
 
-# output.log から <変数名>=<値> の行の値を返す(無ければ空文字列)
+# T18: Python の子(sh 版の set_py_child と同じ構え)を登録する
+function Set-PyChild {
+    param([string]$Body)
+    Write-Utf8File "$script:Proj/child.py" $Body
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg.child_agent.command_template = 'python3 ./child.py "{prompt}"'
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/T1-1/prompt.md" "prompt`n"
+}
+
+# output.log から <変数名>=<値> の行の値を返す(無ければ空文字列)。
+# Where-Object で絞り込む(1行だけのとき、配列の -match フィルタがブール値に化けるのを防ぐため)
 function Get-ChildEnvValue {
     param([string]$Name)
-    $line = @((Get-Content "$script:Proj/.agents/workflow/runs/T1-1/output.log" -Encoding utf8 -ErrorAction SilentlyContinue) -match "^$Name=") | Select-Object -First 1
+    $line = ((@((Get-Content "$script:Proj/.agents/workflow/runs/T1-1/output.log" -Encoding utf8 -ErrorAction SilentlyContinue)) | Where-Object { $_ -match "^$Name=" }) | Select-Object -First 1)
     return ("$line" -replace "^$Name=", '')
 }
 
@@ -76,6 +88,14 @@ function Assert-RunTmpPath {
     $norm = $Value -replace '\\', '/'
     $ok = ($norm -cmatch '^[A-Za-z]:/.*/\.agents/workflow/runs/T1-1/tmp$') -or ($norm -cmatch '^/.*/\.agents/workflow/runs/T1-1/tmp$')
     Add-Result $ok "$Message (expected / or drive-letter path ending with .agents/workflow/runs/T1-1/tmp, got '$Value')"
+}
+
+# 値が .agents/workflow/runs/T1-1 で終わる絶対パス(/ または <ドライブ>:/ 始まり)かを確かめる(GIT_CEILING_DIRECTORIES 用)
+function Assert-RunRunPath {
+    param([string]$Value, [string]$Message)
+    $norm = $Value -replace '\\', '/'
+    $ok = ($norm -cmatch '^[A-Za-z]:/.*/\.agents/workflow/runs/T1-1$') -or ($norm -cmatch '^/.*/\.agents/workflow/runs/T1-1$')
+    Add-Result $ok "$Message (expected / or drive-letter path ending with .agents/workflow/runs/T1-1, got '$Value')"
 }
 
 # 呼び出し元の TMP 系環境変数を実在ディレクトリ($script:Proj/caller-tmp)に差し替えて、
@@ -156,10 +176,22 @@ Invoke-TestCase "run: 子の TMPDIR/TEMP/TMP は runs/<ID>-<試行>/tmp を指�
     Add-Result (Test-Path -Path "$script:Proj/.agents/workflow/runs/T1-1/tmp" -PathType Container) "runs/T1-1/tmp directory exists"
 }
 
-Invoke-TestCase "run: 子の GIT_CEILING_DIRECTORIES は runs/<ID>-<試行>/tmp を指す" {
+Invoke-TestCase "run: 子の GIT_CEILING_DIRECTORIES は runs/<ID>-<試行> を指す" {
     Set-EnvChild
     Invoke-RunWithCallerTmp
-    Assert-RunTmpPath (Get-ChildEnvValue 'GIT_CEILING_DIRECTORIES') "child GIT_CEILING_DIRECTORIES points to runs/T1-1/tmp"
+    Assert-RunRunPath (Get-ChildEnvValue 'GIT_CEILING_DIRECTORIES') "child GIT_CEILING_DIRECTORIES points to runs/T1-1"
+}
+
+# T18: Python の子が TMPDIR 直下で git rev-parse を実行し、本物のリポジトリが見つからない(returncode 非0)ことを確かめる
+Invoke-TestCase "run: 子が TMPDIR 直下で実行した git は本物のリポジトリを見つけない" {
+    Set-PyChild @'
+import os, subprocess
+r = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=os.environ["TMPDIR"], capture_output=True)
+print("GITRC=" + str(r.returncode))
+'@
+    Invoke-RunWithCallerTmp
+    $rc = (Get-ChildEnvValue 'GITRC').Trim()
+    Add-Result ($rc -cmatch '^\d+$' -and $rc -ne '0') "git under TMPDIR must not find the caller repo (GITRC='$rc')"
 }
 
 Invoke-TestCase "run: 呼び出し元の TMPDIR/TEMP/TMP を書き換えない" {

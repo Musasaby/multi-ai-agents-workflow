@@ -23,12 +23,17 @@ fi
 RUN_DIR=".agents/workflow/runs/${TASK_ID}-${ATTEMPT}"
 mkdir -p "$RUN_DIR"
 # 子の一時ファイルをプロジェクト内(runs/<ID>-<試行>/tmp/)に置かせ、そこで実行された git が
-# 本物のリポジトリにたどり着かないよう探索の上限にする(#46)
+# 本物のリポジトリにたどり着かないようにする(#46)。git は ceiling と同じディレクトリが
+# カレントのときは探索を止めないため、tmp/ の親(runs/<ID>-<試行>/)を上限にする
 CHILD_TMP="$(pwd)/$RUN_DIR/tmp"
 mkdir -p "$CHILD_TMP"
+CHILD_CEILING="$(pwd)/$RUN_DIR"
 # Windows ネイティブの子プロセスは /c/... 形式を解釈できないため C:/... 形式にする
-if command -v cygpath > /dev/null 2>&1; then CHILD_TMP="$(cygpath -m "$CHILD_TMP")"; fi
-export TMPDIR="$CHILD_TMP" TEMP="$CHILD_TMP" TMP="$CHILD_TMP" GIT_CEILING_DIRECTORIES="$CHILD_TMP"
+if command -v cygpath > /dev/null 2>&1; then
+  CHILD_TMP="$(cygpath -m "$CHILD_TMP")"
+  CHILD_CEILING="$(cygpath -m "$CHILD_CEILING")"
+fi
+export TMPDIR="$CHILD_TMP" TEMP="$CHILD_TMP" TMP="$CHILD_TMP" GIT_CEILING_DIRECTORIES="$CHILD_CEILING"
 LOG_PATH="$RUN_DIR/output.log"
 JSONL_PATH="$RUN_DIR/output.jsonl"
 DONE_PATH="$RUN_DIR/done"

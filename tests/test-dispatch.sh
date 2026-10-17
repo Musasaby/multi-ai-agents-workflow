@@ -172,6 +172,14 @@ assert_run_tmp_path() { # $1 = 値, $2 = メッセージ
     esac
 }
 
+# 値が .agents/workflow/runs/T1-1 で終わる絶対パス(/ または <ドライブ>:/ 始まり)かを確かめる(GIT_CEILING_DIRECTORIES 用)
+assert_run_run_path() { # $1 = 値, $2 = メッセージ
+    case "$1" in
+        /*/.agents/workflow/runs/T1-1|[A-Za-z]:/*/.agents/workflow/runs/T1-1) _record ok ;;
+        *) _record ng "$2 (expected / or drive-letter path ending with .agents/workflow/runs/T1-1, got '$1')" ;;
+    esac
+}
+
 # 呼び出し元の TMP 系環境変数を /caller/tmp にして dispatch-run を実行する
 run_with_caller_tmp() {
     (
@@ -193,7 +201,21 @@ t_run_child_tmp_dir() {
 t_run_child_git_ceiling() {
     set_env_py_child
     run_with_caller_tmp
-    assert_run_tmp_path "$(child_env GIT_CEILING_DIRECTORIES)" "child GIT_CEILING_DIRECTORIES points to runs/T1-1/tmp"
+    assert_run_run_path "$(child_env GIT_CEILING_DIRECTORIES)" "child GIT_CEILING_DIRECTORIES points to runs/T1-1"
+}
+
+# T18: 子が TMPDIR 直下で git rev-parse を実行し、本物のリポジトリが見つからない(returncode 非0)ことを確かめる
+t_run_child_git_no_repo() {
+    set_py_child 'import os, subprocess
+r = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=os.environ["TMPDIR"], capture_output=True)
+print("GITRC=" + str(r.returncode))'
+    run_with_caller_tmp
+    local rc
+    rc="$(child_env GITRC)"
+    case "$rc" in
+        ''|0) _record ng "git under TMPDIR must not find the caller repo (GITRC='$rc')" ;;
+        *) _record ok ;;
+    esac
 }
 
 t_run_caller_tmp_unchanged() {
@@ -593,7 +615,8 @@ test_case "run: 通常の非0は数値のまま(フォールバック経路)" t_
 test_case "run: isolate_xdg 未指定/false は XDG を引き継ぐ" t_run_xdg_inherited_by_default
 test_case "run: isolate_xdg true は XDG を切り替える" t_run_xdg_isolated
 test_case "run: 子の TMPDIR/TEMP/TMP は runs/<ID>-<試行>/tmp を指す" t_run_child_tmp_dir
-test_case "run: 子の GIT_CEILING_DIRECTORIES は runs/<ID>-<試行>/tmp を指す" t_run_child_git_ceiling
+test_case "run: 子の GIT_CEILING_DIRECTORIES は runs/<ID>-<試行> を指す" t_run_child_git_ceiling
+test_case "run: 子が TMPDIR 直下で実行した git は本物のリポジトリを見つけない" t_run_child_git_no_repo
 test_case "run: 呼び出し元の TMPDIR/TEMP/TMP を書き換えない" t_run_caller_tmp_unchanged
 test_case "check: 正常" t_check_ok
 test_case "check: signalはexit 4" t_check_signal

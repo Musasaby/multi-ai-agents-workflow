@@ -103,16 +103,19 @@ function ConvertTo-HumanLine {
 }
 
 # 子の一時ファイルをプロジェクト内(runs/<ID>-<試行>/tmp/)に置かせ、そこで実行された git が
-# 本物のリポジトリにたどり着かないよう探索の上限にする(#46)
+# 本物のリポジトリにたどり着かないようにする(#46)。git は ceiling と同じディレクトリが
+# カレントのときは探索を止めないため、tmp/ の親(runs/<ID>-<試行>/)を上限にする
 $childTmp = Join-Path (Get-Location).Path "$runDir/tmp"
 $null = New-Item -ItemType Directory -Force $childTmp
+$childCeiling = Join-Path (Get-Location).Path $runDir
 # 子の起動中だけ TEMP 系環境変数を差し替えるため、元の値を保存してから設定する
 # 同じプロセス内で & dispatch-run.ps1 と呼ばれたとき(tests/test-exitcode.ps1 等)に呼び出し元に書き換えが
 # 残らないよう、finally で戻す(catch の exit 1 でも実行される)
 $savedEnv = @{}
 foreach ($name in @('TMPDIR', 'TEMP', 'TMP', 'GIT_CEILING_DIRECTORIES')) {
     $savedEnv[$name] = [System.Environment]::GetEnvironmentVariable($name)
-    [System.Environment]::SetEnvironmentVariable($name, $childTmp)
+    $value = if ($name -eq 'GIT_CEILING_DIRECTORIES') { $childCeiling } else { $childTmp }
+    [System.Environment]::SetEnvironmentVariable($name, $value)
 }
 
 try {
