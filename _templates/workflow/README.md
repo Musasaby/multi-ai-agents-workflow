@@ -181,6 +181,38 @@ Claude Code を子エージェントとして使う場合は `stream-json` 出�
 PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動しても、PowerShell セッション内で
 `& .agents/workflow/scripts/<名前>.ps1` と直接呼んでも、`$LASTEXITCODE` で exit code を判定できる。
 
+### Next: 行 — 次の行動の機械可読な指示
+
+判定系スクリプト(`next-task`・`branch-check`・`group-advance`・`dispatch-check`)は、stdout の
+最後の行に `Next: <行動> [<タスクID>] [reason=<理由>]` を出す。親は exit code の表ではなく
+この行に従う。`Next:` 行が無い(exit 1 等の使い方不備・入力不備)ときは `escalate reason=error`
+として stderr をユーザーに報告する。
+
+| 行動 | 意味 | 出すスクリプト |
+|------|------|----------------|
+| `dispatch <ID>` | そのタスクを dispatch する | next-task(exit 0) |
+| `review <ID>` | そのタスクをレビューする | next-task(exit 0、`in_review`)・dispatch-check(exit 0) |
+| `wait` | 子がまだ実行中。完了を待つ | dispatch-check(exit 2) |
+| `finish` | 全タスク完了。サマリー報告へ | next-task(exit 3) |
+| `group-advance` | グループ境界。group-advance を実行する | next-task(exit 6) |
+| `create-pr` | PR を作成する | group-advance(exit 7) |
+| `wait-merge` | PR のマージを待つ(報告して停止) | group-advance(exit 8) |
+| `continue` | そのまま作業を続ける | branch-check(exit 0)・group-advance(exit 0) |
+| `switch-branch` | 専用ブランチを作る(`reason=main` / `merged`) | branch-check(exit 2 / 3) |
+| `escalate` | ユーザーに理由を説明し判断を仰ぐ | 下の reason 一覧 |
+
+`escalate` の reason 一覧:
+
+- `blocked` — next-task の exit 4(実行可能なタスクが無い)
+- `gh-unavailable` — branch-check の exit 4(gh で PR 状態を判定できない)
+- `state-branch-mismatch` — branch-check の exit 5(state.json の `branch` と現在のブランチが不一致)
+- `pr-closed` — group-advance の exit 9(PR が未マージのまま閉鎖)
+- `tampered` — dispatch-check の exit 8(管理ファイルの改ざん・git 状態の変化)
+- `provider-error` / `idle-timeout` / `abnormal-exit` — dispatch-check の exit 4(この順で判定)
+- `permission-denied` / `outside-access` — dispatch-check の exit 6
+- `token-limit` / `no-report` — dispatch-check の exit 5
+- `no-changes` — dispatch-check の exit 7(変更が無いのが正しいタスクなら review に進んでよい)
+
 ### dispatch-prompt-gen — dispatchプロンプトの機械生成
 
 tasks.md・config.json・依存タスクの完了報告(直接依存のみ)から、子エージェントに渡す
@@ -354,7 +386,10 @@ exit code(複数に当たる場合は上の行を優先する):
 | `5` | `no-report` | 完了報告が無い・無効 |
 | `7` | `no-changes` | 完了報告はあるが作業ツリーに変更が無い(`pr-*` の run では判定しない) |
 | `0` | `ok` | 正常終了かつ完了報告あり |
-| `1` | — | done マーカーが無い・使い方不備 |
+| `2` | — | done マーカーが無い(まだ実行中) |
+| `1` | — | 使い方不備 |
+
+この版から、done マーカーが無いときは exit 1 ではなく exit 2 を返す(#69)。
 
 `0` 以外の場合はレビューに進まず、出力された内容をユーザーに報告する(`7` は、変更が無いのが
 正しいタスクに限り検証に進んでよい。詳細は `agent-dispatch` skill §4)。
@@ -475,6 +510,8 @@ exit code: `0`=該当タスクあり、`1`=tasks.md/state.json 不在・依存�
 `4`=実行可能なタスクが無い(`failed` や未完了の依存で止まっている。原因を stderr に列挙)、
 `6`=作業グループ完了(他グループに未完了あり。`group-advance` で分岐する)。
 
+stdout の最後の行には `Next:` 行を出す(「Next: 行」の節を参照)。
+
 ### group-advance — グループ完了後の PR 判定と次グループへのブランチ切替
 
 `next-task` が exit 6(作業グループ完了)を返したグループ境界で実行する。PR の状態を
@@ -502,6 +539,8 @@ exit code: `0`=切替完了、`1`=使い方・前提不備(グループ未完了
 `8`=PR が OPEN(マージ待ち。stdout `OPEN <PR URL>`)、`9`=PR が未マージのまま閉鎖
 (エスカレーション)。git / gh の失敗時は何も書き換えずその exit code を返す
 (gh の失敗はメッセージが「no pull requests found」の場合のみ exit 7 の「PR なし」扱い)。
+
+exit 0・7・8・9 では stdout の最後の行に `Next:` 行を出す(「Next: 行」の節を参照)。
 
 使い方と分岐後の進め方は `agent-workflow` skill の「グループ単位の PR とブランチ切替」を参照。
 
@@ -538,6 +577,8 @@ OPEN の PR しか無いブランチも `OK` になる。古い gh が「no pull
 
 exit code: `0`=使ってよい、`1`=使い方不備・git 失敗、`2`=`main` 上、`3`=PR マージ済み
 (stdout `MERGED <PR URL>`)、`4`=gh で判定できない、`5`=state.json の `branch` と不一致。
+
+exit 1 以外では stdout の最後の行に `Next:` 行を出す(「Next: 行」の節を参照)。
 
 ### upstream-issue — ワークフロー由来の問題を配布元に起票
 
