@@ -145,6 +145,19 @@ with open(p, 'w', encoding='utf-8') as f:
 PY
 }
 
+# T7(#53): 子CLI自身のログファイルのパス(cli_log)を設定する($1 = パス)
+set_cli_log() {
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" "$1" <<'PY'
+import json, sys
+p, v = sys.argv[1:3]
+with open(p, encoding='utf-8') as f:
+    cfg = json.load(f)
+cfg['child_agent']['cli_log'] = v
+with open(p, 'w', encoding='utf-8') as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+PY
+}
+
 # 子を python にする(Windows ネイティブ python から呼ぶ bash は WSL の bash になることがあり、
 # その場合は Windows 側の環境変数を引き継がないため)。$1 = child.py の本文(省略時は XDG_DATA_HOME の表示)
 set_py_child() {
@@ -721,6 +734,43 @@ $REPORT"
     assert_contains "$OUT" "Outside access: no" "flag"
 }
 
+# T7(#53): 子CLIのログの利用上限エラーを Provider error: yes にする
+# (cli_log は guard.sha256 の対象なので make_run の前に設定する)
+t_check_cli_log_provider_error() {
+    set_cli_log "$(py_path "$PROJ/cli.log")"
+    printf 'timestamp=2026-10-17T03:07:49.892Z level=INFO message="ok"\n' > "$PROJ/cli.log"
+    printf 'timestamp=2026-10-17T03:07:50.429Z level=ERROR message="stream error" error.error="AI_APICallError: Go usage limit exceeded"\n' >> "$PROJ/cli.log"
+    make_run 0 "$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Go usage limit exceeded" "error line shown"
+    assert_contains "$OUT" "Provider error: yes" "provider flag"
+    assert_not_contains "$OUT" "level=INFO" "info line not shown"
+}
+
+# T7(#53): 子CLIのログの ERROR がプロバイダー由来でなければ Provider error: no
+t_check_cli_log_error_not_provider() {
+    set_cli_log "$(py_path "$PROJ/cli.log")"
+    printf 'timestamp=2026-10-17T03:07:50.429Z level=ERROR message="tool failed"\n' > "$PROJ/cli.log"
+    make_run 0 "$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" 'message="tool failed"' "error line shown"
+    assert_contains "$OUT" "Provider error: no" "provider flag"
+}
+
+# T7(#53): cli_log が未設定なら CLI log: (not configured)
+t_check_cli_log_not_configured() {
+    make_run 0 "$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "CLI log: (not configured)" "not configured"
+    assert_contains "$OUT" "Provider error: unknown" "provider flag"
+}
+
 echo "test-dispatch.sh"
 
 test_case "run: 正常終了はEXIT:0" t_run_exit0
@@ -780,4 +830,7 @@ test_case "check: リダイレクト直後の ~/ は exit 6" t_check_outside_acc
 test_case "check: tool_use 行のホームディレクトリ参照は exit 6" t_check_outside_access_tool_use_home
 test_case "check: 色付きツール実行行の USERPROFILE・AppData の Temp 参照は exit 6" t_check_outside_access_userprofile_temp
 test_case "check: HOMEBREW_PREFIX や env:TEMP は検出しない" t_check_outside_access_home_not_detected
+test_case "check: CLI ログの利用上限エラーを Provider error: yes にする" t_check_cli_log_provider_error
+test_case "check: CLI ログの ERROR がプロバイダー由来でなければ Provider error: no" t_check_cli_log_error_not_provider
+test_case "check: cli_log が未設定なら CLI log: (not configured)" t_check_cli_log_not_configured
 summary
