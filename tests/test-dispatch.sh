@@ -667,6 +667,7 @@ ${ESC}[0m\$ ${ESC}[0mbash -c \"bash tests/x.sh > /tmp/dsp-sh.log\""
     assert_contains "$OUT" "Verdict: outside-access" "verdict"
     assert_contains "$OUT" "Outside access: yes" "flag"
     assert_contains "$OUT" "/tmp/dsp-sh.log" "line shown"
+    assert_eq "Next: escalate reason=outside-access" "${OUT##*$'\n'}" "next line"
 }
 
 t_check_outside_access_runs_tmp_ok() {
@@ -774,6 +775,19 @@ t_check_cli_log_provider_error() {
     assert_not_contains "$OUT" "level=INFO" "info line not shown"
 }
 
+# T47(#74): 利用上限エラーのログで子が異常終了(非0)すれば provider-error で exit 4
+t_check_cli_log_provider_error_exit4() {
+    set_cli_log "$(py_path "$PROJ/cli.log")"
+    printf 'timestamp=2026-10-17T03:07:49.892Z level=INFO message="ok"\n' > "$PROJ/cli.log"
+    printf 'timestamp=2026-10-17T03:07:50.429Z level=ERROR message="stream error" error.error="AI_APICallError: Go usage limit exceeded"\n' >> "$PROJ/cli.log"
+    make_run 3 "$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 4 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Provider error: yes" "provider flag"
+    assert_eq "Next: escalate reason=provider-error" "${OUT##*$'\n'}" "next line"
+}
+
 # T7(#53): 子CLIのログの ERROR がプロバイダー由来でなければ Provider error: no
 t_check_cli_log_error_not_provider() {
     set_cli_log "$(py_path "$PROJ/cli.log")"
@@ -858,6 +872,7 @@ test_case "check: tool_use 行のホームディレクトリ参照は exit 6" t_
 test_case "check: 色付きツール実行行の USERPROFILE・AppData の Temp 参照は exit 6" t_check_outside_access_userprofile_temp
 test_case "check: HOMEBREW_PREFIX や env:TEMP は検出しない" t_check_outside_access_home_not_detected
 test_case "check: CLI ログの利用上限エラーを Provider error: yes にする" t_check_cli_log_provider_error
+test_case "check: CLI ログの利用上限エラーで異常終了なら provider-error" t_check_cli_log_provider_error_exit4
 test_case "check: CLI ログの ERROR がプロバイダー由来でなければ Provider error: no" t_check_cli_log_error_not_provider
 test_case "check: cli_log が未設定なら CLI log: (not configured)" t_check_cli_log_not_configured
 summary

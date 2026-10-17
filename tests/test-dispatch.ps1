@@ -544,6 +544,7 @@ Invoke-TestCase "check: ツール実行行の /tmp への書き込みは exit 6(
     Assert-Contains $script:Out "Verdict: outside-access" "verdict"
     Assert-Contains $script:Out "Outside access: yes" "flag"
     Assert-Contains $script:Out "/tmp/dsp-ps1.log" "line shown"
+    Assert-Eq "Next: escalate reason=outside-access" (($script:Out -split "`n")[-1]) "next line"
 }
 
 Invoke-TestCase "check: runs/<ID>/tmp 配下へのアクセスは検出しない" {
@@ -636,6 +637,18 @@ Invoke-TestCase "check: CLI ログの利用上限エラーを Provider error: ye
     Assert-Contains $script:Out "Go usage limit exceeded" "error line shown"
     Assert-Contains $script:Out "Provider error: yes" "provider flag"
     Assert-NotContains $script:Out "level=INFO" "info line not shown"
+}
+
+# T47(#74): 利用上限エラーのログで子が異常終了(非0)すれば provider-error で exit 4
+Invoke-TestCase "check: CLI ログの利用上限エラーで異常終了なら provider-error" {
+    Set-CliLog "$script:Proj/cli.log"
+    Write-Utf8File "$script:Proj/cli.log" ('timestamp=2026-10-17T03:07:49.892Z level=INFO message="ok"' + "`n" + 'timestamp=2026-10-17T03:07:50.429Z level=ERROR message="stream error" error.error="AI_APICallError: Go usage limit exceeded"' + "`n")
+    New-Run 3 $report
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 4 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Provider error: yes" "provider flag"
+    Assert-Eq "Next: escalate reason=provider-error" (($script:Out -split "`n")[-1]) "next line"
 }
 
 Invoke-TestCase "check: CLI ログの ERROR がプロバイダー由来でなければ Provider error: no" {
