@@ -21,3 +21,7 @@ test-tasks.sh: __pycache__ を作らない
 
 # test-exitcode.sh は存在しない(sh 側では各テストが直接 exit code を断言する)
 test-exitcode.ps1: *
+
+# T1 で sh に追加。T2 で ps1 に追加したら消す
+test-dispatch.sh: check: 最後のツール実行の後に出力が無ければ理由に書く(exit 5)
+test-dispatch.sh: check: ツール実行の後に本文があれば理由を付けない(exit 5)

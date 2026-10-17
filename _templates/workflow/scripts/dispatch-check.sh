@@ -10,7 +10,8 @@ set -uo pipefail
 #   4=異常終了(非0・signal・crashed)
 #   6=権限拒否で中断(output.log に子CLIの権限拒否の記録がある)、または、ツール実行の記録に
 #     プロジェクト外(/tmp・ホームディレクトリ等)へのアクセスがある
-#   5=完了報告が無い・無効(最後の `## 完了報告` の後にツール実行の記録が続く、必須項目が無い・テンプレートのまま)
+#   5=完了報告が無い・無効(最後の `## 完了報告` の後にツール実行の記録が続く、必須項目が無い・テンプレートのまま)。
+#     最後のツール実行の後に出力が無い場合は、その旨を理由に書く
 #   7=変更0件(完了報告はあるが作業ツリーに変更が無い。PR 作成の run(pr-*)では判定しない)
 #   0=正常終了かつ完了報告あり / 1=done マーカーが無い・使い方不備
 
@@ -168,7 +169,14 @@ REPORT_RESULT="$(printf '%s\n' "$RAW_LOG" | LC_ALL=C awk -v esc="$ESC" -v requir
     }
     lines[NR] ~ /^## 完了報告[ \t]*$/ { last = NR }
     END {
-        if (!last) { print "missing"; exit }
+        if (!last) {
+            # 最後の空でない行がツール実行の記録なら、子はその後に何も出力せずに終わった
+            # (#50: 推論だけで出力トークン上限に達すると、opencode はエラーにせず exit 0 で終わる)
+            for (i = NR; i >= 1; i--) if (lines[i] ~ /[^ \t]/) break
+            if (i >= 1 && tool[i]) print "missing (no output after the last tool call; the model may have hit the output token limit)"
+            else print "missing"
+            exit
+        }
         for (i = last + 1; i <= NR; i++) {
             if (tool[i]) { print "invalid (tool activity after the report at line " i ")"; exit }
         }

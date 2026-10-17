@@ -323,6 +323,27 @@ t_check_missing_report() {
     assert_contains "$OUT" "Completion report: missing" "report missing"
 }
 
+t_check_missing_report_no_output_after_tool() {
+    # #50: 最後のツール実行の後に何も出力していない(推論だけで出力トークン上限に達した)場合の理由
+    make_run 0 "> build · glm-5.3
+
+${ESC}[0m→ ${ESC}[0mRead a.txt
+${ESC}[0m→ ${ESC}[0mRead b.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 5 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "no output after the last tool call" "reason"
+}
+
+t_check_missing_report_body_after_tool() {
+    # ツール実行の後に本文があれば、理由を付けない(単なる報告漏れとして扱う)
+    make_run 0 "${ESC}[0m→ ${ESC}[0mRead a.txt
+考え中です"
+    run_script dispatch-check.sh T1 1
+    assert_eq 5 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Completion report: missing" "report missing"
+    assert_not_contains "$OUT" "no output after the last tool call" "reason absent"
+}
+
 t_check_no_done() {
     mkdir -p "$PROJ/.agents/workflow/runs/T1-1"
     run_script dispatch-check.sh T1 1
@@ -677,6 +698,8 @@ test_case "check: signalはexit 4" t_check_signal
 test_case "check: 非0はexit 4" t_check_nonzero
 test_case "check: crashedはexit 4" t_check_crashed
 test_case "check: 完了報告なしはexit 5" t_check_missing_report
+test_case "check: 最後のツール実行の後に出力が無ければ理由に書く(exit 5)" t_check_missing_report_no_output_after_tool
+test_case "check: ツール実行の後に本文があれば理由を付けない(exit 5)" t_check_missing_report_body_after_tool
 test_case "check: doneなしはexit 1" t_check_no_done
 test_case "check: BOM付きdone" t_check_bom_done
 test_case "check: 完了報告の後にツール実行が続けば無効(exit 5)" t_check_report_then_tool_activity
