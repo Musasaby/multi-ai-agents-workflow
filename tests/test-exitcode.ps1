@@ -101,6 +101,29 @@ Invoke-TestCase "dispatch-wait: 成功時に LASTEXITCODE=0" {
     Assert-Eq 0 (Invoke-InProcess dispatch-wait.ps1 @{ TaskId = 'T1' }) "LASTEXITCODE"
 }
 
+Invoke-TestCase "dispatch-start: 成功時に LASTEXITCODE=0" {
+    # test-dispatch-start.ps1 のケース1と同じ準備。起動した子の done を待ってから終える
+    Push-Location $script:Proj
+    try { git switch -q -c develop/t 2>$null } finally { Pop-Location }
+    Set-Tasks "## T1: a`n- **依存**: なし`n"
+    Set-State 'T1:pending'
+    $path = "$script:Proj/.agents/workflow/state.json"
+    $state = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $state.branch = 'develop/t'
+    Write-Utf8File $path ($state | ConvertTo-Json -Depth 10)
+    Set-GhStubResult -Stdout '[]'
+    Write-Utf8File "$script:Proj/.agents/child.sh" "#!/bin/bash`necho child`n"
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg.child_agent.command_template = 'bash ./.agents/child.sh "{prompt}"'
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+    Assert-Eq 0 (Invoke-InProcess dispatch-start.ps1 @{ TaskId = 'T1' }) "LASTEXITCODE"
+    for ($i = 0; $i -lt 60; $i++) {
+        if (Test-Path "$script:Proj/.agents/workflow/runs/T1-1/done") { break }
+        Start-Sleep -Milliseconds 500
+    }
+}
+
 Invoke-TestCase "branch-check: 成功時に LASTEXITCODE=0" {
     # develop/x 上に切り替え、gh スタブが [] を出力して exit 0(マージ済み PR なし)の成功経路
     Push-Location $script:Proj
