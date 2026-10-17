@@ -8,7 +8,9 @@
 .agents/workflow/
 ├── config.json / tasks.md / state.json / README.md   ← 正本(人が直接読むファイルのみ)
 ├── scripts/                      ← 配布物(セットアップ時にコピー、既存は上書きしない。更新は workflow-sync-scripts)
+│   ├── dispatch-start.ps1 / .sh  事前チェック〜デタッチ起動
 │   ├── dispatch-run.ps1 / .sh
+│   ├── dispatch-wait.ps1 / .sh  子の完了待ち(done 検知後に dispatch-check)
 │   ├── dispatch-check.ps1 / .sh
 │   ├── git-state.ps1 / .sh  git 状態(HEAD・ブランチ・参照・config)の4行出力(dispatch-run/dispatch-check が使用)
 │   ├── dispatch-prompt-gen.ps1 / .sh
@@ -33,7 +35,7 @@
 │   ├── output.log       子エージェントの出力
 │   ├── done             完了マーカー(EXIT/END の2行)
 │   ├── exit-signal      シグナル番号の一時ファイル(POSIX版のみ。done 書き出し時に削除)
-│   └── report.md        完了報告
+│   └── report.md        完了報告(dispatch-check が ok / no-changes のとき自動で保存)
 ├── comprehension/                ← 理解確認(タスク単位)
 ├── archive/<日時-スラッグ>/      ← 一巡した過去サイクルの退避先(.gitignore対象)
 └── .config/                      ← 子エージェントCLIのXDG退避先(isolate_xdg: true のときのみ使用)
@@ -50,8 +52,10 @@
 | キー | 説明 | デフォルト |
 |------|------|-----------|
 | `child_agent.command_template` | 子エージェントCLIのコマンドテンプレート。`{prompt}` がタスクプロンプトに展開される | `opencode run "{prompt}"` |
-| `child_agent.timeout_seconds` | 子エージェント実行のタイムアウト(秒) | `1800` |
+| `child_agent.timeout_seconds` | 子エージェント実行のタイムアウト(秒)。`dispatch-wait` が判定する | `1800` |
 | `child_agent.isolate_xdg` | `true` なら `dispatch-run` が子CLIの `XDG_CONFIG_HOME` / `XDG_DATA_HOME` を `.agents/workflow/.config` に切り替える(sandbox で `~/.config` 等に書けない環境向け)。切り替えると `~/.local/share/<CLI>/auth.json` 等の認証情報が見えなくなる。未指定は `false` | `false` |
+| `child_agent.healthcheck_command` | `dispatch-start` が起動前に実行する疎通確認のコマンド。空なら省略 | `""` |
+| `child_agent.warmup_command` | サイクルの最初の dispatch の前に1回だけ実行するコマンド(例: `./gradlew compileDebugKotlin`)。空なら省略 | `""` |
 | `child_agent.idle_timeout_seconds` | 子のログ(`output.log`)が更新されない時間の上限(秒)。超えると `dispatch-run` が子を止め、`done` に `EXIT:idle-timeout` を記録する(`dispatch-check` は exit 4)。未指定・0 以下は無効。POSIX 版は python3 経路のみ対応 | `600` |
 | `child_agent.cli_log` | 子CLI自身のログファイルのパス(先頭の `~/` はホームディレクトリ。例: opencode は `~/.local/share/opencode/log/opencode.log`)。`dispatch-check` がエラー行を出す | 未指定 |
 | `test_command` | 子エージェントに実行させるテストコマンド。空ならタスクごとに親が指定 | `""` |
@@ -183,7 +187,7 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 
 ### Next: 行 — 次の行動の機械可読な指示
 
-判定系スクリプト(`next-task`・`branch-check`・`group-advance`・`dispatch-check`)は、stdout の
+判定系スクリプト(`next-task`・`branch-check`・`group-advance`・`dispatch-start`・`dispatch-wait`・`dispatch-check`)は、stdout の
 最後の行に `Next: <行動> [<タスクID>] [reason=<理由>]` を出す。親は exit code の表ではなく
 この行に従う。`Next:` 行が無い(exit 1 等の使い方不備・入力不備)ときは `escalate reason=error`
 として stderr をユーザーに報告する。
@@ -192,7 +196,7 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 |------|------|----------------|
 | `dispatch <ID>` | そのタスクを dispatch する | next-task(exit 0) |
 | `review <ID>` | そのタスクをレビューする | next-task(exit 0、`in_review`)・dispatch-check(exit 0。PR 作成の run を除く) |
-| `wait` | 子がまだ実行中。完了を待つ | dispatch-check(exit 2) |
+| `wait` | 子がまだ実行中。完了を待つ | dispatch-start(exit 0)・dispatch-wait(exit 2)・dispatch-check(exit 2) |
 | `finish` | 全タスク完了。サマリー報告へ | next-task(exit 3) |
 | `group-advance` | グループ境界。group-advance を実行する | next-task(exit 6) |
 | `create-pr` | PR を作成する | group-advance(exit 7) |
@@ -203,6 +207,8 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 
 `escalate` の reason 一覧:
 
+- `dirty-tree` / `task-status` / `healthcheck` / `warmup` / `prompt-gen` / `task-state` — dispatch-start の失敗(exit 20 / 21 / 30 / 31 / 41〜43 / 50)
+- `timeout` — dispatch-wait の exit 3(経過が `child_agent.timeout_seconds` を超えた)
 - `blocked` — next-task の exit 4(実行可能なタスクが無い)
 - `gh-unavailable` — branch-check の exit 4(gh で PR 状態を判定できない)
 - `state-branch-mismatch` — branch-check の exit 5(state.json の `branch` と現在のブランチが不一致)
@@ -277,6 +283,51 @@ origin が無い・fetch に失敗した場合は exit 1)。stdout に `RunId: p
 ```exit 0 の場合も生成されたプロンプト全文は会話に読み込まない
 (読み込むと機械生成によるトークン節約が無意味になる)。
 
+### dispatch-start — 事前チェックからデタッチ起動まで
+
+子エージェントの起動までの事前チェックを順に行い、`dispatch-run` をデタッチ起動する。
+失敗した段階で止める(止めたときは state.json を変えず、子も起動しない)。手順:
+
+1. `branch-check --state`(非0なら stdout の `Next:` 行をそのまま流して止める)
+2. 作業ツリーがクリーンか
+3. タスクの状態が `pending` / `in_progress` か
+4. 疎通確認(`child_agent.healthcheck_command`。空なら省略)
+5. ウォームアップ(`child_agent.warmup_command`。空なら省略。`guard.sha256` が1つも無い = サイクルの最初の dispatch のときだけ)
+6. `dispatch-prompt-gen`
+7. `task-state <ID> start`(状態を `in_progress` にする)
+8. `dispatch-run` のデタッチ起動
+
+`isolate_xdg` が true のとき、疎通確認・ウォームアップも `XDG_CONFIG_HOME` / `XDG_DATA_HOME` を
+`.agents/workflow/.config` にして実行する。
+
+```powershell
+.agents/workflow/scripts/dispatch-start.ps1 -TaskId T1 [-Attempt 1]
+.agents/workflow/scripts/dispatch-start.ps1 -Pr
+```
+```bash
+.agents/workflow/scripts/dispatch-start.sh T1 [1]
+.agents/workflow/scripts/dispatch-start.sh --pr
+```
+
+`--pr` / `-Pr` は PR 作成の run(`pr-<N>-1`)を起動する。手順3・5・7は行わず、手順6は
+`dispatch-prompt-gen --pr` になる(stdout の `RunId` で起動する)。
+
+**exit code 規約**:
+
+| exit | 意味 |
+|------|------|
+| `0` | 起動した |
+| `1` | 使い方不備 |
+| `11`〜`15` | `branch-check --state` の exit 1〜5(stdout の `Next:` 行はそのまま流す) |
+| `20` | 作業ツリーが汚れている(`reason=dirty-tree`) |
+| `21` | タスクの状態が不正(`pending` / `in_progress` 以外、タスク無しを含む。`reason=task-status`) |
+| `30` / `31` | 疎通確認 / ウォームアップの失敗(`reason=healthcheck` / `warmup`。出力の末尾20行を stderr に出す) |
+| `41`〜`43` | `dispatch-prompt-gen` の exit 1〜3(`reason=prompt-gen`。依存未完了・report.md の欠落は 42。`--pr` で RunId が取れない場合は 41) |
+| `50` | `task-state` の失敗(`reason=task-state`) |
+
+stdout は成功時に `Run: <ID>-<N>`・`Log: <output.log のパス>`・`Watch: tail -f <output.log のパス>`・
+`Next: wait` を出す。失敗時は最後の行に `Next: escalate reason=<理由>` を出す(使い方不備の exit 1 を除く)。
+
 ### dispatch-run — 子エージェントCLIのデタッチ実行
 
 `runs/<タスクID>-<試行回数>/prompt.md` を読み込み、子エージェントCLI(config.json の
@@ -346,6 +397,8 @@ nohup .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1 &
   `$env:HOME`・`$env:USERPROFILE`・`%USERPROFILE%`)、3) Windows のユーザー一時ディレクトリの参照
   (`AppData\Local\Temp`・`AppData/Local/Temp`)。2 と 3 は大文字小文字を区別しない。`$env:TEMP`・`%TEMP%`・
   `$TMPDIR` は `dispatch-run` がプロジェクト内の `tmp/` を指させるため検出しない
+- **完了報告の保存**: ok(exit 0)と no-changes(exit 7)のとき、最後の完了報告のブロックを
+  `runs/<ID>-<N>/report.md` に保存する(既存は上書きしない)。出力の `Report:` 行にパスを出す
 - **完了報告**: `output.log` で**最後に出現する** `## 完了報告` 行だけを対象にする。
   その後にツール実行の記録(opencode が色付きで出すマーカー行 = ANSI エスケープに挟まれた
   `$ ` / `→ ` / `← ` / `✱ ` / `✗ ` / `⚙ ` / `! `、stream-json の `[tool_use]` / `[tool_result]` 行)が
@@ -393,6 +446,31 @@ exit code(複数に当たる場合は上の行を優先する):
 
 `0` 以外の場合はレビューに進まず、出力された内容をユーザーに報告する(`7` は、変更が無いのが
 正しいタスクに限り検証に進んでよい。詳細は `agent-dispatch` skill §4)。
+
+### dispatch-wait — 子の完了待ち
+
+run の完了をポーリングで待つ。1回の呼び出しで `--max-wait` 秒まで待ち、`done` マーカーが
+あれば `dispatch-check` に判定を任せてその結果をそのまま返す。
+
+```powershell
+.agents/workflow/scripts/dispatch-wait.ps1 -TaskId T1 [-Attempt 1] [-MaxWait 480] [-Interval 15]
+```
+```bash
+.agents/workflow/scripts/dispatch-wait.sh T1 [1] [--max-wait 480] [--interval 15]
+```
+
+- `--max-wait`: 1回の呼び出しで待つ上限(秒、既定 480。親ツールのコマンド実行上限に合わせる)
+- `--interval`: ポーリング間隔(秒、既定 15)
+- 経過秒数の開始時刻は、`dispatch-run` が起動時に作る `guard.sha256` の更新時刻。
+  `guard.sha256` が無い(dispatch-run で起動されていない)run は待てず exit 1
+- exit 2 / 3 のとき、stdout に状況行(`Run:`・`Status: running`・`Elapsed:`・`Log idle:`・`Log:`)を出す
+
+| exit | 意味 |
+|------|------|
+| `0` / `4`〜`8` | `done` があった。`dispatch-check` の結果のまま(上の表) |
+| `1` | 使い方不備、または run が起動されていない |
+| `2` | まだ実行中(この呼び出しの待ちが `--max-wait` に達した)。最後の行は `Next: wait`。再度呼んで待ちを続ける |
+| `3` | 経過が `child_agent.timeout_seconds` を超えた。最後の行は `Next: escalate reason=timeout` |
 
 ### git-state — git 状態の4行出力
 
