@@ -96,10 +96,16 @@ t_wait_not_started() {
     assert_contains "$ERR" "not started" "stderr"
 }
 
+t_wait_attempt_zero() {
+    run_script dispatch-wait.sh T1 0
+    assert_eq 1 "$CODE" "exit code: $ERR"
+}
+
 echo "test-dispatch-wait.sh"
 
 test_case "wait: done があれば dispatch-check の結果を返す" t_wait_done
 test_case "wait: max-wait に達したら exit 2 と Next: wait" t_wait_max_wait
 test_case "wait: 経過が timeout_seconds を超えたら exit 3" t_wait_timeout
 test_case "wait: 起動されていない run は exit 1" t_wait_not_started
+test_case "wait: 試行回数 0 は exit 1" t_wait_attempt_zero
 summary

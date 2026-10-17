@@ -42,7 +42,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 ATTEMPT="${ATTEMPT:-1}"
-if ! [[ "$TASK_ID" =~ ^[A-Za-z0-9_-]+$ ]] || ! [[ "$ATTEMPT" =~ ^[0-9]+$ ]] \
+if ! [[ "$TASK_ID" =~ ^[A-Za-z0-9_-]+$ ]] || ! [[ "$ATTEMPT" =~ ^[1-9][0-9]*$ ]] \
     || ! [[ "$MAX_WAIT" =~ ^[0-9]+$ ]] || ! [[ "$INTERVAL" =~ ^[0-9]+$ ]]; then
     echo "Invalid TaskId/Attempt/--max-wait/--interval: '$TASK_ID' '$ATTEMPT' '$MAX_WAIT' '$INTERVAL'" >&2
     exit 1

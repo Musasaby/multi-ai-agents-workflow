@@ -91,4 +91,9 @@ Invoke-TestCase "wait: 起動されていない run は exit 1" {
     Assert-Contains $script:Err "not started" "stderr"
 }
 
+Invoke-TestCase "wait: 試行回数 0 は exit 1" {
+    Invoke-Script dispatch-wait.ps1 -TaskId T1 -Attempt 0
+    Assert-Eq 1 $script:Code "exit code: $($script:Err)"
+}
+
 Show-Summary
