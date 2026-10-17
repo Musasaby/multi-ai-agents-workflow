@@ -64,6 +64,26 @@ Invoke-TestCase "start: 起動して prompt.md・in_progress・done ができる
     Assert-FileExists "$script:Proj/.agents/workflow/runs/T1-1/done" "done within 30s"
 }
 
+Invoke-TestCase "start: 戻った時点で guard.sha256 がある" {
+    Initialize-StartProject 'T1:pending', 'T2:pending'
+    Invoke-Script dispatch-start.ps1 -TaskId T1
+    Assert-FileExists "$script:Proj/.agents/workflow/runs/T1-1/guard.sha256" "guard.sha256 on return"
+    Wait-Done T1-1
+}
+
+Invoke-TestCase "start: dispatch-run が起動しなければ exit 60" {
+    Initialize-StartProject 'T1:pending', 'T2:pending'
+    Remove-Item "$script:Proj/.agents/workflow/scripts/dispatch-run.ps1"
+    $env:DISPATCH_START_LAUNCH_TIMEOUT = '2'
+    try {
+        Invoke-Script dispatch-start.ps1 -TaskId T1
+    } finally {
+        Remove-Item Env:DISPATCH_START_LAUNCH_TIMEOUT
+    }
+    Assert-Eq 60 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "Next: escalate reason=launch" (Get-LastLine $script:Out) "last line"
+}
+
 Invoke-TestCase "start: 作業ツリーが汚れていれば exit 20" {
     Initialize-StartProject 'T1:pending', 'T2:pending'
     Write-Utf8File "$script:Proj/x.txt" "x`n"

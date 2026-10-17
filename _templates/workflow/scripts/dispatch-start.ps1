@@ -9,6 +9,7 @@
 #   30=疎通確認(healthcheck_command)の失敗 / 31=ウォームアップ(warmup_command)の失敗
 #   41〜43=dispatch-prompt-gen の 1〜3(依存未完了・report.md の欠落は 42)
 #   50=task-state の失敗
+#   60=dispatch-run の起動を確認できない(guard.sha256 が上限秒数内に現れない)
 # stdout の最後の行には次のアクションを示す `Next:` 行を出す(wait / escalate reason=<理由> 等。
 # 使い方不備の exit 1 では出さない)
 param(
@@ -160,7 +161,21 @@ if ($Pr) {
 }
 
 # 6. デタッチ起動
+Remove-Item -LiteralPath "$runDir/guard.sha256" -Force -ErrorAction SilentlyContinue
 Start-Process pwsh -ArgumentList @('-NoProfile', '-File', "$PSScriptRoot/dispatch-run.ps1", '-TaskId', $TaskId, '-Attempt', "$Attempt")
+
+# dispatch-run が guard.sha256 を作る(起動した)まで待つ
+$launchTimeout = 30
+if ($env:DISPATCH_START_LAUNCH_TIMEOUT -match '^[0-9]+$') { $launchTimeout = [int]$env:DISPATCH_START_LAUNCH_TIMEOUT }
+$deadline = [DateTime]::UtcNow.AddSeconds($launchTimeout)
+while (-not (Test-Path -LiteralPath "$runDir/guard.sha256" -PathType Leaf)) {
+    if ([DateTime]::UtcNow -ge $deadline) {
+        [Console]::Error.WriteLine("dispatch-run did not start: $runDir/guard.sha256 not found after ${launchTimeout}s")
+        Write-Output "Next: escalate reason=launch"
+        exit 60
+    }
+    Start-Sleep -Milliseconds 500
+}
 
 Write-Output "Run: $TaskId-$Attempt"
 Write-Output "Log: $runDir/output.log"
