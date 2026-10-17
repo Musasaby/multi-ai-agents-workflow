@@ -8,7 +8,7 @@ set -uo pipefail
 # exit:
 #   0=起動した / 1=使い方不備
 #   11〜15=branch-check --state の 1〜5(stdout の Next: 行はそのまま流す)
-#   20=作業ツリーが汚れている / 21=タスクの状態が不正(pending / in_progress 以外、タスク無しを含む)
+#   20=作業ツリーが汚れている(試行回数 2 以上で fix-notes.md がある場合は確認しない) / 21=タスクの状態が不正(pending / in_progress 以外、タスク無しを含む)
 #   30=疎通確認(healthcheck_command)の失敗 / 31=ウォームアップ(warmup_command)の失敗
 #   41〜43=dispatch-prompt-gen の 1〜3(依存未完了・report.md の欠落は 42)
 #   50=task-state の失敗
@@ -46,12 +46,16 @@ if [ "$CODE" -ne 0 ]; then
 fi
 
 # 2. 作業ツリー
-DIRTY="$(git status --porcelain)"
-if [ -n "$DIRTY" ]; then
-    echo "Working tree is not clean:" >&2
-    printf '%s\n' "$DIRTY" >&2
-    echo "Next: escalate reason=dirty-tree"
-    exit 20
+if [ "$PR_MODE" = false ] && [ "$ATTEMPT" -ge 2 ] && [ -f "$RUN_DIR/fix-notes.md" ]; then
+    echo "Retry (attempt $ATTEMPT, fix-notes.md found): keeping the working tree changes from the previous attempt" >&2
+else
+    DIRTY="$(git status --porcelain)"
+    if [ -n "$DIRTY" ]; then
+        echo "Working tree is not clean:" >&2
+        printf '%s\n' "$DIRTY" >&2
+        echo "Next: escalate reason=dirty-tree"
+        exit 20
+    fi
 fi
 
 # 3. タスクの状態(--pr では行わない)

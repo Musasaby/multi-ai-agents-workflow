@@ -21,3 +21,7 @@ test-tasks.sh: __pycache__ を作らない
 
 # test-exitcode.sh は存在しない(sh 側では各テストが直接 exit code を断言する)
 test-exitcode.ps1: *
+
+# #57: ps1 版のケースは T52 で足す(T52 でこの3行を消す)
+test-dispatch-start.sh: start: リトライ(fix-notes あり)は作業ツリーが汚れていても起動する
+test-dispatch-start.sh: start: リトライでも fix-notes が無ければ exit 20

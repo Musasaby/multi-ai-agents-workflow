@@ -105,6 +105,28 @@ t_done_task() {
     assert_file_absent "$PROJ/.agents/workflow/runs/T1-1/done" "child not started"
 }
 
+t_retry_dirty_with_notes() {
+    setup "T1:in_progress" "T2:pending"
+    printf 'x\n' > "$PROJ/x.txt"
+    mkdir -p "$PROJ/.agents/workflow/runs/T1-2"
+    printf 'fix\n' > "$PROJ/.agents/workflow/runs/T1-2/fix-notes.md"
+    run_script dispatch-start.sh T1 2
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_eq "Next: wait" "$(printf '%s\n' "$OUT" | tail -1)" "last line"
+    wait_done T1-2
+    assert_file_exists "$PROJ/.agents/workflow/runs/T1-2/done" "done within 30s"
+    assert_eq in_progress "$(state_get T1 status)" "T1 status"
+}
+
+t_retry_dirty_no_notes() {
+    setup "T1:in_progress" "T2:pending"
+    printf 'x\n' > "$PROJ/x.txt"
+    run_script dispatch-start.sh T1 2
+    assert_eq 20 "$CODE" "exit code: $ERR"
+    assert_eq "Next: escalate reason=dirty-tree" "$(printf '%s\n' "$OUT" | tail -1)" "last line"
+    assert_file_absent "$PROJ/.agents/workflow/runs/T1-2/done" "child not started"
+}
+
 set_child_cfg() { # $1=キー $2=値
     python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" "$1" "$2" <<'PY'
 import json, sys
@@ -209,6 +231,8 @@ test_case "start: 作業ツリーが汚れていれば exit 20" t_dirty_tree
 test_case "start: 依存が未完了なら exit 42" t_dep_incomplete
 test_case "start: main 上なら exit 12" t_on_main
 test_case "start: done のタスクは exit 21" t_done_task
+test_case "start: リトライ(fix-notes あり)は作業ツリーが汚れていても起動する" t_retry_dirty_with_notes
+test_case "start: リトライでも fix-notes が無ければ exit 20" t_retry_dirty_no_notes
 test_case "start: healthcheck_command が失敗すれば exit 30" t_healthcheck_fail
 test_case "start: warmup_command は最初の dispatch だけ実行する" t_warmup_once
 test_case "start: warmup_command が失敗すれば exit 31" t_warmup_fail
