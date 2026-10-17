@@ -19,5 +19,9 @@ test-dispatch.sh: run: プロジェクトルート以外から相対パスで起
 # ps1 版は tasklib.ps1 を使い Python を実行しないため、この確認は ps1 に該当しない
 test-tasks.sh: __pycache__ を作らない
 
+# dispatch-start.sh の起動確認(guard.sha256 待ち)は T55 で ps1 に追加する
+test-dispatch-start.sh: start: 戻った時点で guard.sha256 がある  # T55 で ps1 に追加
+test-dispatch-start.sh: start: dispatch-run が起動しなければ exit 60  # T55 で ps1 に追加
+
 # test-exitcode.sh は存在しない(sh 側では各テストが直接 exit code を断言する)
 test-exitcode.ps1: *

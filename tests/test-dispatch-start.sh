@@ -65,6 +65,21 @@ t_start_ok() {
     assert_file_exists "$PROJ/.agents/workflow/runs/T1-1/done" "done within 30s"
 }
 
+t_start_guard_ready() {
+    setup "T1:pending" "T2:pending"
+    run_script dispatch-start.sh T1
+    assert_file_exists "$PROJ/.agents/workflow/runs/T1-1/guard.sha256" "guard.sha256 on return"
+    wait_done T1-1
+}
+
+t_start_launch_fail() {
+    setup "T1:pending" "T2:pending"
+    rm "$PROJ/.agents/workflow/scripts/dispatch-run.sh"
+    DISPATCH_START_LAUNCH_TIMEOUT=2 run_script dispatch-start.sh T1
+    assert_eq 60 "$CODE" "exit code: $ERR"
+    assert_eq "Next: escalate reason=launch" "$(printf '%s\n' "$OUT" | tail -1)" "last line"
+}
+
 t_dirty_tree() {
     setup "T1:pending" "T2:pending"
     printf 'x\n' > "$PROJ/x.txt"
@@ -227,6 +242,8 @@ t_pr_on_main() {
 
 echo "test-dispatch-start.sh"
 test_case "start: 起動して prompt.md・in_progress・done ができる" t_start_ok
+test_case "start: 戻った時点で guard.sha256 がある" t_start_guard_ready
+test_case "start: dispatch-run が起動しなければ exit 60" t_start_launch_fail
 test_case "start: 作業ツリーが汚れていれば exit 20" t_dirty_tree
 test_case "start: 依存が未完了なら exit 42" t_dep_incomplete
 test_case "start: main 上なら exit 12" t_on_main

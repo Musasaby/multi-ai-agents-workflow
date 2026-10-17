@@ -12,6 +12,7 @@ set -uo pipefail
 #   30=疎通確認(healthcheck_command)の失敗 / 31=ウォームアップ(warmup_command)の失敗
 #   41〜43=dispatch-prompt-gen の 1〜3(依存未完了・report.md の欠落は 42)
 #   50=task-state の失敗
+#   60=dispatch-run の起動を確認できない(guard.sha256 が上限秒数内に現れない)
 # stdout の最後の行には次のアクションを示す `Next:` 行を出す(wait / escalate reason=<理由> 等。
 # 使い方不備の exit 1 では出さない)
 
@@ -158,7 +159,22 @@ else
 fi
 
 # 6. デタッチ起動
+rm -f "$RUN_DIR/guard.sha256"
 nohup bash "$SCRIPT_DIR/dispatch-run.sh" "$TASK_ID" "$ATTEMPT" > /dev/null 2>&1 &
+
+# dispatch-run が guard.sha256 を作る(起動した)まで待つ
+LAUNCH_TIMEOUT="${DISPATCH_START_LAUNCH_TIMEOUT:-30}"
+if ! [[ "$LAUNCH_TIMEOUT" =~ ^[0-9]+$ ]]; then LAUNCH_TIMEOUT=30; fi
+i=0
+while [ ! -f "$RUN_DIR/guard.sha256" ]; do
+    if [ "$i" -ge $((LAUNCH_TIMEOUT * 2)) ]; then
+        echo "dispatch-run did not start: $RUN_DIR/guard.sha256 not found after ${LAUNCH_TIMEOUT}s" >&2
+        echo "Next: escalate reason=launch"
+        exit 60
+    fi
+    sleep 0.5
+    i=$((i + 1))
+done
 
 echo "Run: ${TASK_ID}-${ATTEMPT}"
 echo "Log: $RUN_DIR/output.log"
