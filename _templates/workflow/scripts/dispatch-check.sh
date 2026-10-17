@@ -254,6 +254,36 @@ else
     VERDICT="ok"; CODE=0
 fi
 
+# --- 完了報告の report.md への書き出し(CODE が 0・7 = 完了報告が有効で改ざん・異常終了が無いとき) ---
+# ブロックの範囲は完了報告の判定の awk と同じ: 最後の `## 完了報告` 行から、その後の最初の `## ` 行の
+# 直前(無ければ末尾)まで。ANSI エスケープを除いた行で範囲を判定して書き出し、ブロック末尾の空行は
+# 除く(最後に改行を1つだけ付ける)。既にあれば上書きしない(同じ run を再判定しても内容は同じため)
+REPORT_PATH="$RUN_DIR/report.md"
+REPORT_SAVED=""
+if [ "$CODE" = 0 ] || [ "$CODE" = 7 ]; then
+    if [ -f "$REPORT_PATH" ]; then
+        REPORT_SAVED=1
+    else
+        REPORT_BODY="$(printf '%s\n' "$RAW_LOG" | LC_ALL=C awk -v esc="$ESC" '
+            {
+                line = $0
+                gsub(esc "\\[[0-9;]*[A-Za-z]", "", line)
+                lines[NR] = line
+            }
+            lines[NR] ~ /^## 完了報告[ \t]*$/ { last = NR }
+            END {
+                if (!last) exit
+                end = NR
+                for (i = last + 1; i <= NR; i++) if (lines[i] ~ /^## /) { end = i - 1; break }
+                while (end > last && lines[end] ~ /^[ \t]*$/) end--
+                for (i = last; i <= end; i++) print lines[i]
+            }')"
+        if [ -n "$REPORT_BODY" ]; then
+            printf '%s\n' "$REPORT_BODY" > "$REPORT_PATH" && REPORT_SAVED=1
+        fi
+    fi
+fi
+
 echo "Run: ${TASK_ID}-${ATTEMPT}"
 echo "Exit: ${EXIT_VALUE} (kind: ${KIND})"
 echo "End: ${END_VALUE}"
@@ -281,6 +311,9 @@ if [ -n "$CLI_LOG_LINES" ]; then
 fi
 echo "Provider error: $PROVIDER_ERROR"
 echo "Completion report: ${REPORT_RESULT}"
+if [ -n "$REPORT_SAVED" ]; then
+    echo "Report: $REPORT_PATH"
+fi
 echo "Changes: ${CHANGE_COUNT}"
 echo "Verdict: ${VERDICT}"
 echo "--- git status --porcelain"
