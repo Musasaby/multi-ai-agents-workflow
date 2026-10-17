@@ -8,7 +8,8 @@ set -uo pipefail
 #     変わった/消えた、guard.sha256・output.log・git-state.txt が無い、output.log が実行中に
 #     切り詰められた、本物のリポジトリの git 状態(HEAD・ブランチ・参照・設定)が変わった)
 #   4=異常終了(非0・signal・crashed)
-#   6=権限拒否で中断(output.log に子CLIの権限拒否の記録がある)
+#   6=権限拒否で中断(output.log に子CLIの権限拒否の記録がある)、または、ツール実行の記録に
+#     プロジェクト外(/tmp 等)へのアクセスがある
 #   5=完了報告が無い・無効(最後の `## 完了報告` の後にツール実行の記録が続く、必須項目が無い・テンプレートのまま)
 #   7=変更0件(完了報告はあるが作業ツリーに変更が無い。PR 作成の run(pr-*)では判定しない)
 #   0=正常終了かつ完了報告あり / 1=done マーカーが無い・使い方不備
@@ -127,6 +128,24 @@ DENIED_LINES="$(printf '%s\n' "$RAW_LOG" | LC_ALL=C awk -v esc="$ESC" '
     { line = $0; gsub(esc "\\[[0-9;]*[A-Za-z]", "", line) }
     line ~ /^! permission requested: .*auto-rejecting/ { print line }')"
 
+# --- プロジェクト外(/tmp 等)へのアクセスの検出 ---
+# 権限を拒否されずに成功したプロジェクト外アクセス(例: bash -c "... > /tmp/x.log")を検出する。
+# 対象はツール実行の記録行だけ: opencode の色付きマーカー行($ / → / ← / ✱ / ✗ / ⚙ で始まるもの。
+# ! は権限拒否の行なので除く)と stream-json の [tool_use] 行。ツールの出力(色なしの行・
+# [tool_result] 行)や完了報告の本文には反応しない。判定は ANSI エスケープを除いた行に対して行う。
+# 条件の正規表現は outside_re にまとめる(条件を足したくなったらここへ追記する)。
+OUTSIDE_LINES="$(printf '%s\n' "$RAW_LOG" | LC_ALL=C awk -v esc="$ESC" '
+    BEGIN {
+        outside_re = "(^|[ \t\"'\''=(<>])\\/(var\\/)?tmp([\\/ \t\"'\'');]|$)"
+    }
+    {
+        raw = $0
+        is_tool = (raw ~ ("^" esc "\\[[0-9;]*m(\\$|→|←|✱|✗|⚙) " esc "\\[[0-9;]*m")) || (raw ~ /^\[tool_use\]/)
+        if (!is_tool) next
+        line = raw; gsub(esc "\\[[0-9;]*[A-Za-z]", "", line)
+        if (line ~ outside_re) print line
+    }')"
+
 # --- 完了報告の判定 ---
 # 最後に出現する `## 完了報告` だけを対象にし、その後にツール実行の記録が続く場合は無効とする
 # (子がテンプレートやドキュメントを表示しただけの行に一致させないため)。ツール実行の記録は、
@@ -177,6 +196,8 @@ elif [ "$KIND" != ok ]; then
     VERDICT="abnormal-exit"; CODE=4
 elif [ -n "$DENIED_LINES" ]; then
     VERDICT="permission-denied"; CODE=6
+elif [ -n "$OUTSIDE_LINES" ]; then
+    VERDICT="outside-access"; CODE=6
 elif [ "$REPORT_RESULT" != found ]; then
     VERDICT="no-report"; CODE=5
 elif [ "$IS_PR" = false ] && [ "$CHANGE_COUNT" -eq 0 ]; then
@@ -199,6 +220,12 @@ if [ -n "$DENIED_LINES" ]; then
     printf '%s\n' "$DENIED_LINES" | sed 's/^/  /'
 else
     echo "Permission denied: no"
+fi
+if [ -n "$OUTSIDE_LINES" ]; then
+    echo "Outside access: yes"
+    printf '%s\n' "$OUTSIDE_LINES" | sed 's/^/  /'
+else
+    echo "Outside access: no"
 fi
 echo "Completion report: ${REPORT_RESULT}"
 echo "Changes: ${CHANGE_COUNT}"

@@ -501,6 +501,48 @@ t_check_permission_denied_colored() {
     assert_eq 6 "$CODE" "colored permission line detected: $OUT"
 }
 
+# T12: 権限を拒否されずに成功したプロジェクト外(/tmp 等)へのアクセスを検出する(exit 6)
+t_check_outside_access_tmp_write() {
+    make_run 0 "$REPORT
+${ESC}[0m\$ ${ESC}[0mbash -c \"bash tests/x.sh > /tmp/dsp-sh.log\""
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 6 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Verdict: outside-access" "verdict"
+    assert_contains "$OUT" "Outside access: yes" "flag"
+    assert_contains "$OUT" "/tmp/dsp-sh.log" "line shown"
+}
+
+t_check_outside_access_runs_tmp_ok() {
+    make_run 0 "${ESC}[0m\$ ${ESC}[0mbash tests/x.sh > .agents/workflow/runs/T1-1/tmp/out.log
+${ESC}[0m\$ ${ESC}[0mecho \$TMPDIR
+$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Outside access: no" "flag"
+}
+
+t_check_outside_access_tool_output_ignored() {
+    make_run 0 "PROJ=/tmp/tmp.abc
+[tool_result] /tmp/x
+$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Outside access: no" "flag"
+}
+
+t_check_outside_access_with_permission_denied() {
+    make_run 0 "! permission requested: external_directory (/tmp/*); auto-rejecting
+${ESC}[0m\$ ${ESC}[0mbash -c \"bash tests/x.sh > /tmp/dsp-sh.log\""
+    run_script dispatch-check.sh T1 1
+    assert_eq 6 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Verdict: permission-denied" "verdict"
+    assert_contains "$OUT" "Permission denied: yes" "flag"
+    assert_contains "$OUT" "Outside access: yes" "flag"
+}
+
 echo "test-dispatch.sh"
 
 test_case "run: 正常終了はEXIT:0" t_run_exit0
@@ -542,4 +584,8 @@ test_case "run+check: 子がブランチを作れば exit 8(git changed: refs)" 
 test_case "check: 報告本文の→や$で始まる行は有効" t_check_report_body_symbols
 test_case "check: 表示されたソース中の権限拒否の文字列には反応しない" t_check_quoted_permission_text
 test_case "check: 色付きの権限拒否行もexit 6" t_check_permission_denied_colored
+test_case "check: ツール実行行の /tmp への書き込みは exit 6(outside-access)" t_check_outside_access_tmp_write
+test_case "check: runs/<ID>/tmp 配下へのアクセスは検出しない" t_check_outside_access_runs_tmp_ok
+test_case "check: ツールの出力中の /tmp には反応しない" t_check_outside_access_tool_output_ignored
+test_case "check: 権限拒否とプロジェクト外アクセスが両方あれば permission-denied" t_check_outside_access_with_permission_denied
 summary
