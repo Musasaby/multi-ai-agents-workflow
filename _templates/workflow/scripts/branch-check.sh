@@ -17,6 +17,8 @@ set -uo pipefail
 # (古い gh が「no pull requests found」で失敗した場合も PR なしとして扱う)
 # exit: 0=使ってよい / 1=使い方・git 失敗 / 2=main 上 / 3=PR マージ済み / 4=gh で判定不能
 #       5=state.json の branch と不一致
+# stdout の最後の行に "Next: <行動>" を出す(exit 1 を除く): 0=continue / 2=switch-branch reason=main /
+#       3=switch-branch reason=merged / 4=escalate reason=gh-unavailable / 5=escalate reason=state-branch-mismatch
 
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
@@ -79,6 +81,7 @@ fi
 UPSTREAM_BRANCH="$(json_field "$CONFIG_PATH" upstream.branch)"
 if [ "$BRANCH" = "main" ] || { [ -n "$UPSTREAM_BRANCH" ] && [ "$BRANCH" = "$UPSTREAM_BRANCH" ]; }; then
     echo "On '$BRANCH': do not work on the main branch (create a develop/<name> branch from the latest origin/main)" >&2
+    echo "Next: switch-branch reason=main"
     exit 2
 fi
 
@@ -87,6 +90,7 @@ if [ "$CHECK_STATE" -eq 1 ]; then
     STATE_BRANCH="$(json_field "$STATE_PATH" branch)"
     if [ -n "$STATE_BRANCH" ] && [ "$STATE_BRANCH" != "$BRANCH" ]; then
         echo "Current branch '$BRANCH' differs from state.json's branch '$STATE_BRANCH' (switch to '$STATE_BRANCH', or update state.json if the workflow moved)" >&2
+        echo "Next: escalate reason=state-branch-mismatch"
         exit 5
     fi
 fi
@@ -94,6 +98,7 @@ fi
 # --- 4・5. PR 状態(マージ済みか) ---
 if ! command -v gh > /dev/null 2>&1; then
     echo "gh not found: cannot check whether '$BRANCH' has a merged PR" >&2
+    echo "Next: escalate reason=gh-unavailable"
     exit 4
 fi
 
@@ -107,9 +112,11 @@ if [ "$GH_CODE" -ne 0 ]; then
     GH_ERR="$(cat "$GH_ERR_FILE")"
     if printf '%s' "$GH_ERR" | grep -qi 'no pull request'; then
         echo "OK $BRANCH"
+        echo "Next: continue"
         exit 0
     fi
     echo "gh pr list failed (exit $GH_CODE): cannot check whether '$BRANCH' has a merged PR: $GH_ERR" >&2
+    echo "Next: escalate reason=gh-unavailable"
     exit 4
 fi
 
@@ -123,13 +130,16 @@ if not isinstance(data, list):
 print((str(data[0].get('url') or '') or '(unknown URL)') if data else '')
 " "$(to_py_path "$GH_OUT_FILE")")" || {
     echo "Failed to parse gh pr list output (expected a JSON list): $(cat "$GH_OUT_FILE")" >&2
+    echo "Next: escalate reason=gh-unavailable"
     exit 4
 }
 
 if [ -n "$PR_URL" ]; then
     echo "MERGED $PR_URL"
+    echo "Next: switch-branch reason=merged"
     exit 3
 fi
 
 echo "OK $BRANCH"
+echo "Next: continue"
 exit 0
