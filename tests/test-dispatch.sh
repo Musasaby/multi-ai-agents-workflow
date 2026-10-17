@@ -341,6 +341,7 @@ t_check_ok() {
     assert_contains "$OUT" "a.txt" "git status shown"
     assert_contains "$OUT" "Completion report: found" "report found"
     assert_contains "$OUT" "Guard: ok" "guard ok"
+    assert_eq "Next: review T1" "${OUT##*$'\n'}" "next line"
 }
 
 t_check_signal() {
@@ -349,6 +350,7 @@ t_check_signal() {
     assert_eq 4 "$CODE" "exit code"
     assert_contains "$OUT" "kind: signal" "kind"
     assert_contains "$OUT" "step 67" "log tail shown"
+    assert_eq "Next: escalate reason=abnormal-exit" "${OUT##*$'\n'}" "next line"
 }
 
 t_check_idle_timeout() {
@@ -357,6 +359,7 @@ t_check_idle_timeout() {
     assert_eq 4 "$CODE" "exit code"
     assert_contains "$OUT" "kind: idle-timeout" "kind"
     assert_contains "$OUT" "Verdict: abnormal-exit" "verdict"
+    assert_eq "Next: escalate reason=idle-timeout" "${OUT##*$'\n'}" "next line"
 }
 
 t_check_nonzero() {
@@ -378,6 +381,7 @@ t_check_missing_report() {
     run_script dispatch-check.sh T1 1
     assert_eq 5 "$CODE" "exit code"
     assert_contains "$OUT" "Completion report: missing" "report missing"
+    assert_eq "Next: escalate reason=no-report" "${OUT##*$'\n'}" "next line"
 }
 
 t_check_missing_report_no_output_after_tool() {
@@ -389,6 +393,7 @@ ${ESC}[0m→ ${ESC}[0mRead b.txt"
     run_script dispatch-check.sh T1 1
     assert_eq 5 "$CODE" "exit code: $OUT"
     assert_contains "$OUT" "no output after the last tool call" "reason"
+    assert_eq "Next: escalate reason=token-limit" "${OUT##*$'\n'}" "next line"
 }
 
 t_check_missing_report_body_after_tool() {
@@ -404,7 +409,8 @@ t_check_missing_report_body_after_tool() {
 t_check_no_done() {
     mkdir -p "$PROJ/.agents/workflow/runs/T1-1"
     run_script dispatch-check.sh T1 1
-    assert_eq 1 "$CODE" "exit code"
+    assert_eq 2 "$CODE" "exit code"
+    assert_eq "Next: wait" "$OUT" "next line"
 }
 
 t_check_bom_done() {
@@ -475,6 +481,7 @@ Error: The user rejected permission to use this specific tool call."
     assert_eq 6 "$CODE" "exit code: $OUT"
     assert_contains "$OUT" "Permission denied: yes" "flag"
     assert_contains "$OUT" "auto-rejecting" "denied line shown"
+    assert_eq "Next: escalate reason=permission-denied" "${OUT##*$'\n'}" "next line"
 }
 
 t_check_no_changes() {
@@ -482,12 +489,14 @@ t_check_no_changes() {
     run_script dispatch-check.sh T1 1
     assert_eq 7 "$CODE" "exit code: $OUT"
     assert_contains "$OUT" "Changes: 0" "changes"
+    assert_eq "Next: escalate reason=no-changes" "${OUT##*$'\n'}" "next line"
 }
 
 t_check_pr_run_without_changes() {
     make_run 0 $'## 完了報告\n- PR URL: https://github.com/o/r/pull/1\n- タイトル: t' pr-1-1
     run_script dispatch-check.sh pr-1 1
     assert_eq 0 "$CODE" "pr run is not checked for changes: $OUT"
+    assert_eq "Next: wait-merge" "${OUT##*$'\n'}" "pr run is not reviewed"
 }
 
 # #34: 管理ファイルの変更・削除を検知する
@@ -499,6 +508,7 @@ t_check_state_changed() {
     run_script dispatch-check.sh T1 1
     assert_eq 8 "$CODE" "exit code: $OUT"
     assert_contains "$OUT" "changed: .agents/workflow/state.json" "issue"
+    assert_eq "Next: escalate reason=tampered" "${OUT##*$'\n'}" "next line"
 }
 
 t_check_prompt_deleted() {
@@ -657,6 +667,7 @@ ${ESC}[0m\$ ${ESC}[0mbash -c \"bash tests/x.sh > /tmp/dsp-sh.log\""
     assert_contains "$OUT" "Verdict: outside-access" "verdict"
     assert_contains "$OUT" "Outside access: yes" "flag"
     assert_contains "$OUT" "/tmp/dsp-sh.log" "line shown"
+    assert_eq "Next: escalate reason=outside-access" "${OUT##*$'\n'}" "next line"
 }
 
 t_check_outside_access_runs_tmp_ok() {
@@ -764,6 +775,19 @@ t_check_cli_log_provider_error() {
     assert_not_contains "$OUT" "level=INFO" "info line not shown"
 }
 
+# T47(#74): 利用上限エラーのログで子が異常終了(非0)すれば provider-error で exit 4
+t_check_cli_log_provider_error_exit4() {
+    set_cli_log "$(py_path "$PROJ/cli.log")"
+    printf 'timestamp=2026-10-17T03:07:49.892Z level=INFO message="ok"\n' > "$PROJ/cli.log"
+    printf 'timestamp=2026-10-17T03:07:50.429Z level=ERROR message="stream error" error.error="AI_APICallError: Go usage limit exceeded"\n' >> "$PROJ/cli.log"
+    make_run 3 "$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 4 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Provider error: yes" "provider flag"
+    assert_eq "Next: escalate reason=provider-error" "${OUT##*$'\n'}" "next line"
+}
+
 # T7(#53): 子CLIのログの ERROR がプロバイダー由来でなければ Provider error: no
 t_check_cli_log_error_not_provider() {
     set_cli_log "$(py_path "$PROJ/cli.log")"
@@ -812,7 +836,7 @@ test_case "check: crashedはexit 4" t_check_crashed
 test_case "check: 完了報告なしはexit 5" t_check_missing_report
 test_case "check: 最後のツール実行の後に出力が無ければ理由に書く(exit 5)" t_check_missing_report_no_output_after_tool
 test_case "check: ツール実行の後に本文があれば理由を付けない(exit 5)" t_check_missing_report_body_after_tool
-test_case "check: doneなしはexit 1" t_check_no_done
+test_case "check: doneなしはexit 2" t_check_no_done
 test_case "check: BOM付きdone" t_check_bom_done
 test_case "check: 完了報告の後にツール実行が続けば無効(exit 5)" t_check_report_then_tool_activity
 test_case "check: テンプレートのままの完了報告は無効(exit 5)" t_check_report_placeholder
@@ -848,6 +872,7 @@ test_case "check: tool_use 行のホームディレクトリ参照は exit 6" t_
 test_case "check: 色付きツール実行行の USERPROFILE・AppData の Temp 参照は exit 6" t_check_outside_access_userprofile_temp
 test_case "check: HOMEBREW_PREFIX や env:TEMP は検出しない" t_check_outside_access_home_not_detected
 test_case "check: CLI ログの利用上限エラーを Provider error: yes にする" t_check_cli_log_provider_error
+test_case "check: CLI ログの利用上限エラーで異常終了なら provider-error" t_check_cli_log_provider_error_exit4
 test_case "check: CLI ログの ERROR がプロバイダー由来でなければ Provider error: no" t_check_cli_log_error_not_provider
 test_case "check: cli_log が未設定なら CLI log: (not configured)" t_check_cli_log_not_configured
 summary

@@ -25,13 +25,14 @@ skill 名の指定がなくても発動するように、AGENTS.md の「マル�
    .agents/workflow/scripts/branch-check.sh
    ```
    exit code と対応は `_templates/workflow/README.md` の `branch-check` の節と一致する。
-   **この skill では `--state` を付けないため、exit 5 は出ない**(exit 5 は
+   **この skill では `--state` を付けないため、`Next: escalate reason=state-branch-mismatch`(exit 5)は出ない**(これは
    state.json の `branch` との不一致判定で、タスク実行側の `agent-dispatch` が対象)。
 
-2. exit code で分岐する:
+2. 出力の最後の `Next:` 行で分岐する:
 
-   - **exit 0**(stdout `OK <ブランチ>`)→ 判定に問題なし。そのまま依頼の作業に進む
-   - **exit 2**(`main` 上)または **exit 3**(stdout `MERGED <PR URL>`。PR がマージ済み)→
+   - **`Next: continue`**(exit 0。stdout `OK <ブランチ>`)→ 判定に問題なし。そのまま依頼の作業に進む
+   - **`Next: switch-branch reason=main`**(exit 2。`main` 上)または
+     **`Next: switch-branch reason=merged`**(exit 3。stdout `MERGED <PR URL>`。PR がマージ済み)→
      作業を始めず、利用者に提案する:
      - `git fetch origin` の後、最新の main(`origin/main`)から専用ブランチ
        `develop/<作業名>-plan` を切ることを提案する。config.json の `upstream.branch` が
@@ -42,10 +43,11 @@ skill 名の指定がなくても発動するように、AGENTS.md の「マル�
        作業を始める(承認なく作らない)
      - 作業ツリーに未コミット変更(`git status --porcelain` が空でない)がある場合は、
        切替前にその扱い(残す・退避(stash)・破棄 等)を利用者に確認する
-   - **exit 4**(gh が無い・認証切れ等で PR 状態を取得できない)→ 判定できない旨を
-     利用者に伝え、このまま続行してよいか確認する。続行の承認があれば進む
-   - **exit 1**(使い方不備・git の失敗。detached HEAD を含む)→ スクリプトの stderr の
-     内容を添えて利用者に報告し、作業を中断する
+   - **`Next: escalate reason=gh-unavailable`**(exit 4。gh が無い・認証切れ等で
+     PR 状態を取得できない)→ 判定できない旨を利用者に伝え、このまま続行してよいか確認する。
+     続行の承認があれば進む
+   - **`Next:` 行なし**(exit 1。使い方不備・git の失敗。detached HEAD を含む)→
+     スクリプトの stderr の内容を添えて利用者に報告し、作業を中断する
 
 3. 新ブランチに移った後の state.json の扱い:
 

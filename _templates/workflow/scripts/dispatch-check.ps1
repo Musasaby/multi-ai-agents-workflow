@@ -9,7 +9,9 @@
 #   5=完了報告が無い・無効(最後の `## 完了報告` の後にツール実行の記録が続く、必須項目が無い・テンプレートのまま)。
 #     最後のツール実行の後に出力が無い場合は、その旨を理由に書く
 #   7=変更0件(完了報告はあるが作業ツリーに変更が無い。PR 作成の run(pr-*)では判定しない)
-#   0=正常終了かつ完了報告あり / 1=done マーカーが無い・使い方不備
+#   0=正常終了かつ完了報告あり / 2=done マーカーが無い(まだ実行中) / 1=使い方不備
+# stdout の最後の行には次のアクションを示す `Next:` 行を出す(wait / review <TaskId> /
+# escalate reason=<理由>。使い方不備の exit 1 では出さない)
 # Windows にはシグナルの仕組みが無いため、dispatch-run.ps1 は signal:* を書き出さない
 # (強制終了は通常の非0終了として記録される)。POSIX 版が書き出した done も同じ規則で判定する。
 param(
@@ -33,7 +35,8 @@ $guardPath = "$runDir/guard.sha256"
 
 if (-not (Test-Path $donePath)) {
     [Console]::Error.WriteLine("done marker not found: $donePath (child agent has not finished yet)")
-    exit 1
+    Write-Output "Next: wait"
+    exit 2
 }
 
 # ReadAllText は BOM を除去する(Windows PowerShell 5.1 の Out-File は BOM を付ける)
@@ -290,5 +293,30 @@ if (Test-Path $logPath) {
 } else {
     Write-Output "(output.log not found)"
 }
+
+# --- 次のアクションの判定(stdout の最後の行に出す) ---
+# PR 作成の run(pr-*)はレビューしない。PR を検証して報告し、マージを待つ
+$next = switch ($code) {
+    0 { if ($isPr) { 'wait-merge' } else { "review $TaskId" }; break }
+    8 { 'escalate reason=tampered'; break }
+    4 {
+        if ($providerError -eq 'yes') { 'escalate reason=provider-error' }
+        elseif ($kind -eq 'idle-timeout') { 'escalate reason=idle-timeout' }
+        else { 'escalate reason=abnormal-exit' }
+        break
+    }
+    6 {
+        if ($verdict -eq 'permission-denied') { 'escalate reason=permission-denied' }
+        else { 'escalate reason=outside-access' }
+        break
+    }
+    5 {
+        if ($reportResult.StartsWith('missing (no output after the last tool call')) { 'escalate reason=token-limit' }
+        else { 'escalate reason=no-report' }
+        break
+    }
+    7 { 'escalate reason=no-changes'; break }
+}
+Write-Output "Next: $next"
 
 exit $code

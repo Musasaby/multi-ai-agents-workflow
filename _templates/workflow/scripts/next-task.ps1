@@ -5,7 +5,9 @@
 # group(現在の作業グループ。無い/未知のグループ名なら「未完了タスクを含む最初のグループ」)
 # のタスクだけを候補にする。作業グループが全タスク done で他グループに未完了があれば
 # stdout に作業グループ名を出して exit 6(グループ境界で停止する合図)。
-# stdout: "<タスクID> <status>" / グループ完了時は "<作業グループ名>"
+# stdout: "<タスクID> <status>" / グループ完了時は "<作業グループ名>"。最後の行に "Next: <行動>" を出す
+#       (exit 0=dispatch/review <タスクID>、exit 3=finish、exit 4=escalate reason=blocked、
+#       exit 6=group-advance。exit 1 では出さない)
 # exit: 0=該当あり / 1=使い方・tasks.md/state.json 不備 / 3=全タスク done /
 #       4=実行可能なタスクなし / 6=作業グループ完了(他グループに未完了あり)
 Set-Location $PSScriptRoot\..\..\..
@@ -76,12 +78,18 @@ function Get-UnfinishedGroup {
 foreach ($t in $stateTasks) {
     if ($t.status -in @('in_progress', 'in_review')) {
         Write-Output "$($t.id) $($t.status)"
+        if ($t.status -eq 'in_review') {
+            Write-Output "Next: review $($t.id)"
+        } else {
+            Write-Output "Next: dispatch $($t.id)"
+        }
         exit 0
     }
 }
 
 if (@($stateTasks | Where-Object { $_.status -ne 'done' }).Count -eq 0) {
     [Console]::Error.WriteLine('All tasks are done')
+    Write-Output 'Next: finish'
     exit 3
 }
 
@@ -102,6 +110,7 @@ if ($groupMode) {
     if ($candidates.Count -gt 0 -and @($candidates | Where-Object { $_.status -ne 'done' }).Count -eq 0 `
             -and @($others | Where-Object { $_.status -ne 'done' }).Count -gt 0) {
         Write-Output $workGroup
+        Write-Output 'Next: group-advance'
         exit 6
     }
 } else {
@@ -118,6 +127,7 @@ foreach ($t in $candidates) {
     $waiting = @($graph[$t.id] | Where-Object { $status[$_] -ne 'done' })
     if ($waiting.Count -eq 0) {
         Write-Output "$($t.id) pending"
+        Write-Output "Next: dispatch $($t.id)"
         exit 0
     }
     $desc = ($waiting | ForEach-Object { $s = if ($status.ContainsKey($_)) { $status[$_] } else { 'missing' }; "$_($s)" }) -join ', '
@@ -129,4 +139,5 @@ foreach ($b in $blocked) { [Console]::Error.WriteLine("  $b") }
 foreach ($t in $candidates) {
     if ($t.status -eq 'failed') { [Console]::Error.WriteLine("  $($t.id): failed") }
 }
+Write-Output 'Next: escalate reason=blocked'
 exit 4

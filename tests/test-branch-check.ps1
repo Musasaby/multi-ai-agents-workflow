@@ -57,7 +57,7 @@ Invoke-TestCase "branch-check: main 上は exit 2" {
     Set-GhStub NONE
     Invoke-Script branch-check.ps1
     Assert-Eq 2 $script:Code "exit code: $($script:Err)"
-    Assert-Eq "" $script:Out "stdout empty"
+    Assert-Eq "Next: switch-branch reason=main" $script:Out "stdout has only the Next: line"
     Assert-Contains $script:Err "main" "stderr explains"
     Assert-Eq "" (Get-GhStubLog) "gh not called"
 }
@@ -79,7 +79,8 @@ Invoke-TestCase "branch-check: マージ済み PR ありは exit 3 と MERGED <U
     $before = Get-Snapshot
     Invoke-Script branch-check.ps1
     Assert-Eq 3 $script:Code "exit code: $($script:Err)"
-    Assert-Eq "MERGED https://example.com/pr/1" $script:Out "stdout has the PR URL"
+    Assert-Eq "MERGED https://example.com/pr/1" (($script:Out -split "`n")[0]) "stdout has the PR URL"
+    Assert-Eq "Next: switch-branch reason=merged" (($script:Out -split "`n")[-1]) "last line is the Next: line"
     Assert-Contains (Get-GhStubLog) "pr list --head develop/g1 --state merged" "gh asked for merged PRs of the branch"
     Assert-Eq $before (Get-Snapshot) "nothing changed"
 }
@@ -90,7 +91,8 @@ Invoke-TestCase "branch-check: PR なし([])は exit 0 と OK <branch>" {
     $before = Get-Snapshot
     Invoke-Script branch-check.ps1
     Assert-Eq 0 $script:Code "exit code: $($script:Err)"
-    Assert-Eq "OK develop/g1" $script:Out "stdout"
+    Assert-Eq "OK develop/g1" (($script:Out -split "`n")[0]) "stdout"
+    Assert-Eq "Next: continue" (($script:Out -split "`n")[-1]) "last line is the Next: line"
     Assert-Eq $before (Get-Snapshot) "nothing changed"
 }
 
@@ -99,7 +101,7 @@ Invoke-TestCase "branch-check: gh の「no pull requests found」失敗も PR �
     Set-GhStub NO_PR_MESSAGE
     Invoke-Script branch-check.ps1
     Assert-Eq 0 $script:Code "'no pull requests found' failure is treated as no PR: $($script:Err)"
-    Assert-Eq "OK develop/g1" $script:Out "stdout"
+    Assert-Eq "OK develop/g1" (($script:Out -split "`n")[0]) "stdout"
 }
 
 Invoke-TestCase "branch-check: OPEN の PR のみは exit 0" {
@@ -116,7 +118,7 @@ Invoke-TestCase "branch-check: gh 失敗は exit 4" {
     Set-GhStub FAIL
     Invoke-Script branch-check.ps1
     Assert-Eq 4 $script:Code "exit code"
-    Assert-Eq "" $script:Out "stdout empty"
+    Assert-Eq "Next: escalate reason=gh-unavailable" $script:Out "stdout has only the Next: line"
     Assert-Contains $script:Err "Bad credentials" "stderr includes gh's message"
 }
 
@@ -134,6 +136,7 @@ Invoke-TestCase "branch-check: -State で state.json と不一致は exit 5(gh �
     Set-GhStub MERGED 'https://example.com/pr/1'
     Invoke-Script branch-check.ps1 '-State'
     Assert-Eq 5 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "Next: escalate reason=state-branch-mismatch" (($script:Out -split "`n")[-1]) "last line is the Next: line"
     Assert-Contains $script:Err "develop/g1" "stderr shows the current branch"
     Assert-Contains $script:Err "develop/other" "stderr shows the state branch"
     Assert-Eq "" (Get-GhStubLog) "gh not called"
@@ -144,7 +147,7 @@ Invoke-TestCase "branch-check: -State で一致すれば exit 0" {
     Set-GhStub NONE
     Invoke-Script branch-check.ps1 '-State'
     Assert-Eq 0 $script:Code "exit code: $($script:Err)"
-    Assert-Eq "OK develop/g1" $script:Out "stdout"
+    Assert-Eq "OK develop/g1" (($script:Out -split "`n")[0]) "stdout"
 }
 
 Invoke-TestCase "branch-check: -State なしでは state.json を見ない" {
@@ -161,7 +164,7 @@ Invoke-TestCase "branch-check: state.json 無しは -State でも判定を飛ば
     Set-GhStub NONE
     Invoke-Script branch-check.ps1 '-State'
     Assert-Eq 0 $script:Code "missing state.json skips the check: $($script:Err)"
-    Assert-Eq "OK develop/g1" $script:Out "stdout"
+    Assert-Eq "OK develop/g1" (($script:Out -split "`n")[0]) "stdout"
 }
 
 Invoke-TestCase "branch-check: main の判定は state.json の判定より先" {

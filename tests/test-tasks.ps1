@@ -190,7 +190,7 @@ Invoke-TestCase "sync: グループ区切りの解析" {
     Assert-Eq ",P,A" (Get-TaskGroupOrder) "group order (default first)"
     Invoke-Script next-task.ps1
     Assert-Eq 0 $script:Code "next-task with groups: $($script:Err)"
-    Assert-Eq "T1 pending" $script:Out "default group task chosen"
+    Assert-Eq "T1 pending" ($script:Out -split "`n")[0] "default group task chosen"
 }
 
 Invoke-TestCase "sync: グループ欄は位置より優先" {
@@ -312,7 +312,8 @@ Invoke-TestCase "next: 作業グループ完了はexit 6" {
     Set-StateGroup P
     Invoke-Script next-task.ps1
     Assert-Eq 6 $script:Code "exit code: $($script:Err)"
-    Assert-Eq P $script:Out "stdout shows the completed group name"
+    Assert-Eq P ($script:Out -split "`n")[0] "stdout shows the completed group name"
+    Assert-Eq "Next: group-advance" ($script:Out -split "`n")[-1] "next action after group completion"
 }
 
 Invoke-TestCase "next: 次グループを現在グループにしたら選ぶ" {
@@ -321,7 +322,7 @@ Invoke-TestCase "next: 次グループを現在グループにしたら選ぶ" {
     Set-StateGroup A
     Invoke-Script next-task.ps1
     Assert-Eq 0 $script:Code "exit code: $($script:Err)"
-    Assert-Eq "T2 pending" $script:Out "task in the current group is chosen"
+    Assert-Eq "T2 pending" ($script:Out -split "`n")[0] "task in the current group is chosen"
 }
 
 Invoke-TestCase "next: group欄なしは未完了最初のグループ" {
@@ -329,7 +330,7 @@ Invoke-TestCase "next: group欄なしは未完了最初のグループ" {
     Set-State 'T1:done' 'T2:pending' 'T3:pending'
     Invoke-Script next-task.ps1
     Assert-Eq 0 $script:Code "exit code: $($script:Err)"
-    Assert-Eq "T2 pending" $script:Out "first group with unfinished tasks is the work group"
+    Assert-Eq "T2 pending" ($script:Out -split "`n")[0] "first group with unfinished tasks is the work group"
 }
 
 Invoke-TestCase "next: 未知のグループ名は未完了最初のグループ" {
@@ -338,7 +339,7 @@ Invoke-TestCase "next: 未知のグループ名は未完了最初のグループ
     Set-StateGroup ZZZ
     Invoke-Script next-task.ps1
     Assert-Eq 0 $script:Code "exit code: $($script:Err)"
-    Assert-Eq "T1 pending" $script:Out "first group with unfinished tasks (P) is the work group"
+    Assert-Eq "T1 pending" ($script:Out -split "`n")[0] "first group with unfinished tasks (P) is the work group"
 }
 
 Invoke-TestCase "next: 既定グループ完了は空のグループ名でexit 6" {
@@ -347,7 +348,7 @@ Invoke-TestCase "next: 既定グループ完了は空のグループ名でexit 6
     Set-StateGroup ''
     Invoke-Script next-task.ps1
     Assert-Eq 6 $script:Code "exit code: $($script:Err)"
-    Assert-Eq "" $script:Out "stdout shows the default group (empty name)"
+    Assert-Eq "Next: group-advance" $script:Out "trimmed stdout is the next action (empty group name)"
 }
 
 Invoke-TestCase "next: branch_per_group false は全タスクから選ぶ" {
@@ -357,7 +358,7 @@ Invoke-TestCase "next: branch_per_group false は全タスクから選ぶ" {
     Set-BranchPerGroup $false
     Invoke-Script next-task.ps1
     Assert-Eq 0 $script:Code "exit code: $($script:Err)"
-    Assert-Eq "T2 pending" $script:Out "task chosen from all tasks"
+    Assert-Eq "T2 pending" ($script:Out -split "`n")[0] "task chosen from all tasks"
 }
 
 Invoke-TestCase "next: 区切り無しで全完了はexit 3" {
@@ -470,7 +471,8 @@ Invoke-TestCase "next: 依存充足の最初のpending" {
     Set-State 'T1:done' 'T2:done' 'T3:done' 'T4:pending' 'T8:pending'
     Invoke-Script next-task.ps1
     Assert-Eq 0 $script:Code "exit code: $($script:Err)"
-    Assert-Eq "T8 pending" $script:Out "T8 chosen before T4"
+    Assert-Eq "T8 pending" ($script:Out -split "`n")[0] "T8 chosen before T4"
+    Assert-Eq "Next: dispatch T8" ($script:Out -split "`n")[-1] "next action dispatches the chosen task"
 }
 
 Invoke-TestCase "next: 再開対象を優先" {
@@ -478,7 +480,17 @@ Invoke-TestCase "next: 再開対象を優先" {
     Set-State 'T1:done' 'T2:in_review' 'T3:pending' 'T4:pending'
     Invoke-Script next-task.ps1
     Assert-Eq 0 $script:Code "exit code"
-    Assert-Eq "T2 in_review" $script:Out "resume target"
+    Assert-Eq "T2 in_review" ($script:Out -split "`n")[0] "resume target"
+    Assert-Eq "Next: review T2" ($script:Out -split "`n")[-1] "next action reviews the resume target"
+}
+
+Invoke-TestCase "next: in_progressの再開はdispatch" {
+    Set-Tasks $basicTasks
+    Set-State 'T1:done' 'T2:in_progress' 'T3:pending' 'T4:pending'
+    Invoke-Script next-task.ps1
+    Assert-Eq 0 $script:Code "exit code"
+    Assert-Eq "T2 in_progress" ($script:Out -split "`n")[0] "resume target"
+    Assert-Eq "Next: dispatch T2" ($script:Out -split "`n")[-1] "next action dispatches the resume target"
 }
 
 Invoke-TestCase "next: 全完了はexit 3" {
@@ -486,6 +498,7 @@ Invoke-TestCase "next: 全完了はexit 3" {
     Set-State 'T1:done' 'T2:done' 'T3:done' 'T4:done'
     Invoke-Script next-task.ps1
     Assert-Eq 3 $script:Code "exit code"
+    Assert-Eq "Next: finish" ($script:Out -split "`n")[-1] "next action when all tasks are done"
 }
 
 Invoke-TestCase "next: ブロックはexit 4" {
@@ -494,6 +507,7 @@ Invoke-TestCase "next: ブロックはexit 4" {
     Invoke-Script next-task.ps1
     Assert-Eq 4 $script:Code "exit code"
     Assert-Contains $script:Err "T1" "blocker listed"
+    Assert-Eq "Next: escalate reason=blocked" ($script:Out -split "`n")[-1] "next action when blocked"
 }
 
 Invoke-TestCase "next: 依存欄不正はexit 1" {

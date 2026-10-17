@@ -14,6 +14,8 @@
 # (古い gh が「no pull requests found」で失敗した場合も PR なしとして扱う)
 # exit: 0=使ってよい / 1=使い方・git 失敗 / 2=main 上 / 3=PR マージ済み / 4=gh で判定不能
 #       5=state.json の branch と不一致
+# stdout の最後の行に "Next: <行動>" を出す(exit 1 を除く): 0=continue / 2=switch-branch reason=main /
+#       3=switch-branch reason=merged / 4=escalate reason=gh-unavailable / 5=escalate reason=state-branch-mismatch
 param(
     [switch]$State,
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$Rest
@@ -24,7 +26,8 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 $usage = 'Usage: branch-check.ps1 [-State]'
 
 function Fail {
-    param([string]$Message, [int]$Code = 1)
+    param([string]$Message, [int]$Code = 1, [string]$Next = '')
+    if ($Next) { Write-Output $Next }
     [Console]::Error.WriteLine($Message)
     exit $Code
 }
@@ -63,20 +66,20 @@ if (-not $branch) { Fail 'HEAD is detached (switch to a work branch first)' }
 # --- 2. main 上 ---
 $upstreamBranch = Get-JsonField $configPath 'upstream.branch'
 if ($branch -ceq 'main' -or ($upstreamBranch -and $branch -ceq $upstreamBranch)) {
-    Fail "On '$branch': do not work on the main branch (create a develop/<name> branch from the latest origin/main)" 2
+    Fail "On '$branch': do not work on the main branch (create a develop/<name> branch from the latest origin/main)" 2 'Next: switch-branch reason=main'
 }
 
 # --- 3. state.json の branch との一致(-State 指定時のみ) ---
 if ($State) {
     $stateBranch = Get-JsonField $statePath 'branch'
     if ($stateBranch -and $stateBranch -cne $branch) {
-        Fail "Current branch '$branch' differs from state.json's branch '$stateBranch' (switch to '$stateBranch', or update state.json if the workflow moved)" 5
+        Fail "Current branch '$branch' differs from state.json's branch '$stateBranch' (switch to '$stateBranch', or update state.json if the workflow moved)" 5 'Next: escalate reason=state-branch-mismatch'
     }
 }
 
 # --- 4・5. PR 状態(マージ済みか) ---
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-    Fail "gh not found: cannot check whether '$branch' has a merged PR" 4
+    Fail "gh not found: cannot check whether '$branch' has a merged PR" 4 'Next: escalate reason=gh-unavailable'
 }
 
 $errFile = [System.IO.Path]::GetTempFileName()
@@ -94,30 +97,33 @@ try {
 if ($ghCode -ne 0) {
     if ($ghErr -match '(?i)no pull request') {
         Write-Output "OK $branch"
+        Write-Output 'Next: continue'
         exit 0
     }
-    Fail "gh pr list failed (exit $ghCode): cannot check whether '$branch' has a merged PR: $ghErr" 4
+    Fail "gh pr list failed (exit $ghCode): cannot check whether '$branch' has a merged PR: $ghErr" 4 'Next: escalate reason=gh-unavailable'
 }
 
 $ghJson = (@($ghOut) -join "`n").Trim()
 if (-not $ghJson) { $ghJson = '[]' }
 if (-not $ghJson.StartsWith('[')) {
-    Fail "Failed to parse gh pr list output (expected a JSON list): $ghJson" 4
+    Fail "Failed to parse gh pr list output (expected a JSON list): $ghJson" 4 'Next: escalate reason=gh-unavailable'
 }
 try {
     # Windows PowerShell 5.1 は配列を1オブジェクトとして、PowerShell 7 は要素ごとに出力するため、
     # ForEach-Object で要素に展開してからまとめる(どちらでも [] は 0 件になる)
     $prs = @($ghJson | ConvertFrom-Json | ForEach-Object { $_ })
 } catch {
-    Fail "Failed to parse gh pr list output (expected a JSON list): $ghJson" 4
+    Fail "Failed to parse gh pr list output (expected a JSON list): $ghJson" 4 'Next: escalate reason=gh-unavailable'
 }
 
 if ($prs.Count -gt 0) {
     $url = "$($prs[0].url)"
     if (-not $url) { $url = '(unknown URL)' }
     Write-Output "MERGED $url"
+    Write-Output 'Next: switch-branch reason=merged'
     exit 3
 }
 
 Write-Output "OK $branch"
+Write-Output 'Next: continue'
 exit 0

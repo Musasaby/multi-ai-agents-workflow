@@ -47,7 +47,7 @@ t_main_rejected() {
     gh_stub NONE
     run_script branch-check.sh
     assert_eq 2 "$CODE" "exit code: $ERR"
-    assert_eq "" "$OUT" "stdout empty"
+    assert_eq "Next: switch-branch reason=main" "$OUT" "stdout has only the Next: line"
     assert_contains "$ERR" "main" "stderr explains"
     assert_eq "" "$(gh_stub_log)" "gh not called"
 }
@@ -75,7 +75,8 @@ t_merged() {
     before="$(snapshot)"
     run_script branch-check.sh
     assert_eq 3 "$CODE" "exit code: $ERR"
-    assert_eq "MERGED https://example.com/pr/1" "$OUT" "stdout has the PR URL"
+    assert_eq "MERGED https://example.com/pr/1" "${OUT%%$'\n'*}" "stdout has the PR URL"
+    assert_eq "Next: switch-branch reason=merged" "${OUT##*$'\n'}" "last line is the Next: line"
     assert_contains "$(gh_stub_log)" "pr list --head develop/g1 --state merged" "gh asked for merged PRs of the branch"
     assert_eq "$before" "$(snapshot)" "nothing changed"
 }
@@ -87,7 +88,8 @@ t_no_pr() {
     before="$(snapshot)"
     run_script branch-check.sh
     assert_eq 0 "$CODE" "exit code: $ERR"
-    assert_eq "OK develop/g1" "$OUT" "stdout"
+    assert_eq "OK develop/g1" "${OUT%%$'\n'*}" "stdout"
+    assert_eq "Next: continue" "${OUT##*$'\n'}" "last line is the Next: line"
     assert_eq "$before" "$(snapshot)" "nothing changed"
 }
 
@@ -96,7 +98,7 @@ t_no_pr_message() {
     gh_stub NO_PR_MESSAGE
     run_script branch-check.sh
     assert_eq 0 "$CODE" "'no pull requests found' failure is treated as no PR: $ERR"
-    assert_eq "OK develop/g1" "$OUT" "stdout"
+    assert_eq "OK develop/g1" "${OUT%%$'\n'*}" "stdout"
 }
 
 t_open_only() {
@@ -113,7 +115,7 @@ t_gh_failure() {
     gh_stub FAIL
     run_script branch-check.sh
     assert_eq 4 "$CODE" "exit code"
-    assert_eq "" "$OUT" "stdout empty"
+    assert_eq "Next: escalate reason=gh-unavailable" "$OUT" "stdout has only the Next: line"
     assert_contains "$ERR" "Bad credentials" "stderr includes gh's message"
 }
 
@@ -131,6 +133,7 @@ t_state_mismatch() {
     gh_stub MERGED "https://example.com/pr/1"
     run_script branch-check.sh --state
     assert_eq 5 "$CODE" "exit code: $ERR"
+    assert_eq "Next: escalate reason=state-branch-mismatch" "${OUT##*$'\n'}" "last line is the Next: line"
     assert_contains "$ERR" "develop/g1" "stderr shows the current branch"
     assert_contains "$ERR" "develop/other" "stderr shows the state branch"
     assert_eq "" "$(gh_stub_log)" "gh not called"
@@ -141,7 +144,7 @@ t_state_match() {
     gh_stub NONE
     run_script branch-check.sh --state
     assert_eq 0 "$CODE" "exit code: $ERR"
-    assert_eq "OK develop/g1" "$OUT" "stdout"
+    assert_eq "OK develop/g1" "${OUT%%$'\n'*}" "stdout"
 }
 
 t_state_ignored_without_flag() {
@@ -158,7 +161,7 @@ t_state_file_absent() {
     gh_stub NONE
     run_script branch-check.sh --state
     assert_eq 0 "$CODE" "missing state.json skips the check: $ERR"
-    assert_eq "OK develop/g1" "$OUT" "stdout"
+    assert_eq "OK develop/g1" "${OUT%%$'\n'*}" "stdout"
 }
 
 t_main_before_state() {

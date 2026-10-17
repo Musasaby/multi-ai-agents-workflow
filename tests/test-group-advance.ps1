@@ -84,7 +84,8 @@ Invoke-TestCase "advance: PR なしは exit 7" {
     Set-GhStub NO_PR
     Invoke-Script group-advance.ps1
     Assert-Eq 7 $script:Code "exit code: $($script:Err)"
-    Assert-Eq "NO_PR" $script:Out "stdout"
+    Assert-Eq "NO_PR" (($script:Out -split "`n")[0]) "stdout"
+    Assert-Eq "Next: create-pr" (($script:Out -split "`n")[-1]) "stdout last line"
     Assert-Contains (Get-GhStubLog) "view develop/g1" "gh called with the state branch"
     Assert-Eq "develop/g1" (Get-StateBranch) "state.json unchanged"
     Assert-Eq "P" (Get-StateGroup) "group unchanged"
@@ -95,7 +96,8 @@ Invoke-TestCase "advance: OPEN は exit 8" {
     Set-GhStub OPEN 'https://example.com/pr/1'
     Invoke-Script group-advance.ps1
     Assert-Eq 8 $script:Code "exit code: $($script:Err)"
-    Assert-Eq "OPEN https://example.com/pr/1" $script:Out "stdout has the PR URL"
+    Assert-Eq "OPEN https://example.com/pr/1" (($script:Out -split "`n")[0]) "stdout has the PR URL"
+    Assert-Eq "Next: wait-merge" (($script:Out -split "`n")[-1]) "stdout last line"
     Assert-Eq "P" (Get-StateGroup) "group unchanged"
 }
 
@@ -105,6 +107,7 @@ Invoke-TestCase "advance: CLOSED は exit 9" {
     Invoke-Script group-advance.ps1
     Assert-Eq 9 $script:Code "exit code: $($script:Err)"
     Assert-Contains $script:Err "CLOSED" "stderr explains the closed PR"
+    Assert-Eq "Next: escalate reason=pr-closed" (($script:Out -split "`n")[-1]) "stdout last line"
     Assert-Eq "develop/g1" (Get-StateBranch) "state.json unchanged"
 }
 
@@ -113,7 +116,8 @@ Invoke-TestCase "advance: MERGED はブランチ作成と state 更新" {
     Set-GhStub MERGED 'https://example.com/pr/1'
     Invoke-Script group-advance.ps1 '-Branch' 'develop/g2'
     Assert-Eq 0 $script:Code "exit code: $($script:Err)"
-    Assert-Eq "ADVANCED develop/g2 A" $script:Out "stdout shows the new branch and group"
+    Assert-Eq "ADVANCED develop/g2 A" (($script:Out -split "`n")[0]) "stdout shows the new branch and group"
+    Assert-Eq "Next: continue" (($script:Out -split "`n")[-1]) "stdout last line"
     Assert-Eq "develop/g2" (Get-CurrentBranch) "switched to the new branch"
     Assert-Eq "develop/g2" (Get-StateBranch) "state.json branch updated"
     Assert-Eq "A" (Get-StateGroup) "state.json group updated to the next group"

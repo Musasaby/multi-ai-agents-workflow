@@ -25,10 +25,11 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
 - `branch-check --state`(PowerShell: `.agents/workflow/scripts/branch-check.ps1 -State` /
   POSIX: `branch-check.sh --state`)を実行し、現在のブランチが作業に使ってよいかを機械的に判定する
   (マージ済みブランチ・`main`・state.json の `branch` との不一致を検出する)。
-  **exit 0 以外の場合は dispatch しない**。exit code と stderr の内容(
-  `2`=`main` 上、`3`=PR マージ済み・stdout `MERGED <PR URL>`、`5`=state.json の
-  `branch` と不一致 等)を添えてユーザーに報告し、中断する。
-  exit code の意味は `_templates/workflow/README.md` の「branch-check」の節と一致する
+  **出力の最後の行が `Next: continue` 以外なら dispatch しない**。`Next:` 行(
+  `switch-branch reason=main`・`switch-branch reason=merged`・
+  `escalate reason=state-branch-mismatch` など。`Next:` 行が無いときは使い方の誤りか
+  git の失敗)と stderr の内容をユーザーに伝えて、中断する。
+  `Next:` 行の一覧は `.agents/workflow/README.md` の「Next: 行」の節にある
   ```powershell
   .agents/workflow/scripts/branch-check.ps1 -State
   ```
@@ -255,7 +256,7 @@ exit 3 になる。
   確認する(`dispatch-check` も `CLI log:` 欄に出力する)。利用上限(usage/rate limit)・
   プロバイダー障害(エンドポイントの 429・unavailable 等)を表す行があれば、
   子の作業の失敗ではなくプロバイダー側の問題が原因である可能性が高い(`Provider error: yes`)
-- **完了検知後は毎回 `dispatch-check` を実行し、exit code で機械的に分岐する**
+- **完了検知後は毎回 `dispatch-check` を実行し、出力の最後の `Next:` 行で機械的に分岐する**
   (`EXIT` の値を親が目視で解釈しない。非0終了の見落としを防ぐため)。
   `dispatch-check` は終了状態の区分・管理ファイルの改ざん検知(Guard)・権限拒否の有無・
   完了報告の判定・変更件数・`git status --porcelain`・`git diff --stat`・`output.log` の
@@ -269,13 +270,13 @@ exit 3 になる。
   ```bash
   .agents/workflow/scripts/dispatch-check.sh T1 1
   ```
-  - **exit 0**(正常終了かつ完了報告あり): 下記の検証に進む
-  - **exit 4**(異常終了: 非0・`signal:*`・`crashed:*`・`idle-timeout`): レビューには進まない。
+  - **`Next: review <ID>`(exit 0)**(正常終了かつ完了報告あり): 下記の検証に進む
+  - **`reason=abnormal-exit`(exit 4)**(異常終了: 非0・`signal:*`・`crashed:*`・`idle-timeout`): レビューには進まない。
     出力された成果物の有無(`git status` / `git diff --stat` に変更があるか、
     `output.log` の末尾で作業がどこまで進んだか、完了報告があるか)をユーザーに報告し、
     再dispatch するか、成果物を引き取るかの判断を仰ぐ。`signal:*` の場合は、外部から
     強制終了された(メモリ逼迫・監督プロセス等)可能性が高いことも添える
-  - **exit 4 で `kind: idle-timeout` または `Provider error: yes` の場合**(子CLIが無応答に
+  - **`reason=idle-timeout` / `reason=provider-error`(exit 4)**(子CLIが無応答に
     なった・利用上限やプロバイダー障害に当たった): 子の作業の失敗ではないため
     `task-state <タスクID> retry` は使わない(retries は増やさない。state.json は
     `in_progress` のまま)。ユーザーに状況(利用上限・プロバイダー障害で中断した旨と
@@ -284,28 +285,28 @@ exit 3 になる。
     再dispatch する。試行番号 2 以上の再dispatch には `fix-notes.md` が要るため、
     「前回はプロバイダーの利用上限(または障害)で中断した。作業ツリーの変更は無い」等の
     事実を書く(レビュー指摘事項ではないが、テンプレート経由で子に引き継がれる)
-  - **exit 8**(管理ファイルの改ざん・git 状態の変化: `prompt.md`・`state.json`・`tasks.md`・
+  - **`reason=tampered`(exit 8)**(管理ファイルの改ざん・git 状態の変化: `prompt.md`・`state.json`・`tasks.md`・
     `config.json` が `dispatch-run` の起動時から変わった・消えた、`guard.sha256`・`output.log`・
     `git-state.txt` が無い、`output.log` が実行中に切り詰められた): レビューには進まない。
     `Guard:` 欄の内容を添えてユーザーに報告する。`state.json` / `tasks.md` が変わっている場合は、
     子の変更を戻すか(`git diff` / アーカイブとの比較)をユーザーに確認する
-  - **exit 8 の `git changed:`**(本物のリポジトリの git 状態が変わった:
+  - **`reason=tampered` で `Guard:` 欄に `git changed:` がある場合**(本物のリポジトリの git 状態が変わった:
     `git-state.txt` の記録と現在の git 状態の比較で検出): レビューには進まない。
     `git log` / `git reflog` / `git config --local --list` で変化の内容(どのコミット・参照・設定が
     変わったか)を確かめ、ユーザーに報告して復旧の要否を確認する
-  - **exit 6**(権限拒否で中断・プロジェクト外アクセスの検出: 子CLIがプロジェクト外への
+  - **`reason=permission-denied`(exit 6)**(権限拒否で中断・プロジェクト外アクセスの検出: 子CLIがプロジェクト外への
     アクセス等を拒否されて終わった): レビューには進まない。`Permission denied:` 欄の拒否された
     コマンドを添えてユーザーに報告する。再dispatch する場合は、拒否された操作をしなくて済むよう
     fix-notes に方針を書く
-  - **exit 6 の `Verdict: outside-access`**(プロジェクト外アクセスの検出:
+  - **`reason=outside-access`(exit 6)**(プロジェクト外アクセスの検出:
     `Outside access: yes`): レビューには進まない。`Outside access:` 欄の該当行を添えて
     ユーザーに報告する。再dispatch する場合は、fix-notes に一時ファイルの置き場所(`$TMPDIR`)を
     書く(dispatch-run が `$TMPDIR`・`$TEMP`・`$TMP` をプロジェクト内の
     `runs/<タスクID>-<試行回数>/tmp/` に設定済みなので、子はそこに置くことで検出を避けられる)
-  - **exit 5**(完了報告が無い・無効): `Completion report:` 欄の理由と成果物の有無を添えて
+  - **`reason=no-report`(exit 5)**(完了報告が無い・無効): `Completion report:` 欄の理由と成果物の有無を添えて
     ユーザーに報告する(子が途中で応答を終えた可能性がある)。
-    理由が `missing (no output after the last tool call; ...)` の場合、子は最後のツール実行の後に
-    応答を出力しきれずに打ち切られた(出力トークン上限に達した)可能性が高い。確認方法:
+  - **`reason=token-limit`(exit 5)**: 子は最後のツール実行の後に応答を出力しきれずに
+    打ち切られた(出力トークン上限に達した)可能性が高い。確認方法:
     opencode ならセッション DB(`~/.local/share/opencode/opencode.db` の `message` テーブル)で
     該当セッションの最後の assistant メッセージを見て、`finish` が `length`(出力トークン上限で
     打ち切り)であること、または `tokens` の `reasoning` が上限(例: 32000)に近いことを確かめる
@@ -315,10 +316,11 @@ exit 3 になる。
     1. タスクを細かく分ける(`agent-task-plan` の追加モードでタスクを分割する)
     2. 実装方法・設計判断を計画(`tasks.md`)に具体的に書き、子の調査・推論量を減らす
     3. 子のモデルの推論量(思考モード・reasoning トークン上限等)を下げる
-  - **exit 7**(変更0件: 完了報告はあるが作業ツリーに変更が無い): タスクの受け入れ基準が
+  - **`reason=no-changes`(exit 7)**(変更0件: 完了報告はあるが作業ツリーに変更が無い): タスクの受け入れ基準が
     ファイルの変更を求めているなら失敗として扱い、ユーザーに報告する。調査だけのタスクなど
     変更が無いのが正しい場合に限り、下記の検証に進んでよい
-  - **exit 1**: done マーカーが無い(まだ終了していない)
+  - **`Next: wait`(exit 2)**: done マーカーが無い(まだ終了していない)。exit 1 は使い方不備
+  - **`Next:` 行が無い**(exit 1。使い方の誤り): stderr の内容をユーザーに伝える
 - 完了確認後、子エージェントの出力(`output.log`)と `git status` / `git diff --stat` を突き合わせる:
   - 完了報告フォーマットが出力に含まれているか
   - テスト結果が「全件パス」か。失敗が残っている・テスト結果の記載がない場合は

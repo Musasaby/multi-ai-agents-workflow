@@ -33,7 +33,7 @@ description: マルチエージェント実装ワークフローのオーケス�
 
 tasks.md にグループ区切りがあり、config の `branch_per_group` が有効(既定)の場合、
 グループが PR 作成・ブランチ切替の機械的な単位になる。次のタスクを選ぶ `next-task` が
-exit 6(作業グループ完了)を返したら、以下の手順に**必ず**従う。**グループ途中で
+`Next: group-advance`(作業グループ完了)を出したら、以下の手順に**必ず**従う。**グループ途中で
 次のグループのタスクに進んではならない**(next-task は現在の作業グループのタスクしか
 選ばないため、この手順のループを守れば自然に防げる)。
 
@@ -47,19 +47,19 @@ exit 6(作業グループ完了)を返したら、以下の手順に**必ず**�
    ```bash
    .agents/workflow/scripts/group-advance.sh --branch "develop/<作業名>-<グループ名>"
    ```
-2. exit code で分岐する:
-   - **exit 7(PR 未作成)**: 「PR作成(子への単発依頼)」を必ず実行し、PR URL を
-     ユーザーに報告して停止する(マージはユーザーが行う)
-   - **exit 8(マージ待ち。stdout に `OPEN <PR URL>`)**: PR がオープンのため
+2. 出力の最後の `Next:` 行で分岐する:
+   - **`Next: create-pr`**(exit 7。PR 未作成): 「PR作成(子への単発依頼)」を必ず実行し、
+     PR URL をユーザーに報告して停止する(マージはユーザーが行う)
+   - **`Next: wait-merge`**(exit 8。マージ待ち。stdout に `OPEN <PR URL>`): PR がオープンのため
      「マージ待ち」であることを PR URL とともに報告して停止する。マージ完了の連絡を
      受けて group-advance を再実行する
-   - **exit 9(PR が未マージのまま閉鎖)**: エスカレーションする(PR が閉じられた理由と
-     再作成の要否をユーザーに確認する)
-   - **exit 0(次グループへの切替完了)**: stdout の `ADVANCED <新ブランチ名> <新グループ名>`
-     を確認する(state.json の `branch` / `group` は group-advance が更新済み)。
-     state.json がコミット対象のプロジェクトでは、この更新を新ブランチで
-     `chore: <新グループ名> グループの作業を開始` としてコミットしてから(`git status --porcelain`
-     が空になることを確認する)、新グループのタスクのループに進む
+   - **`Next: escalate reason=pr-closed`**(exit 9。PR が未マージのまま閉鎖):
+     エスカレーションする(PR が閉じられた理由と再作成の要否をユーザーに確認する)
+   - **`Next: continue`**(exit 0。次グループへの切替完了): stdout の
+     `ADVANCED <新ブランチ名> <新グループ名>` を確認する(state.json の `branch` / `group` は
+     group-advance が更新済み)。state.json がコミット対象のプロジェクトでは、この更新を
+     新ブランチで `chore: <新グループ名> グループの作業を開始` としてコミットしてから
+     (`git status --porcelain` が空になることを確認する)、新グループのタスクのループに進む
 
 ## フロー
 
@@ -72,25 +72,20 @@ exit 6(作業グループ完了)を返したら、以下の手順に**必ず**�
       - 合格   → (verify_before_commit 有効時のみ)最終ゲート /agent-quality-gate
                  - FAIL(blocking) → 不合格扱いで修正再依頼へ(b に戻る)
                  - PASS → コミット(configで有効なら理解確認質問を生成)→ ループの先頭へ戻る
-                   (next-task が exit 6 を返したら「グループ単位の PR とブランチ切替」の手順へ)
+                   (next-task が `Next: group-advance` を出したら「グループ単位の PR とブランチ切替」の手順へ)
 3. 全タスク完了 → サマリー報告(未回答の質問ファイル一覧を含む)
 ```
 
 ### 次のタスクの選び方
 
 ループの各周回の先頭で `next-task`(PowerShell: `.agents/workflow/scripts/next-task.ps1`
-/ POSIX: `next-task.sh`)を実行し、exit code で分岐する。tasks.md の記述順や ID 順、
-state.json の並び順で次のタスクを決めない(挿入したタスクの順序が崩れるため)。
-
-- **exit 0**: stdout の `<タスクID> <status>` に従う。`pending` / `in_progress` →
-  `/agent-dispatch <タスクID>`、`in_review` → `/agent-review-commit <タスクID>`
-- **exit 3**: 全タスク `done`。手順3(サマリー報告)へ進む
-- **exit 4**: 実行できるタスクが無い(`failed` や未完了の依存で止まっている)。stderr の
-  内容を添えてユーザーにエスカレーションする
-- **exit 1**: tasks.md / state.json の不備(依存欄の不正など)。stderr の内容を添えて
-  ユーザーに報告する
-- **exit 6**: 作業グループの全タスクが `done`(stdout に作業グループ名)。グループ境界なので
-  「グループ単位の PR とブランチ切替」の手順(group-advance の実行と exit code 分岐)へ進む
+/ POSIX: `next-task.sh`)を実行し、stdout の最後の `Next:` 行に従う: `dispatch <ID>` →
+`/agent-dispatch <ID>`、`review <ID>` → `/agent-review-commit <ID>`、`finish` →
+手順3、`group-advance` → 「グループ単位の PR とブランチ切替」、`escalate` →
+reason と stderr をユーザーに説明する。`Next:` 行が無ければ stderr を添えて報告する。
+語彙の一覧は `.agents/workflow/README.md` の「Next: 行」の節。
+tasks.md の記述順や ID 順、state.json の並び順で次のタスクを決めない
+(挿入したタスクの順序が崩れるため)。
 
 ## レビュー中に派生タスクが見つかった場合
 
@@ -176,7 +171,7 @@ tasks.md / state.json / runs/ / comprehension/ は自動的に `archive/<日時-
 
 ## PR作成(子への単発依頼)
 
-グループ完了時(group-advance が exit 7「PR 未作成」を返した場合。「グループ単位の
+グループ完了時(group-advance が `Next: create-pr`(PR 未作成)を出した場合。「グループ単位の
 PR とブランチ切替」を参照)とサイクル完了時に、PR 作成を子エージェントへ
 単発で依頼する。PR 作成はタスクではないため、tasks.md / state.json には載せない
 (タスクIDは採番しない)。親は PR のタイトル・本文を自分で書かず、gh コマンドも直接実行しない。
@@ -198,7 +193,8 @@ PR とブランチ切替」を参照)とサイクル完了時に、PR 作成を�
    デタッチ起動する(例: `dispatch-run.ps1 -TaskId pr-<N> -Attempt 1`)。プロンプトには、
    push(`git push -u`)、`gh pr create --base main`、日本語のタイトル・本文、既存 PR の
    確認、マージ禁止が含まれている
-4. `/agent-dispatch` §4 と同じ方法で完了を検知し、`dispatch-check`(`pr-<N>` / `1`)で判定する
+4. `/agent-dispatch` §4 と同じ方法で完了を検知し、`dispatch-check`(`pr-<N>` / `1`)で判定する。
+   成功したときの `Next:` 行は `wait-merge`。レビューには進まず、手順5(PR の確認)に進む
 5. **PR の検証**: `gh pr view <作業ブランチ> --json url,state,baseRefName` を実行し、
    PR が存在し、`baseRefName` が `main` であることを確認する。確認できなければ、
    `output.log` の末尾を添えてユーザーに報告する

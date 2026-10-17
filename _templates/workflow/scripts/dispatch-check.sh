@@ -13,7 +13,9 @@ set -uo pipefail
 #   5=完了報告が無い・無効(最後の `## 完了報告` の後にツール実行の記録が続く、必須項目が無い・テンプレートのまま)。
 #     最後のツール実行の後に出力が無い場合は、その旨を理由に書く
 #   7=変更0件(完了報告はあるが作業ツリーに変更が無い。PR 作成の run(pr-*)では判定しない)
-#   0=正常終了かつ完了報告あり / 1=done マーカーが無い・使い方不備
+#   0=正常終了かつ完了報告あり / 2=done マーカーが無い(まだ実行中) / 1=使い方不備
+# stdout の最後の行には次のアクションを示す `Next:` 行を出す(wait / review <TaskId> /
+# escalate reason=<理由>。使い方不備の exit 1 では出さない)
 
 TASK_ID="${1:?Usage: dispatch-check.sh <TaskId> [Attempt]}"
 ATTEMPT="${2:-1}"
@@ -33,7 +35,8 @@ GUARD_PATH="$RUN_DIR/guard.sha256"
 
 if [ ! -f "$DONE_PATH" ]; then
     echo "done marker not found: $DONE_PATH (child agent has not finished yet)" >&2
-    exit 1
+    echo "Next: wait"
+    exit 2
 fi
 
 # Windows PowerShell 5.1 の Out-File は BOM を付けるため除去してから読む
@@ -291,5 +294,36 @@ if [ -f "$LOG_PATH" ]; then
 else
     echo "(output.log not found)"
 fi
+
+# --- 次のアクションの判定(stdout の最後の行に出す) ---
+# PR 作成の run(pr-*)はレビューしない。PR を検証して報告し、マージを待つ
+case "$CODE" in
+    0) if [ "$IS_PR" = true ]; then NEXT="wait-merge"; else NEXT="review $TASK_ID"; fi ;;
+    8) NEXT="escalate reason=tampered" ;;
+    4)
+        if [ "$PROVIDER_ERROR" = yes ]; then
+            NEXT="escalate reason=provider-error"
+        elif [ "$KIND" = idle-timeout ]; then
+            NEXT="escalate reason=idle-timeout"
+        else
+            NEXT="escalate reason=abnormal-exit"
+        fi
+        ;;
+    6)
+        if [ "$VERDICT" = permission-denied ]; then
+            NEXT="escalate reason=permission-denied"
+        else
+            NEXT="escalate reason=outside-access"
+        fi
+        ;;
+    5)
+        case "$REPORT_RESULT" in
+            "missing (no output after the last tool call"*) NEXT="escalate reason=token-limit" ;;
+            *) NEXT="escalate reason=no-report" ;;
+        esac
+        ;;
+    7) NEXT="escalate reason=no-changes" ;;
+esac
+echo "Next: $NEXT"
 
 exit "$CODE"

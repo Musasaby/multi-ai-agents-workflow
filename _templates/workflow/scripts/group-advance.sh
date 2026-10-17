@@ -17,6 +17,8 @@ set -uo pipefail
 #              して exit 0。stdout に "ADVANCED <新ブランチ名> <新グループ名>"
 # exit: 0=切替完了 / 1=使い方・前提不備 / 7=PR 未作成 / 8=マージ待ち / 9=PR 閉鎖(未マージ)
 #       git / gh の失敗時は何も書き換えず、その exit code を返す
+# stdout の最後の行は次アクションを示す "Next:" 行(0=continue / 7=create-pr / 8=wait-merge /
+# 9=escalate reason=pr-closed)。1 と git / gh の失敗をそのまま返す exit では出力しない
 
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
@@ -173,6 +175,7 @@ if [ "$GH_CODE" -ne 0 ]; then
     GH_ERR="$(cat "$GH_ERR_FILE")"
     if printf '%s' "$GH_ERR" | grep -qi 'no pull request'; then
         echo "NO_PR"
+        echo "Next: create-pr"
         exit 7
     fi
     echo "gh pr view failed (exit $GH_CODE): $GH_ERR" >&2
@@ -194,12 +197,14 @@ PR_URL="${PR_INFO#* }"
 case "$PR_STATE" in
     OPEN)
         echo "OPEN $PR_URL"
+        echo "Next: wait-merge"
         exit 8
         ;;
     MERGED)
         ;;  # 後続の切替処理に進む
     CLOSED)
         echo "PR for '$STATE_BRANCH' is CLOSED without merging (escalate: check why it was closed, then reopen or recreate the PR)" >&2
+        echo "Next: escalate reason=pr-closed"
         exit 9
         ;;
     *)
@@ -261,3 +266,4 @@ then
 fi
 
 echo "ADVANCED $NEW_BRANCH $NEXT_GROUP"
+echo "Next: continue"
