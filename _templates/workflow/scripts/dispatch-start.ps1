@@ -50,6 +50,9 @@ if (-not $Pr -and $Attempt -ge 2 -and (Test-Path -LiteralPath "$runDir/fix-notes
     if ($dirty.Count -gt 0) {
         [Console]::Error.WriteLine("Working tree is not clean:")
         $dirty | ForEach-Object { [Console]::Error.WriteLine($_) }
+        if (-not $Pr -and $Attempt -ge 2 -and -not (Test-Path -LiteralPath "$runDir/fix-notes.md" -PathType Leaf)) {
+            [Console]::Error.WriteLine("fix-notes.md not found: $runDir/fix-notes.md (a retry with attempt >= 2 needs fix-notes.md)")
+        }
         Write-Output "Next: escalate reason=dirty-tree"
         exit 20
     }

@@ -145,6 +145,21 @@ Invoke-TestCase "start: リトライでも fix-notes が無ければ exit 20" {
     Assert-FileAbsent "$script:Proj/.agents/workflow/runs/T1-2/done" "child not started"
 }
 
+Invoke-TestCase "start: 試行回数 0 は exit 1" {
+    Initialize-StartProject 'T1:pending', 'T2:pending'
+    Invoke-Script dispatch-start.ps1 -TaskId T1 -Attempt 0
+    Assert-Eq 1 $script:Code "exit code: $($script:Err)"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/runs/T1-0/done" "child not started"
+}
+
+Invoke-TestCase "start: リトライで fix-notes が無ければ stderr に案内を出す" {
+    Initialize-StartProject 'T1:in_progress', 'T2:pending'
+    Write-Utf8File "$script:Proj/x.txt" "x`n"
+    Invoke-Script dispatch-start.ps1 -TaskId T1 -Attempt 2
+    Assert-Eq 20 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Err "fix-notes.md not found" "stderr"
+}
+
 function Set-ChildCfg { param([string]$Key, $Value)
     $cfgPath = "$script:Proj/.agents/workflow/config.json"
     $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
