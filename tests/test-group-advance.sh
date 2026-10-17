@@ -85,7 +85,8 @@ t_advance_no_pr() {
     gh_stub NO_PR
     run_script group-advance.sh
     assert_eq 7 "$CODE" "exit code: $ERR"
-    assert_eq "NO_PR" "$OUT" "stdout"
+    assert_eq "NO_PR" "${OUT%%$'\n'*}" "stdout"
+    assert_eq "Next: create-pr" "${OUT##*$'\n'}" "stdout last line"
     assert_contains "$(gh_stub_log)" "view develop/g1" "gh called with the state branch"
     assert_eq "develop/g1" "$(state_branch)" "state.json unchanged"
     assert_eq "P" "$(state_group)" "group unchanged"
@@ -96,7 +97,8 @@ t_advance_open() {
     gh_stub OPEN "https://example.com/pr/1"
     run_script group-advance.sh
     assert_eq 8 "$CODE" "exit code: $ERR"
-    assert_eq "OPEN https://example.com/pr/1" "$OUT" "stdout has the PR URL"
+    assert_eq "OPEN https://example.com/pr/1" "${OUT%%$'\n'*}" "stdout has the PR URL"
+    assert_eq "Next: wait-merge" "${OUT##*$'\n'}" "stdout last line"
     assert_eq "P" "$(state_group)" "group unchanged"
 }
 
@@ -106,6 +108,7 @@ t_advance_closed() {
     run_script group-advance.sh
     assert_eq 9 "$CODE" "exit code: $ERR"
     assert_contains "$ERR" "CLOSED" "stderr explains the closed PR"
+    assert_eq "Next: escalate reason=pr-closed" "${OUT##*$'\n'}" "stdout last line"
     assert_eq "P" "$(state_group)" "state.json unchanged"
 }
 
@@ -114,7 +117,8 @@ t_advance_merged() {
     gh_stub MERGED "https://example.com/pr/1"
     run_script group-advance.sh --branch develop/g2
     assert_eq 0 "$CODE" "exit code: $ERR"
-    assert_eq "ADVANCED develop/g2 A" "$OUT" "stdout shows the new branch and group"
+    assert_eq "ADVANCED develop/g2 A" "${OUT%%$'\n'*}" "stdout shows the new branch and group"
+    assert_eq "Next: continue" "${OUT##*$'\n'}" "stdout last line"
     assert_eq "develop/g2" "$(cd "$PROJ" && git branch --show-current)" "switched to the new branch"
     assert_eq "develop/g2" "$(state_branch)" "state.json branch updated"
     assert_eq "A" "$(state_group)" "state.json group updated to the next group"
