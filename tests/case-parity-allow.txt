@@ -21,8 +21,3 @@ test-tasks.sh: __pycache__ を作らない
 
 # test-exitcode.sh は存在しない(sh 側では各テストが直接 exit code を断言する)
 test-exitcode.ps1: *
-
-# #56: ps1 版のケースは T12 で足す(T12 でこの4行を消す)
-test-dispatch.sh: check: 有効な完了報告を report.md に保存する
-test-dispatch.sh: check: report.md が既にあれば上書きしない
-test-dispatch.sh: check: 完了報告が無効なら report.md を作らない

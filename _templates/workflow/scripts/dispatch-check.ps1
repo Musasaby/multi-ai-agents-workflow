@@ -253,6 +253,32 @@ if ($guardIssues.Count -gt 0) {
     $verdict = 'ok'; $code = 0
 }
 
+# --- 完了報告の report.md への書き出し($code が 0・7 = 完了報告が有効で改ざん・異常終了が無いとき) ---
+# ブロックの範囲は Get-ReportResult と同じ: 最後の `## 完了報告` 行から、その後の最初の `## ` 行の
+# 直前(無ければ末尾)まで。ANSI エスケープを除いた行で範囲を判定して書き出し、ブロック末尾の空行は
+# 除く(最後に改行を1つだけ付ける)。既にあれば上書きしない(同じ run を再判定しても内容は同じため)
+$reportPath = "$runDir/report.md"
+$reportSaved = $false
+if ($code -eq 0 -or $code -eq 7) {
+    if (Test-Path $reportPath -PathType Leaf) {
+        $reportSaved = $true
+    } else {
+        $last = -1
+        for ($i = 0; $i -lt $cleanLines.Count; $i++) { if ($cleanLines[$i] -match '^## 完了報告[ \t]*$') { $last = $i } }
+        $reportBody = ''
+        if ($last -ge 0) {
+            $end = $cleanLines.Count - 1
+            for ($i = $last + 1; $i -lt $cleanLines.Count; $i++) { if ($cleanLines[$i] -match '^## ') { $end = $i - 1; break } }
+            while ($end -gt $last -and $cleanLines[$end] -match '^[ \t]*$') { $end-- }
+            if ($end -ge $last) { $reportBody = ($cleanLines[$last..$end] -join "`n") }
+        }
+        if ($reportBody -ne '') {
+            [System.IO.File]::WriteAllText((Join-Path (Get-Location) $reportPath), ($reportBody + "`n"), (New-Object System.Text.UTF8Encoding $false))
+            $reportSaved = $true
+        }
+    }
+}
+
 Write-Output "Run: $TaskId-$Attempt"
 Write-Output "Exit: $exitValue (kind: $kind)"
 Write-Output "End: $endValue"
@@ -280,6 +306,9 @@ if ($cliLogLines.Count -gt 0) {
 }
 Write-Output "Provider error: $providerError"
 Write-Output "Completion report: $reportResult"
+if ($reportSaved) {
+    Write-Output "Report: $reportPath"
+}
 Write-Output "Changes: $changeCount"
 Write-Output "Verdict: $verdict"
 Write-Output "--- git status --porcelain"
