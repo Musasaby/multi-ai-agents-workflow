@@ -207,7 +207,7 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 
 `escalate` の reason 一覧:
 
-- `dirty-tree` / `task-status` / `healthcheck` / `warmup` / `prompt-gen` / `task-state` — dispatch-start の失敗(exit 20 / 21 / 30 / 31 / 41〜43 / 50)
+- `dirty-tree` / `task-status` / `healthcheck` / `warmup` / `prompt-gen` / `task-state` / `launch` — dispatch-start の失敗(exit 20 / 21 / 30 / 31 / 41〜43 / 50 / 60)
 - `timeout` — dispatch-wait の exit 3(経過が `child_agent.timeout_seconds` を超えた)
 - `blocked` — next-task の exit 4(実行可能なタスクが無い)
 - `gh-unavailable` — branch-check の exit 4(gh で PR 状態を判定できない)
@@ -296,7 +296,8 @@ origin が無い・fetch に失敗した場合は exit 1)。stdout に `RunId: p
 5. ウォームアップ(`child_agent.warmup_command`。空なら省略。`guard.sha256` が1つも無い = サイクルの最初の dispatch のときだけ)
 6. `dispatch-prompt-gen`
 7. `task-state <ID> start`(状態を `in_progress` にする)
-8. `dispatch-run` のデタッチ起動
+8. `dispatch-run` のデタッチ起動(`guard.sha256` が現れるまで最大30秒待つ。環境変数
+   `DISPATCH_START_LAUNCH_TIMEOUT` で変更可)
 
 `isolate_xdg` が true のとき、疎通確認・ウォームアップも `XDG_CONFIG_HOME` / `XDG_DATA_HOME` を
 `.agents/workflow/.config` にして実行する。
@@ -325,9 +326,12 @@ origin が無い・fetch に失敗した場合は exit 1)。stdout に `RunId: p
 | `30` / `31` | 疎通確認 / ウォームアップの失敗(`reason=healthcheck` / `warmup`。出力の末尾20行を stderr に出す) |
 | `41`〜`43` | `dispatch-prompt-gen` の exit 1〜3(`reason=prompt-gen`。依存未完了・report.md の欠落は 42。`--pr` で RunId が取れない場合は 41) |
 | `50` | `task-state` の失敗(`reason=task-state`) |
+| `60` | `dispatch-run` の起動を確認できない(`reason=launch`。state.json は `in_progress` のまま) |
 
-stdout は成功時に `Run: <ID>-<N>`・`Log: <output.log のパス>`・`Watch: tail -f <output.log のパス>`・
-`Next: wait` を出す。失敗時は最後の行に `Next: escalate reason=<理由>` を出す(使い方不備の exit 1 を除く)。
+`healthcheck_command` / `warmup_command` は sh 版では `bash -c`、ps1 版では `pwsh -Command` で実行する。
+
+stdout は成功時に `Run: <ID>-<N>`・`Log: <output.log のパス>`・`Watch:`(sh 版は `tail -f <パス>`、
+ps1 版は `Get-Content <パス> -Wait -Tail 20`)・`Next: wait` を出す。失敗時は最後の行に `Next: escalate reason=<理由>` を出す(使い方不備の exit 1 を除く)。
 
 ### dispatch-run — 子エージェントCLIのデタッチ実行
 
@@ -446,7 +450,7 @@ exit code(複数に当たる場合は上の行を優先する):
 この版から、done マーカーが無いときは exit 1 ではなく exit 2 を返す(#69)。
 
 `0` 以外の場合はレビューに進まず、出力された内容をユーザーに報告する(`7` は、変更が無いのが
-正しいタスクに限り検証に進んでよい。詳細は `agent-dispatch` skill §4)。
+正しいタスクに限り検証に進んでよい。詳細は `agent-dispatch` skill §2)。
 
 ### dispatch-wait — 子の完了待ち
 
