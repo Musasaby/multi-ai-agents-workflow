@@ -104,6 +104,27 @@ Invoke-TestCase "start: done のタスクは exit 21" {
     Assert-FileAbsent "$script:Proj/.agents/workflow/runs/T1-1/done" "child not started"
 }
 
+Invoke-TestCase "start: リトライ(fix-notes あり)は作業ツリーが汚れていても起動する" {
+    Initialize-StartProject 'T1:in_progress', 'T2:pending'
+    Write-Utf8File "$script:Proj/x.txt" "x`n"
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/T1-2/fix-notes.md" "fix`n"
+    Invoke-Script dispatch-start.ps1 -TaskId T1 -Attempt 2
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "Next: wait" (Get-LastLine $script:Out) "last line"
+    Wait-Done T1-2
+    Assert-FileExists "$script:Proj/.agents/workflow/runs/T1-2/done" "done within 30s"
+    Assert-Eq in_progress (Get-StateTask T1).status "T1 status"
+}
+
+Invoke-TestCase "start: リトライでも fix-notes が無ければ exit 20" {
+    Initialize-StartProject 'T1:in_progress', 'T2:pending'
+    Write-Utf8File "$script:Proj/x.txt" "x`n"
+    Invoke-Script dispatch-start.ps1 -TaskId T1 -Attempt 2
+    Assert-Eq 20 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "Next: escalate reason=dirty-tree" (Get-LastLine $script:Out) "last line"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/runs/T1-2/done" "child not started"
+}
+
 function Set-ChildCfg { param([string]$Key, $Value)
     $cfgPath = "$script:Proj/.agents/workflow/config.json"
     $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json

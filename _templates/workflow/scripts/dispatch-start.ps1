@@ -5,7 +5,7 @@
 # exit:
 #   0=起動した / 1=使い方不備
 #   11〜15=branch-check -State の 1〜5(stdout の Next: 行はそのまま流す)
-#   20=作業ツリーが汚れている / 21=タスクの状態が不正(pending / in_progress 以外、タスク無しを含む)
+#   20=作業ツリーが汚れている(試行回数 2 以上で fix-notes.md がある場合は確認しない) / 21=タスクの状態が不正(pending / in_progress 以外、タスク無しを含む)
 #   30=疎通確認(healthcheck_command)の失敗 / 31=ウォームアップ(warmup_command)の失敗
 #   41〜43=dispatch-prompt-gen の 1〜3(依存未完了・report.md の欠落は 42)
 #   50=task-state の失敗
@@ -42,12 +42,16 @@ if ($code -ne 0) {
 }
 
 # 2. 作業ツリー
-$dirty = @(& git status --porcelain)
-if ($dirty.Count -gt 0) {
-    [Console]::Error.WriteLine("Working tree is not clean:")
-    $dirty | ForEach-Object { [Console]::Error.WriteLine($_) }
-    Write-Output "Next: escalate reason=dirty-tree"
-    exit 20
+if (-not $Pr -and $Attempt -ge 2 -and (Test-Path -LiteralPath "$runDir/fix-notes.md" -PathType Leaf)) {
+    [Console]::Error.WriteLine("Retry (attempt $Attempt, fix-notes.md found): keeping the working tree changes from the previous attempt")
+} else {
+    $dirty = @(& git status --porcelain)
+    if ($dirty.Count -gt 0) {
+        [Console]::Error.WriteLine("Working tree is not clean:")
+        $dirty | ForEach-Object { [Console]::Error.WriteLine($_) }
+        Write-Output "Next: escalate reason=dirty-tree"
+        exit 20
+    }
 }
 
 # 3. タスクの状態
