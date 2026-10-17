@@ -15,7 +15,9 @@ $null = New-Item -ItemType Directory -Force $runDir
 $logPath = "$runDir/output.log"
 $jsonlPath = "$runDir/output.jsonl"
 $donePath = "$runDir/done"
-Remove-Item -Force -ErrorAction SilentlyContinue $donePath
+# ログの無更新監視で子を止めたときに記録するファイル(#53)
+$idlePath = "$runDir/idle-timeout"
+Remove-Item -Force -ErrorAction SilentlyContinue $donePath, $idlePath
 $promptPath = "$runDir/prompt.md"
 # 子が管理ファイルを変更・削除していないかを dispatch-check が確かめられるよう、起動時の
 # SHA-256 を記録する(存在しないファイルは "-")。形式は sha256sum と同じ "<hash>  <path>"
@@ -118,7 +120,30 @@ foreach ($name in @('TMPDIR', 'TEMP', 'TMP', 'GIT_CEILING_DIRECTORIES')) {
     [System.Environment]::SetEnvironmentVariable($name, $value)
 }
 
+$watchdog = $null
 try {
+    # ログ(output.log)が idle_timeout_seconds 更新されなければ子を止め、idle-timeout ファイルに記録する(#53)。
+    # thread ジョブ内で 1 秒ごとにログの更新時刻を見て、このプロセスの子(CLI)を孫プロセスごと止める(Kill($true))
+    $idleTimeout = [double]($config.child_agent.idle_timeout_seconds)
+    if ($idleTimeout -gt 0) {
+        $watchdog = Start-ThreadJob -ArgumentList $PID, (Join-Path (Get-Location) $logPath), (Join-Path (Get-Location) $idlePath), $idleTimeout -ScriptBlock {
+            param($ParentPid, $LogPath, $MarkerPath, $IdleSeconds)
+            $start = Get-Date
+            while ($true) {
+                Start-Sleep -Seconds 1
+                $last = $start
+                if (Test-Path -LiteralPath $LogPath) {
+                    $t = (Get-Item -LiteralPath $LogPath).LastWriteTime
+                    if ($t -gt $last) { $last = $t }
+                }
+                if (((Get-Date) - $last).TotalSeconds -ge $IdleSeconds) {
+                    Set-Content -LiteralPath $MarkerPath -Value ([int]$IdleSeconds) -Encoding utf8
+                    Get-Process | Where-Object { $_.Parent -and $_.Parent.Id -eq $ParentPid } | ForEach-Object { $_.Kill($true) }
+                    break
+                }
+            }
+        }
+    }
     $tokens = Split-CommandLine $config.child_agent.command_template
     $isStreamJson = $config.child_agent.command_template -match 'stream-json'
     $argList = @()
@@ -187,6 +212,8 @@ try {
         }
         $exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
     }
+    # シグナル死(監視で止めた子は非0で終わる)より idle-timeout を優先する(idle-timeout ファイルは記録として残す)
+    if (Test-Path -LiteralPath $idlePath -PathType Leaf) { $exitCode = 'idle-timeout' }
     $endTime = (Get-Date).ToString("o")
     "EXIT:$exitCode`nEND:$endTime" | Out-File -Encoding utf8 $donePath
 } catch {
@@ -195,6 +222,11 @@ try {
     # ラッパー自体の異常終了(子の終了コードは done マーカーに記録済み)
     exit 1
 } finally {
+    # 子が先に終わったときは監視スレッドジョブを止める
+    if ($watchdog) {
+        Stop-Job $watchdog -ErrorAction SilentlyContinue
+        Remove-Job $watchdog -Force -ErrorAction SilentlyContinue
+    }
     # 子の起動前に保存した TEMP 系環境変数の値に戻す(元が無ければ変数自体を消す)
     foreach ($name in $savedEnv.Keys) {
         if ($null -eq $savedEnv[$name]) {

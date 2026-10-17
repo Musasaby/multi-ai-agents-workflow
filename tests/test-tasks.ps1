@@ -653,6 +653,30 @@ Invoke-TestCase "gen: 同じ行の参照ファイルも検証する" {
     Assert-Eq 1 $script:Code "inline missing reference -> exit 1"
 }
 
+Invoke-TestCase "gen: 受け入れ基準が6件以上なら警告" {
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Set-RefTasks "- **受け入れ基準**:`n  - [ ] c1`n  - [ ] c2`n  - [ ] c3`n  - [ ] c4`n  - [ ] c5`n  - [ ] c6`n- **参照ファイル**:`n  - ``a.txt``(全体)"
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Err "WARN: T1: 6 acceptance criteria (more than 5; consider splitting the task)" "warning"
+}
+
+Invoke-TestCase "gen: 変更対象の参照ファイルが4件以上なら警告" {
+    foreach ($f in @('a', 'b', 'c', 'd')) { Write-Utf8File "$script:Proj/$f.txt" "x`n" }
+    Set-RefTasks "- **参照ファイル**:`n  - ``a.txt``(変更対象)`n  - ``b.txt``(変更対象)`n  - ``c.txt``(変更対象)`n  - ``d.txt``(変更対象)"
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Err "WARN: T1: 4 reference files marked 変更対象 (more than 3; consider splitting the task)" "warning"
+}
+
+Invoke-TestCase "gen: 受け入れ基準5件・変更対象3件なら警告しない" {
+    foreach ($f in @('a', 'b', 'c')) { Write-Utf8File "$script:Proj/$f.txt" "x`n" }
+    Set-RefTasks "- **受け入れ基準**:`n  - [ ] c1`n  - [ ] c2`n  - [ ] c3`n  - [ ] c4`n  - [ ] c5`n- **参照ファイル**:`n  - ``a.txt``(変更対象)`n  - ``b.txt``(変更対象)`n  - ``c.txt``(全体)"
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-NotContains $script:Err "WARN" "no warning"
+}
+
 # ---------- テスト環境の切り離し(Issue F-1) ----------
 
 Invoke-TestCase "テストの git はグローバル設定を読まない" {

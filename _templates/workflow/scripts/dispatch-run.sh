@@ -40,7 +40,9 @@ JSONL_PATH="$RUN_DIR/output.jsonl"
 DONE_PATH="$RUN_DIR/done"
 # 子がシグナルで終了した場合に Python ラッパーがシグナル番号を書き出すファイル
 SIGNAL_PATH="$RUN_DIR/exit-signal"
-rm -f "$DONE_PATH" "$SIGNAL_PATH"
+# ログが idle_timeout_seconds 更新されず子を止めたときに記録するファイル(#53)
+IDLE_PATH="$RUN_DIR/idle-timeout"
+rm -f "$DONE_PATH" "$SIGNAL_PATH" "$IDLE_PATH"
 PROMPT_PATH="$RUN_DIR/prompt.md"
 
 # 子が管理ファイルを変更・削除していないかを dispatch-check が確かめられるよう、起動時の
@@ -69,10 +71,13 @@ CMD_TEMPLATE=$(jq -r '.child_agent.command_template' .agents/workflow/config.jso
 
 if command -v python3 > /dev/null 2>&1; then
   python3 -c "
-import json, subprocess, sys, shlex
+import json, subprocess, sys, shlex, os, threading, time, signal
 
 with open('.agents/workflow/config.json', encoding='utf-8') as f:
-    tmpl = json.load(f)['child_agent']['command_template']
+    cfg = json.load(f)['child_agent']
+tmpl = cfg['command_template']
+# ログの無更新監視のしきい値。未指定・0 以下は無効(#53)
+idle_timeout = float(cfg.get('idle_timeout_seconds') or 0)
 with open('$PROMPT_PATH', encoding='utf-8') as f:
     prompt = f.read()
 tokens = shlex.split(tmpl)
@@ -89,6 +94,30 @@ def finish(returncode):
             sf.write(str(-returncode))
         sys.exit(128 - returncode)
     sys.exit(returncode)
+
+idle_path = '$IDLE_PATH'
+
+def start_watchdog(proc):
+    # ログ(output.log)が idle_timeout 秒更新されなければ子を止め、idle-timeout ファイルに記録する(#53)
+    if idle_timeout <= 0:
+        return
+    start = time.time()
+    def watch():
+        while proc.poll() is None:
+            time.sleep(1)
+            try:
+                last = max(start, os.path.getmtime(log_path))
+            except OSError:
+                last = start
+            if time.time() - last >= idle_timeout and proc.poll() is None:
+                with open(idle_path, 'w', encoding='utf-8') as f:
+                    f.write(str(int(idle_timeout)))
+                if os.name == 'nt':
+                    subprocess.run(['taskkill', '/T', '/F', '/PID', str(proc.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                else:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                return
+    threading.Thread(target=watch, daemon=True).start()
 
 is_stream = 'stream-json' in tmpl
 
@@ -132,7 +161,8 @@ if is_stream:
         return '[' + str(t) + '] ' + compact
 
     with open(jsonl_path, 'w', encoding='utf-8') as jf, open(log_path, 'w', encoding='utf-8') as lf:
-        proc = subprocess.Popen(tokens, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', bufsize=1)
+        proc = subprocess.Popen(tokens, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', bufsize=1, start_new_session=(os.name != 'nt'))
+        start_watchdog(proc)
         for line in proc.stdout:
             line = line.rstrip('\n')
             jf.write(line + '\n')
@@ -149,7 +179,8 @@ if is_stream:
         finish(proc.returncode)
 else:
     with open(log_path, 'w', encoding='utf-8') as lf:
-        proc = subprocess.Popen(tokens, stdin=subprocess.DEVNULL, stdout=lf, stderr=subprocess.STDOUT)
+        proc = subprocess.Popen(tokens, stdin=subprocess.DEVNULL, stdout=lf, stderr=subprocess.STDOUT, start_new_session=(os.name != 'nt'))
+        start_watchdog(proc)
         proc.wait()
         finish(proc.returncode)
   "
@@ -179,6 +210,10 @@ fi
 if [ -f "$SIGNAL_PATH" ]; then
   EXIT_CODE="signal:$(cat "$SIGNAL_PATH")"
   rm -f "$SIGNAL_PATH"
+fi
+# シグナル死より idle-timeout を優先する(idle-timeout ファイルは記録として残す)
+if [ -f "$IDLE_PATH" ]; then
+  EXIT_CODE="idle-timeout"
 fi
 
 END_TIME=$(date -Iseconds)

@@ -47,6 +47,26 @@ function Set-Isolate {
     Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
 }
 
+# T4(#53): idle_timeout_seconds を設定する($Value = 秒)
+function Set-IdleTimeout {
+    param([string]$Value)
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg.child_agent.PSObject.Properties.Remove('idle_timeout_seconds')
+    $cfg.child_agent | Add-Member -NotePropertyName idle_timeout_seconds -NotePropertyValue ([int]$Value)
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+}
+
+# T8(#53): 子CLI自身のログファイルのパス(cli_log)を設定する($Value = パス。New-Run の前に呼ぶ)
+function Set-CliLog {
+    param([string]$Value)
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg.child_agent.PSObject.Properties.Remove('cli_log')
+    $cfg.child_agent | Add-Member -NotePropertyName cli_log -NotePropertyValue $Value
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+}
+
 function Get-ChildXdg {
     $env:XDG_DATA_HOME = 'C:/caller/xdg-data'
     try { Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1 } finally { Remove-Item Env:XDG_DATA_HOME -ErrorAction SilentlyContinue }
@@ -194,6 +214,28 @@ print("GITRC=" + str(r.returncode))
     Add-Result ($rc -cmatch '^\d+$' -and $rc -ne '0') "git under TMPDIR must not find the caller repo (GITRC='$rc')"
 }
 
+# T3/T4(#53): ログが idle_timeout_seconds 更新されなければ子を止めて EXIT:idle-timeout
+Invoke-TestCase "run: ログが idle_timeout_seconds 更新されなければ子を止めて EXIT:idle-timeout" {
+    Set-Child 'Write-Output start; Start-Sleep 30'
+    Set-IdleTimeout 2
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    $sw.Stop()
+    Add-Result ($sw.Elapsed.TotalSeconds -lt 20) "finished in under 20 seconds (elapsed=$([int]$sw.Elapsed.TotalSeconds))"
+    Assert-Eq "EXIT:idle-timeout" (Get-DoneExit) "done marker"
+    Assert-FileExists "$script:Proj/.agents/workflow/runs/T1-1/idle-timeout" "idle-timeout file"
+}
+
+# T3/T4(#53): ログが更新され続ければ idle_timeout_seconds で止めない
+Invoke-TestCase "run: ログが更新され続ければ idle_timeout_seconds で止めない" {
+    Set-Child '1..5 | ForEach-Object { Write-Output "tick $_"; Start-Sleep 1 }'
+    Set-IdleTimeout 3
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq "EXIT:0" (Get-DoneExit) "done marker"
+    Assert-Contains ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.log")) "tick 5" "output.log"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/runs/T1-1/idle-timeout" "no idle-timeout file"
+}
+
 Invoke-TestCase "run: 呼び出し元の TMPDIR/TEMP/TMP を書き換えない" {
     Set-EnvChild
     Invoke-RunWithCallerTmp
@@ -223,6 +265,14 @@ Invoke-TestCase "check: signalはexit 4" {
     Assert-Contains $script:Out "step 67" "log tail shown"
 }
 
+Invoke-TestCase "check: EXIT:idle-timeout は abnormal-exit(exit 4)" {
+    New-Run idle-timeout "> build · glm-5.3"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 4 $script:Code "exit code"
+    Assert-Contains $script:Out "kind: idle-timeout" "kind"
+    Assert-Contains $script:Out "Verdict: abnormal-exit" "verdict"
+}
+
 Invoke-TestCase "check: 非0はexit 4" {
     New-Run 3 $report
     Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
@@ -242,6 +292,25 @@ Invoke-TestCase "check: 完了報告なしはexit 5" {
     Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
     Assert-Eq 5 $script:Code "exit code"
     Assert-Contains $script:Out "Completion report: missing" "report missing"
+}
+
+# #50: 最後のツール実行の後に何も出力していない(推論だけで出力トークン上限に達した)場合の理由
+Invoke-TestCase "check: 最後のツール実行の後に出力が無ければ理由に書く(exit 5)" {
+    $esc = [char]27
+    New-Run 0 "> build · glm-5.3`n`n$esc[0m→ $esc[0mRead a.txt`n$esc[0m→ $esc[0mRead b.txt"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 5 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "no output after the last tool call" "reason"
+}
+
+# ツール実行の後に本文があれば、理由を付けない(単なる報告漏れとして扱う)
+Invoke-TestCase "check: ツール実行の後に本文があれば理由を付けない(exit 5)" {
+    $esc = [char]27
+    New-Run 0 "$esc[0m→ $esc[0mRead a.txt`n考え中です"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 5 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Completion report: missing" "report missing"
+    Assert-NotContains $script:Out "no output after the last tool call" "reason absent"
 }
 
 Invoke-TestCase "check: doneなしはexit 1" {
@@ -526,6 +595,40 @@ Invoke-TestCase "check: HOMEBREW_PREFIX や env:TEMP は検出しない" {
     Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
     Assert-Eq 0 $script:Code "exit code: $($script:Out)"
     Assert-Contains $script:Out "Outside access: no" "flag"
+}
+
+# T8(#53): sh 版(test-dispatch.sh)と同じ名前の3ケース
+# (cli_log は guard.sha256 の対象なので New-Run の前に設定する)
+Invoke-TestCase "check: CLI ログの利用上限エラーを Provider error: yes にする" {
+    Set-CliLog "$script:Proj/cli.log"
+    Write-Utf8File "$script:Proj/cli.log" ('timestamp=2026-10-17T03:07:49.892Z level=INFO message="ok"' + "`n" + 'timestamp=2026-10-17T03:07:50.429Z level=ERROR message="stream error" error.error="AI_APICallError: Go usage limit exceeded"' + "`n")
+    New-Run 0 $report
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Go usage limit exceeded" "error line shown"
+    Assert-Contains $script:Out "Provider error: yes" "provider flag"
+    Assert-NotContains $script:Out "level=INFO" "info line not shown"
+}
+
+Invoke-TestCase "check: CLI ログの ERROR がプロバイダー由来でなければ Provider error: no" {
+    Set-CliLog "$script:Proj/cli.log"
+    Write-Utf8File "$script:Proj/cli.log" ('timestamp=2026-10-17T03:07:50.429Z level=ERROR message="tool failed"' + "`n")
+    New-Run 0 $report
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out 'message="tool failed"' "error line shown"
+    Assert-Contains $script:Out "Provider error: no" "provider flag"
+}
+
+Invoke-TestCase "check: cli_log が未設定なら CLI log: (not configured)" {
+    New-Run 0 $report
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "CLI log: (not configured)" "not configured"
+    Assert-Contains $script:Out "Provider error: unknown" "provider flag"
 }
 
 Invoke-TestCase "check: UTF-16LEのoutput.log(Windows PowerShell 5.1)を読める" {

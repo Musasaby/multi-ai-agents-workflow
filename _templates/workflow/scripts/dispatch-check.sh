@@ -7,10 +7,11 @@ set -uo pipefail
 #   8=管理ファイルの改ざん(prompt.md・state.json・tasks.md・config.json が dispatch-run の起動時から
 #     変わった/消えた、guard.sha256・output.log・git-state.txt が無い、output.log が実行中に
 #     切り詰められた、本物のリポジトリの git 状態(HEAD・ブランチ・参照・設定)が変わった)
-#   4=異常終了(非0・signal・crashed)
+#   4=異常終了(非0・signal・crashed・idle-timeout)
 #   6=権限拒否で中断(output.log に子CLIの権限拒否の記録がある)、または、ツール実行の記録に
 #     プロジェクト外(/tmp・ホームディレクトリ等)へのアクセスがある
-#   5=完了報告が無い・無効(最後の `## 完了報告` の後にツール実行の記録が続く、必須項目が無い・テンプレートのまま)
+#   5=完了報告が無い・無効(最後の `## 完了報告` の後にツール実行の記録が続く、必須項目が無い・テンプレートのまま)。
+#     最後のツール実行の後に出力が無い場合は、その旨を理由に書く
 #   7=変更0件(完了報告はあるが作業ツリーに変更が無い。PR 作成の run(pr-*)では判定しない)
 #   0=正常終了かつ完了報告あり / 1=done マーカーが無い・使い方不備
 
@@ -43,6 +44,7 @@ END_VALUE="$(LC_ALL=C tr -d '\r' < "$DONE_PATH" | LC_ALL=C sed -n 's/^END://p' |
 
 case "$EXIT_VALUE" in
     0) KIND=ok ;;
+    idle-timeout) KIND=idle-timeout ;;
     signal:*) KIND=signal ;;
     crashed:*) KIND=crashed ;;
     '') KIND=unknown ;;
@@ -152,6 +154,32 @@ OUTSIDE_LINES="$(printf '%s\n' "$RAW_LOG" | LC_ALL=C awk -v esc="$ESC" '
         if (line ~ outside_re || tolower(line) ~ home_re) print line
     }')"
 
+# --- 子CLI自身のログのエラー検出(利用上限・エンドポイント障害などの切り分け用) ---
+# config.json の child_agent.cli_log(子CLI自身のログファイルのパス。先頭の ~/ はホームディレクトリ)
+# を読む(python3 が無い・config.json が読めない場合は空 = 未設定扱い)。末尾 200 行のうち ERROR を
+# 含む行の最後の 5 行と、プロバイダー起因かどうか(利用上限・レート制限・エンドポイント障害・429。
+# 429 の前後に英数字を許さないのは .429Z のようなタイムスタンプや16進の ID に一致させないため)を
+# 出力に表示するだけなので、判定(Verdict・exit code)には影響しない
+CLI_LOG="$(python3 -c "import json; print(json.load(open('.agents/workflow/config.json', encoding='utf-8'))['child_agent'].get('cli_log', ''))" 2>/dev/null | tr -d '\r')"
+PROVIDER_ERROR=unknown
+CLI_LOG_LINES=""
+if [ -n "$CLI_LOG" ]; then
+    CLI_LOG_PATH="$CLI_LOG"
+    case "$CLI_LOG" in
+        "~"/*) CLI_LOG_PATH="$HOME/${CLI_LOG#"~/"}" ;;
+    esac
+    if [ ! -f "$CLI_LOG_PATH" ]; then
+        CLI_LOG="$CLI_LOG (not found)"
+    else
+        PROVIDER_ERROR=no
+        # NUL を含むと grep がバイナリ扱いするため、output.log と同じく NUL・CR を除いてから読む
+        CLI_LOG_LINES="$(LC_ALL=C tr -d '\000\r' < "$CLI_LOG_PATH" | tail -n 200 | grep ERROR | tail -n 5)"
+        if [ -n "$CLI_LOG_LINES" ] && printf '%s\n' "$CLI_LOG_LINES" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C grep -Eq 'usage limit|rate limit|endpoint is unavailable|(^|[^0-9a-z])429([^0-9a-z]|$)'; then
+            PROVIDER_ERROR=yes
+        fi
+    fi
+fi
+
 # --- 完了報告の判定 ---
 # 最後に出現する `## 完了報告` だけを対象にし、その後にツール実行の記録が続く場合は無効とする
 # (子がテンプレートやドキュメントを表示しただけの行に一致させないため)。ツール実行の記録は、
@@ -168,7 +196,14 @@ REPORT_RESULT="$(printf '%s\n' "$RAW_LOG" | LC_ALL=C awk -v esc="$ESC" -v requir
     }
     lines[NR] ~ /^## 完了報告[ \t]*$/ { last = NR }
     END {
-        if (!last) { print "missing"; exit }
+        if (!last) {
+            # 最後の空でない行がツール実行の記録なら、子はその後に何も出力せずに終わった
+            # (#50: 推論だけで出力トークン上限に達すると、opencode はエラーにせず exit 0 で終わる)
+            for (i = NR; i >= 1; i--) if (lines[i] ~ /[^ \t]/) break
+            if (i >= 1 && tool[i]) print "missing (no output after the last tool call; the model may have hit the output token limit)"
+            else print "missing"
+            exit
+        }
         for (i = last + 1; i <= NR; i++) {
             if (tool[i]) { print "invalid (tool activity after the report at line " i ")"; exit }
         }
@@ -233,6 +268,11 @@ if [ -n "$OUTSIDE_LINES" ]; then
 else
     echo "Outside access: no"
 fi
+echo "CLI log: ${CLI_LOG:-(not configured)}"
+if [ -n "$CLI_LOG_LINES" ]; then
+    printf '%s\n' "$CLI_LOG_LINES" | sed 's/^/  /'
+fi
+echo "Provider error: $PROVIDER_ERROR"
 echo "Completion report: ${REPORT_RESULT}"
 echo "Changes: ${CHANGE_COUNT}"
 echo "Verdict: ${VERDICT}"

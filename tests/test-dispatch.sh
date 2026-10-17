@@ -132,6 +132,32 @@ with open(p, 'w', encoding='utf-8') as f:
 PY
 }
 
+# T3(#53): idle_timeout_seconds を設定する($1 = 秒)
+set_idle_timeout() {
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" "$1" <<'PY'
+import json, sys
+p, v = sys.argv[1:3]
+with open(p, encoding='utf-8') as f:
+    cfg = json.load(f)
+cfg['child_agent']['idle_timeout_seconds'] = int(v)
+with open(p, 'w', encoding='utf-8') as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+PY
+}
+
+# T7(#53): 子CLI自身のログファイルのパス(cli_log)を設定する($1 = パス)
+set_cli_log() {
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" "$1" <<'PY'
+import json, sys
+p, v = sys.argv[1:3]
+with open(p, encoding='utf-8') as f:
+    cfg = json.load(f)
+cfg['child_agent']['cli_log'] = v
+with open(p, 'w', encoding='utf-8') as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+PY
+}
+
 # 子を python にする(Windows ネイティブ python から呼ぶ bash は WSL の bash になることがあり、
 # その場合は Windows 側の環境変数を引き継がないため)。$1 = child.py の本文(省略時は XDG_DATA_HOME の表示)
 set_py_child() {
@@ -254,6 +280,29 @@ t_run_caller_tmp_unchanged() {
     assert_contains "$result" "TMP=/caller/tmp" "caller TMP unchanged"
 }
 
+# T3(#53): ログが idle_timeout_seconds 更新されなければ子を止めて EXIT:idle-timeout
+t_run_idle_timeout_kills_child() {
+    set_child 'echo start; sleep 30'
+    set_idle_timeout 2
+    local started elapsed
+    started="$SECONDS"
+    run_script dispatch-run.sh T1 1
+    elapsed=$((SECONDS - started))
+    if [ "$elapsed" -lt 20 ]; then _record ok; else _record ng "finished in under 20 seconds (elapsed=$elapsed)"; fi
+    assert_eq "EXIT:idle-timeout" "$(done_exit)" "done marker"
+    assert_file_exists "$PROJ/.agents/workflow/runs/T1-1/idle-timeout" "idle-timeout file"
+}
+
+# T3(#53): ログが更新され続ければ idle_timeout_seconds で止めない
+t_run_idle_timeout_not_triggered() {
+    set_child 'for i in 1 2 3 4 5; do echo "tick $i"; sleep 1; done'
+    set_idle_timeout 3
+    run_script dispatch-run.sh T1 1
+    assert_eq "EXIT:0" "$(done_exit)" "done marker"
+    assert_contains "$(cat "$PROJ/.agents/workflow/runs/T1-1/output.log")" "tick 5" "output.log"
+    assert_file_absent "$PROJ/.agents/workflow/runs/T1-1/idle-timeout" "no idle-timeout file"
+}
+
 # ---------- dispatch-check ----------
 
 # dispatch-run と同じ形式で guard.sha256 を書き(runs/<run>/prompt.md と管理ファイル)、
@@ -302,6 +351,14 @@ t_check_signal() {
     assert_contains "$OUT" "step 67" "log tail shown"
 }
 
+t_check_idle_timeout() {
+    make_run idle-timeout "> build · glm-5.3"
+    run_script dispatch-check.sh T1 1
+    assert_eq 4 "$CODE" "exit code"
+    assert_contains "$OUT" "kind: idle-timeout" "kind"
+    assert_contains "$OUT" "Verdict: abnormal-exit" "verdict"
+}
+
 t_check_nonzero() {
     make_run 3 "$REPORT"
     run_script dispatch-check.sh T1 1
@@ -321,6 +378,27 @@ t_check_missing_report() {
     run_script dispatch-check.sh T1 1
     assert_eq 5 "$CODE" "exit code"
     assert_contains "$OUT" "Completion report: missing" "report missing"
+}
+
+t_check_missing_report_no_output_after_tool() {
+    # #50: 最後のツール実行の後に何も出力していない(推論だけで出力トークン上限に達した)場合の理由
+    make_run 0 "> build · glm-5.3
+
+${ESC}[0m→ ${ESC}[0mRead a.txt
+${ESC}[0m→ ${ESC}[0mRead b.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 5 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "no output after the last tool call" "reason"
+}
+
+t_check_missing_report_body_after_tool() {
+    # ツール実行の後に本文があれば、理由を付けない(単なる報告漏れとして扱う)
+    make_run 0 "${ESC}[0m→ ${ESC}[0mRead a.txt
+考え中です"
+    run_script dispatch-check.sh T1 1
+    assert_eq 5 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Completion report: missing" "report missing"
+    assert_not_contains "$OUT" "no output after the last tool call" "reason absent"
 }
 
 t_check_no_done() {
@@ -656,6 +734,43 @@ $REPORT"
     assert_contains "$OUT" "Outside access: no" "flag"
 }
 
+# T7(#53): 子CLIのログの利用上限エラーを Provider error: yes にする
+# (cli_log は guard.sha256 の対象なので make_run の前に設定する)
+t_check_cli_log_provider_error() {
+    set_cli_log "$(py_path "$PROJ/cli.log")"
+    printf 'timestamp=2026-10-17T03:07:49.892Z level=INFO message="ok"\n' > "$PROJ/cli.log"
+    printf 'timestamp=2026-10-17T03:07:50.429Z level=ERROR message="stream error" error.error="AI_APICallError: Go usage limit exceeded"\n' >> "$PROJ/cli.log"
+    make_run 0 "$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Go usage limit exceeded" "error line shown"
+    assert_contains "$OUT" "Provider error: yes" "provider flag"
+    assert_not_contains "$OUT" "level=INFO" "info line not shown"
+}
+
+# T7(#53): 子CLIのログの ERROR がプロバイダー由来でなければ Provider error: no
+t_check_cli_log_error_not_provider() {
+    set_cli_log "$(py_path "$PROJ/cli.log")"
+    printf 'timestamp=2026-10-17T03:07:50.429Z level=ERROR message="tool failed"\n' > "$PROJ/cli.log"
+    make_run 0 "$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" 'message="tool failed"' "error line shown"
+    assert_contains "$OUT" "Provider error: no" "provider flag"
+}
+
+# T7(#53): cli_log が未設定なら CLI log: (not configured)
+t_check_cli_log_not_configured() {
+    make_run 0 "$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "CLI log: (not configured)" "not configured"
+    assert_contains "$OUT" "Provider error: unknown" "provider flag"
+}
+
 echo "test-dispatch.sh"
 
 test_case "run: 正常終了はEXIT:0" t_run_exit0
@@ -672,11 +787,16 @@ test_case "run: 子の TMPDIR/TEMP/TMP は runs/<ID>-<試行>/tmp を指す" t_r
 test_case "run: 子の GIT_CEILING_DIRECTORIES は runs/<ID>-<試行> を指す" t_run_child_git_ceiling
 test_case "run: 子が TMPDIR 直下で実行した git は本物のリポジトリを見つけない" t_run_child_git_no_repo
 test_case "run: 呼び出し元の TMPDIR/TEMP/TMP を書き換えない" t_run_caller_tmp_unchanged
+test_case "run: ログが idle_timeout_seconds 更新されなければ子を止めて EXIT:idle-timeout" t_run_idle_timeout_kills_child
+test_case "run: ログが更新され続ければ idle_timeout_seconds で止めない" t_run_idle_timeout_not_triggered
 test_case "check: 正常" t_check_ok
 test_case "check: signalはexit 4" t_check_signal
+test_case "check: EXIT:idle-timeout は abnormal-exit(exit 4)" t_check_idle_timeout
 test_case "check: 非0はexit 4" t_check_nonzero
 test_case "check: crashedはexit 4" t_check_crashed
 test_case "check: 完了報告なしはexit 5" t_check_missing_report
+test_case "check: 最後のツール実行の後に出力が無ければ理由に書く(exit 5)" t_check_missing_report_no_output_after_tool
+test_case "check: ツール実行の後に本文があれば理由を付けない(exit 5)" t_check_missing_report_body_after_tool
 test_case "check: doneなしはexit 1" t_check_no_done
 test_case "check: BOM付きdone" t_check_bom_done
 test_case "check: 完了報告の後にツール実行が続けば無効(exit 5)" t_check_report_then_tool_activity
@@ -710,4 +830,7 @@ test_case "check: リダイレクト直後の ~/ は exit 6" t_check_outside_acc
 test_case "check: tool_use 行のホームディレクトリ参照は exit 6" t_check_outside_access_tool_use_home
 test_case "check: 色付きツール実行行の USERPROFILE・AppData の Temp 参照は exit 6" t_check_outside_access_userprofile_temp
 test_case "check: HOMEBREW_PREFIX や env:TEMP は検出しない" t_check_outside_access_home_not_detected
+test_case "check: CLI ログの利用上限エラーを Provider error: yes にする" t_check_cli_log_provider_error
+test_case "check: CLI ログの ERROR がプロバイダー由来でなければ Provider error: no" t_check_cli_log_error_not_provider
+test_case "check: cli_log が未設定なら CLI log: (not configured)" t_check_cli_log_not_configured
 summary

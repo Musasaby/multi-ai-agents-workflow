@@ -52,6 +52,8 @@
 | `child_agent.command_template` | 子エージェントCLIのコマンドテンプレート。`{prompt}` がタスクプロンプトに展開される | `opencode run "{prompt}"` |
 | `child_agent.timeout_seconds` | 子エージェント実行のタイムアウト(秒) | `1800` |
 | `child_agent.isolate_xdg` | `true` なら `dispatch-run` が子CLIの `XDG_CONFIG_HOME` / `XDG_DATA_HOME` を `.agents/workflow/.config` に切り替える(sandbox で `~/.config` 等に書けない環境向け)。切り替えると `~/.local/share/<CLI>/auth.json` 等の認証情報が見えなくなる。未指定は `false` | `false` |
+| `child_agent.idle_timeout_seconds` | 子のログ(`output.log`)が更新されない時間の上限(秒)。超えると `dispatch-run` が子を止め、`done` に `EXIT:idle-timeout` を記録する(`dispatch-check` は exit 4)。未指定・0 以下は無効。POSIX 版は python3 経路のみ対応 | `600` |
+| `child_agent.cli_log` | 子CLI自身のログファイルのパス(先頭の `~/` はホームディレクトリ。例: opencode は `~/.local/share/opencode/log/opencode.log`)。`dispatch-check` がエラー行を出す | 未指定 |
 | `test_command` | 子エージェントに実行させるテストコマンド。空ならタスクごとに親が指定 | `""` |
 | `branch_per_group` | tasks.md にグループ区切り(`<!-- グループ <名前> -->`)がある場合に、グループ単位の PR 作成・ブランチ切替(next-task の exit 6 と `group-advance`)を必須手順にする。`false` ならグループを解釈せず全タスクを1つのまとまりとして扱う。config.json が無い・読めない場合の既定値も `true` | `true` |
 | `verify_before_commit` | コミット直前に親がテストコマンドを1回実行する最終ゲート | `false` |
@@ -111,6 +113,8 @@ Claude Code を子エージェントとして使う場合は `stream-json` 出�
 タスクのみ記載する。
 
 - 依存行はすべてのタスクに必須(依存が無ければ `なし`)
+- 参照ファイル欄のうち実際に変更するファイルは、理由を `(変更対象。…)` で始める
+  (変更対象が多いと `dispatch-prompt-gen` が作業量の `WARN:` を出す判定に使う)
 - 注記(例: `T30(Prometheus 基盤。完了済み)`)は書かない。前提タスクに関する補足は**目的欄**に
   書く。完了状態は state.json で機械的に判定するため書かない
 - 形式違反・存在しないタスクID・自分自身への依存は `state-sync` / `next-task` /
@@ -218,6 +222,9 @@ exit 0 でも、次の場合は stderr に `WARN:` を出す(生成は続ける)
 tasks.md や AGENTS.md を直してから dispatch する:
 
 - タスクに `- **参照ファイル**:` 欄が無い、または6件以上ある(子が実装前に多くのファイルを読む原因になる)
+- 受け入れ基準のチェックボックス(`- [ ]`)が6件以上ある(子の1応答の処理量を超えて、推論だけで
+  出力トークン上限に達する原因になる)
+- 参照ファイル欄で `(変更対象` と書いた項目が4件以上ある(同上)
 - ルートの `AGENTS.md` が `@` 参照の行だけでできている(opencode 等の子CLIは `@` を展開しないため、
   子にルールが届かない。`AGENTS.md` に実体を書き、`CLAUDE.md` 側を `@AGENTS.md` にする)
 
@@ -254,6 +261,11 @@ Windows にはシグナルの仕組みが無いため、PowerShell 版での強�
 親プロセスのタイムアウト・終了に巻き込まれないよう `Start-Process` / `nohup` 等で
 デタッチ起動する。
 
+子の無応答タイムアウトもある。config.json の `child_agent.idle_timeout_seconds`(秒)を設定すると、
+`dispatch-run` は1秒ごとに `output.log` の最終更新時刻を見て、指定時間更新されなければ
+`runs/<タスクID>-<試行回数>/idle-timeout`(中身は秒数)を書き出し、子をプロセスツリーごと止める。
+このとき `done` の `EXIT` は `idle-timeout` になる(シグナル死の記録より優先)。
+
 子の一時ファイルの置き場所も `dispatch-run` が設定する: 子プロセスには `TMPDIR`・`TEMP`・`TMP`
 を `runs/<タスクID>-<試行回数>/tmp/`(起動時に作成する)に設定するため、子が `mktemp` 等で作る
 一時ファイルはプロジェクト内の `tmp/` に置かれる。`GIT_CEILING_DIRECTORIES` には `tmp/` の親である
@@ -276,11 +288,11 @@ nohup .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1 &
 
 ### dispatch-check — 完了検知後の終了状態・成果物の判定
 
-`done` マーカーを検知したら毎回実行する。終了状態の区分(`ok` / `nonzero` / `signal` /
-`crashed`)、管理ファイルの改ざん検知(`Guard:`)、権限拒否の有無(`Permission denied:`)、
-プロジェクト外アクセスの検出(`Outside access:`)、完了報告の判定(`Completion report:`)、
-変更件数(`Changes:`)、`git status --porcelain`、
-`git diff --stat`、`output.log` の末尾30行をまとめて出力する。
+`done` マーカーを検知したら毎回実行する。終了状態の区分(`ok` / `nonzero` / `idle-timeout` /
+`signal` / `crashed`)、管理ファイルの改ざん検知(`Guard:`)、権限拒否の有無(`Permission denied:`)、
+プロジェクト外アクセスの検出(`Outside access:`)、子CLI自身のログのエラー(`CLI log:` と
+`Provider error:`)、完了報告の判定(`Completion report:`)、変更件数(`Changes:`)、
+`git status --porcelain`、`git diff --stat`、`output.log` の末尾30行をまとめて出力する。
 
 - **改ざん検知**: `dispatch-run` は起動時に `prompt.md`・`state.json`・`tasks.md`・`config.json` の
   SHA-256 を `runs/<タスクID>-<試行回数>/guard.sha256` に記録する。`dispatch-check` はこれと
@@ -307,7 +319,19 @@ nohup .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1 &
   `$ ` / `→ ` / `← ` / `✱ ` / `✗ ` / `⚙ ` / `! `、stream-json の `[tool_use]` / `[tool_result]` 行)が
   続く場合は無効(報告本文の色なしの `→ 要確認` や `$ npm test` はツール実行とみなさない)。必須項目は通常のタスクが
   `- 変更ファイル:` と `- テスト結果:`、PR 作成の run(`pr-*`)が `- PR URL:`。値が空・
-  `<...>` のまま(テンプレート)の場合も無効
+  `<...>` のまま(テンプレート)の場合も無効。報告が無い場合は `missing` で、最後のツール実行の
+  記録より後に子が何も出力せず終わった場合は
+  `missing (no output after the last tool call; the model may have hit the output token limit)` になる
+  (#50: 推論だけで出力トークン上限に達した打ち切り。opencode はエラーにせず exit 0 で終わるため、
+  区分は `ok` でも完了報告は欠けている)
+- **子CLI自身のログのエラー**: config.json の `child_agent.cli_log`(子CLI自身のログファイルのパス。
+  先頭の `~/` はホームディレクトリで展開する)を読む。`CLI log:` には設定したパスを出し、
+  未設定なら `(not configured)`、パスのファイルが無ければ `<パス> (not found)`。次にそのログの
+  末尾200行のうち `ERROR` を含む行の最後の5行を字下げして出す。`Provider error:` はプロバイダー起因の
+  失敗かどうか(`yes` / `no` / `unknown`)で、5行のいずれかが `usage limit`・`rate limit`・
+  `endpoint is unavailable`・429(前後に英数字を続けない。`.429Z` のようなタイムスタンプ等に
+  一致させないため)を含めば `yes`、含まなければ `no`、`cli_log` が未設定・ファイルが無ければ `unknown`。
+  利用上限・レート制限・エンドポイント障害の切り分け用の参考情報で、Verdict・exit code には影響しない
 - **権限拒否**: 行頭が `! permission requested:` で `auto-rejecting` を含む行(opencode の拒否の記録)が
   あれば権限拒否とみなす(子が表示したソース中の同じ文字列には反応しない)
 - Windows PowerShell 5.1 が UTF-16LE で書いた `output.log` も BOM を見て読む(PowerShell 版)
@@ -324,7 +348,7 @@ exit code(複数に当たる場合は上の行を優先する):
 | exit | Verdict | 意味 |
 |------|---------|------|
 | `8` | `tampered` | 管理ファイルの改ざん・git 状態の変化(上記の `Guard:`。`git changed: <名前>` を含む) |
-| `4` | `abnormal-exit` | 異常終了(非0・`signal:*`・`crashed:*`) |
+| `4` | `abnormal-exit` | 異常終了(非0・`idle-timeout`(子が `child_agent.idle_timeout_seconds` の間無応答で `dispatch-run` が止めた。上述の通りシグナル死の記録より優先される)・`signal:*`・`crashed:*`) |
 | `6` | `permission-denied` / `outside-access` | 権限拒否で中断(`Permission denied: yes`)、またはプロジェクト外アクセスの検出(`Outside access: yes`) |
 | `5` | `no-report` | 完了報告が無い・無効 |
 | `7` | `no-changes` | 完了報告はあるが作業ツリーに変更が無い(`pr-*` の run では判定しない) |
