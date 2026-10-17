@@ -102,6 +102,19 @@ function ConvertTo-HumanLine {
     }
 }
 
+# 子の一時ファイルをプロジェクト内(runs/<ID>-<試行>/tmp/)に置かせ、そこで実行された git が
+# 本物のリポジトリにたどり着かないよう探索の上限にする(#46)
+$childTmp = Join-Path (Get-Location).Path "$runDir/tmp"
+$null = New-Item -ItemType Directory -Force $childTmp
+# 子の起動中だけ TEMP 系環境変数を差し替えるため、元の値を保存してから設定する
+# 同じプロセス内で & dispatch-run.ps1 と呼ばれたとき(tests/test-exitcode.ps1 等)に呼び出し元に書き換えが
+# 残らないよう、finally で戻す(catch の exit 1 でも実行される)
+$savedEnv = @{}
+foreach ($name in @('TMPDIR', 'TEMP', 'TMP', 'GIT_CEILING_DIRECTORIES')) {
+    $savedEnv[$name] = [System.Environment]::GetEnvironmentVariable($name)
+    [System.Environment]::SetEnvironmentVariable($name, $childTmp)
+}
+
 try {
     $tokens = Split-CommandLine $config.child_agent.command_template
     $isStreamJson = $config.child_agent.command_template -match 'stream-json'
@@ -178,6 +191,15 @@ try {
     "EXIT:crashed:$($_.Exception.Message)`nEND:$endTime" | Out-File -Encoding utf8 $donePath
     # ラッパー自体の異常終了(子の終了コードは done マーカーに記録済み)
     exit 1
+} finally {
+    # 子の起動前に保存した TEMP 系環境変数の値に戻す(元が無ければ変数自体を消す)
+    foreach ($name in $savedEnv.Keys) {
+        if ($null -eq $savedEnv[$name]) {
+            Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+        } else {
+            Set-Item -Path "Env:$name" -Value $savedEnv[$name]
+        }
+    }
 }
 # 子の終了コードは done マーカーに記録する。ラッパー自体は正常に終わったので 0 を返す
 # (exit を呼ばないと、PowerShell セッション内で直接呼んだときに $LASTEXITCODE が更新されない)

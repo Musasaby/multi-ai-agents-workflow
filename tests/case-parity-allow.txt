@@ -7,12 +7,6 @@ test-dispatch.sh: run: SIGTERMはsignal:15(python経路)
 test-dispatch.sh: run: SIGTERMはsignal:15(フォールバック経路)
 test-dispatch.sh: run: 通常の非0は数値のまま(フォールバック経路)
 
-# 子の一時ディレクトリ(runs/<ID>-<試行>/tmp)の向け替えは .sh 版のみの対応
-# T10 で ps1 版を作ったら削除
-test-dispatch.sh: run: 子の TMPDIR/TEMP/TMP は runs/<ID>-<試行>/tmp を指す
-test-dispatch.sh: run: 子の GIT_CEILING_DIRECTORIES は runs/<ID>-<試行>/tmp を指す
-test-dispatch.sh: run: 呼び出し元の TMPDIR/TEMP/TMP を書き換えない
-
 # Windows PowerShell 5.1 の UTF-16LE 出力は ps1(dispatch-run.ps1)専用の確認
 test-dispatch.ps1: check: UTF-16LEのoutput.log(Windows PowerShell 5.1)を読める
 

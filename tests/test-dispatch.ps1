@@ -53,6 +53,59 @@ function Get-ChildXdg {
     return [System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.log")
 }
 
+# T10(#46): 子の環境変数を NAME=<値>(\ は / に置換)で1行ずつ出力する子(既存 Set-Child の pwsh の子)
+function Set-EnvChild {
+    Set-Child (
+        'Write-Output ("TMPDIR=" + ($env:TMPDIR -replace "\\", "/")); ' +
+        'Write-Output ("TEMP=" + ($env:TEMP -replace "\\", "/")); ' +
+        'Write-Output ("TMP=" + ($env:TMP -replace "\\", "/")); ' +
+        'Write-Output ("GIT_CEILING_DIRECTORIES=" + ($env:GIT_CEILING_DIRECTORIES -replace "\\", "/"))'
+    )
+}
+
+# output.log から <変数名>=<値> の行の値を返す(無ければ空文字列)
+function Get-ChildEnvValue {
+    param([string]$Name)
+    $line = @((Get-Content "$script:Proj/.agents/workflow/runs/T1-1/output.log" -Encoding utf8 -ErrorAction SilentlyContinue) -match "^$Name=") | Select-Object -First 1
+    return ("$line" -replace "^$Name=", '')
+}
+
+# 値が .agents/workflow/runs/T1-1/tmp で終わる絶対パス(/ または <ドライブ>:/ 始まり)かを確かめる
+function Assert-RunTmpPath {
+    param([string]$Value, [string]$Message)
+    $norm = $Value -replace '\\', '/'
+    $ok = ($norm -cmatch '^[A-Za-z]:/.*/\.agents/workflow/runs/T1-1/tmp$') -or ($norm -cmatch '^/.*/\.agents/workflow/runs/T1-1/tmp$')
+    Add-Result $ok "$Message (expected / or drive-letter path ending with .agents/workflow/runs/T1-1/tmp, got '$Value')"
+}
+
+# 呼び出し元の TMP 系環境変数を実在ディレクトリ($script:Proj/caller-tmp)に差し替えて、
+# dispatch-run を同じプロセス内で呼ぶ(test-exitcode.ps1 の Invoke-InProcess と同じ形式)。
+# 一時ファイルを作るヘルパー(TempFileName 等)が TEMP を実在パスとして使うため実在ディレクトリにする
+# dispatch-run.ps1 直後の呼び出し元の値を $script:CallerEnvAfterRun に保存する
+# (ヘルパーの finally で戻す前の値。ケース3で「呼び出し元を書き換えない」の検証に使う)
+$script:CallerEnvAfterRun = @{}
+function Invoke-RunWithCallerTmp {
+    $null = New-Item -ItemType Directory -Force "$script:Proj/caller-tmp"
+    $saved = @{}
+    foreach ($name in @('TMPDIR', 'TEMP', 'TMP', 'GIT_CEILING_DIRECTORIES')) {
+        $saved[$name] = [System.Environment]::GetEnvironmentVariable($name)
+        Set-Item -Path "Env:$name" -Value "$script:Proj/caller-tmp"
+    }
+    Push-Location $script:Proj
+    try {
+        & "$script:Proj/.agents/workflow/scripts/dispatch-run.ps1" -TaskId T1 -Attempt 1 *> $null
+        foreach ($name in @('TMPDIR', 'TEMP', 'TMP', 'GIT_CEILING_DIRECTORIES')) {
+            $script:CallerEnvAfterRun[$name] = [System.Environment]::GetEnvironmentVariable($name)
+        }
+    } finally {
+        Pop-Location
+        foreach ($name in $saved.Keys) {
+            if ($null -eq $saved[$name]) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
+            else { Set-Item -Path "Env:$name" -Value $saved[$name] }
+        }
+    }
+}
+
 $report = "作業しました`n## 完了報告`n- 変更ファイル: a.txt`n- テスト結果: 全件パス"
 
 Write-Host "test-dispatch.ps1"
@@ -91,6 +144,33 @@ Invoke-TestCase "run: isolate_xdg true は XDG を切り替える" {
     Set-Child 'Write-Output "DATA=$env:XDG_DATA_HOME"'
     Set-Isolate true
     Assert-Contains (Get-ChildXdg) "DATA=.agents/workflow/.config" "true: XDG isolated"
+}
+
+# T10(#46): sh 版(test-dispatch.sh)と同じ名前の3ケース
+Invoke-TestCase "run: 子の TMPDIR/TEMP/TMP は runs/<ID>-<試行>/tmp を指す" {
+    Set-EnvChild
+    Invoke-RunWithCallerTmp
+    Assert-RunTmpPath (Get-ChildEnvValue 'TMPDIR') "child TMPDIR points to runs/T1-1/tmp"
+    Assert-RunTmpPath (Get-ChildEnvValue 'TEMP') "child TEMP points to runs/T1-1/tmp"
+    Assert-RunTmpPath (Get-ChildEnvValue 'TMP') "child TMP points to runs/T1-1/tmp"
+    Add-Result (Test-Path -Path "$script:Proj/.agents/workflow/runs/T1-1/tmp" -PathType Container) "runs/T1-1/tmp directory exists"
+}
+
+Invoke-TestCase "run: 子の GIT_CEILING_DIRECTORIES は runs/<ID>-<試行>/tmp を指す" {
+    Set-EnvChild
+    Invoke-RunWithCallerTmp
+    Assert-RunTmpPath (Get-ChildEnvValue 'GIT_CEILING_DIRECTORIES') "child GIT_CEILING_DIRECTORIES points to runs/T1-1/tmp"
+}
+
+Invoke-TestCase "run: 呼び出し元の TMPDIR/TEMP/TMP を書き換えない" {
+    Set-EnvChild
+    Invoke-RunWithCallerTmp
+    # dispatch-run.ps1 呼び出し直後の値(ヘルパー finally で戻す前)が、
+    # 呼び出し元で設定した値のまま(= dispatch-run.ps1 が finally で戻せている)ことを確かめる
+    foreach ($name in @('TMPDIR', 'TEMP', 'TMP', 'GIT_CEILING_DIRECTORIES')) {
+        $after = $script:CallerEnvAfterRun[$name]
+        Add-Result ("$after" -ceq "$script:Proj/caller-tmp") "caller $name unchanged right after dispatch-run (expected '$script:Proj/caller-tmp', got '$after')"
+    }
 }
 
 Invoke-TestCase "check: 正常" {
