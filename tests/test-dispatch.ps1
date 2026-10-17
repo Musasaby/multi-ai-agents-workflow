@@ -255,6 +255,7 @@ Invoke-TestCase "check: 正常" {
     Assert-Contains $script:Out "kind: ok" "kind"
     Assert-Contains $script:Out "a.txt" "git status shown"
     Assert-Contains $script:Out "Completion report: found" "report found"
+    Assert-Eq "Next: review T1" (($script:Out -split "`n")[-1]) "next line"
 }
 
 Invoke-TestCase "check: signalはexit 4" {
@@ -263,6 +264,7 @@ Invoke-TestCase "check: signalはexit 4" {
     Assert-Eq 4 $script:Code "exit code"
     Assert-Contains $script:Out "kind: signal" "kind"
     Assert-Contains $script:Out "step 67" "log tail shown"
+    Assert-Eq "Next: escalate reason=abnormal-exit" (($script:Out -split "`n")[-1]) "next line"
 }
 
 Invoke-TestCase "check: EXIT:idle-timeout は abnormal-exit(exit 4)" {
@@ -271,6 +273,7 @@ Invoke-TestCase "check: EXIT:idle-timeout は abnormal-exit(exit 4)" {
     Assert-Eq 4 $script:Code "exit code"
     Assert-Contains $script:Out "kind: idle-timeout" "kind"
     Assert-Contains $script:Out "Verdict: abnormal-exit" "verdict"
+    Assert-Eq "Next: escalate reason=idle-timeout" (($script:Out -split "`n")[-1]) "next line"
 }
 
 Invoke-TestCase "check: 非0はexit 4" {
@@ -292,6 +295,7 @@ Invoke-TestCase "check: 完了報告なしはexit 5" {
     Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
     Assert-Eq 5 $script:Code "exit code"
     Assert-Contains $script:Out "Completion report: missing" "report missing"
+    Assert-Eq "Next: escalate reason=no-report" (($script:Out -split "`n")[-1]) "next line"
 }
 
 # #50: 最後のツール実行の後に何も出力していない(推論だけで出力トークン上限に達した)場合の理由
@@ -301,6 +305,7 @@ Invoke-TestCase "check: 最後のツール実行の後に出力が無ければ�
     Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
     Assert-Eq 5 $script:Code "exit code: $($script:Out)"
     Assert-Contains $script:Out "no output after the last tool call" "reason"
+    Assert-Eq "Next: escalate reason=token-limit" (($script:Out -split "`n")[-1]) "next line"
 }
 
 # ツール実行の後に本文があれば、理由を付けない(単なる報告漏れとして扱う)
@@ -313,10 +318,11 @@ Invoke-TestCase "check: ツール実行の後に本文があれば理由を付�
     Assert-NotContains $script:Out "no output after the last tool call" "reason absent"
 }
 
-Invoke-TestCase "check: doneなしはexit 1" {
+Invoke-TestCase "check: doneなしはexit 2" {
     $null = New-Item -ItemType Directory -Force "$script:Proj/.agents/workflow/runs/T1-1"
     Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
-    Assert-Eq 1 $script:Code "exit code"
+    Assert-Eq 2 $script:Code "exit code"
+    Assert-Eq "Next: wait" "$($script:Out)" "next line"
 }
 
 Invoke-TestCase "check: BOM付きdone" {
@@ -384,6 +390,7 @@ Invoke-TestCase "check: 権限拒否はexit 6" {
     Assert-Eq 6 $script:Code "exit code: $($script:Out)"
     Assert-Contains $script:Out "Permission denied: yes" "flag"
     Assert-Contains $script:Out "auto-rejecting" "denied line shown"
+    Assert-Eq "Next: escalate reason=permission-denied" (($script:Out -split "`n")[-1]) "next line"
 }
 
 Invoke-TestCase "check: 変更0件はexit 7" {
@@ -391,6 +398,7 @@ Invoke-TestCase "check: 変更0件はexit 7" {
     Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
     Assert-Eq 7 $script:Code "exit code: $($script:Out)"
     Assert-Contains $script:Out "Changes: 0" "changes"
+    Assert-Eq "Next: escalate reason=no-changes" (($script:Out -split "`n")[-1]) "next line"
 }
 
 Invoke-TestCase "check: PR作成のrunは変更0件でも正常" {
@@ -408,6 +416,7 @@ Invoke-TestCase "check: state.jsonの変更はexit 8" {
     Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
     Assert-Eq 8 $script:Code "exit code: $($script:Out)"
     Assert-Contains $script:Out "changed: .agents/workflow/state.json" "issue"
+    Assert-Eq "Next: escalate reason=tampered" (($script:Out -split "`n")[-1]) "next line"
 }
 
 Invoke-TestCase "check: prompt.mdの削除はexit 8" {
