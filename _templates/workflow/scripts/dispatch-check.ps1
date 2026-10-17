@@ -295,8 +295,9 @@ if (Test-Path $logPath) {
 }
 
 # --- 次のアクションの判定(stdout の最後の行に出す) ---
+# PR 作成の run(pr-*)はレビューしない。PR を検証して報告し、マージを待つ
 $next = switch ($code) {
-    0 { "review $TaskId"; break }
+    0 { if ($isPr) { 'wait-merge' } else { "review $TaskId" }; break }
     8 { 'escalate reason=tampered'; break }
     4 {
         if ($providerError -eq 'yes') { 'escalate reason=provider-error' }

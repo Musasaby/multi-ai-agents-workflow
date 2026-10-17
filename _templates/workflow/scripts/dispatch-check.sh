@@ -296,8 +296,9 @@ else
 fi
 
 # --- 次のアクションの判定(stdout の最後の行に出す) ---
+# PR 作成の run(pr-*)はレビューしない。PR を検証して報告し、マージを待つ
 case "$CODE" in
-    0) NEXT="review $TASK_ID" ;;
+    0) if [ "$IS_PR" = true ]; then NEXT="wait-merge"; else NEXT="review $TASK_ID"; fi ;;
     8) NEXT="escalate reason=tampered" ;;
     4)
         if [ "$PROVIDER_ERROR" = yes ]; then

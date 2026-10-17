@@ -496,6 +496,7 @@ t_check_pr_run_without_changes() {
     make_run 0 $'## 完了報告\n- PR URL: https://github.com/o/r/pull/1\n- タイトル: t' pr-1-1
     run_script dispatch-check.sh pr-1 1
     assert_eq 0 "$CODE" "pr run is not checked for changes: $OUT"
+    assert_eq "Next: wait-merge" "${OUT##*$'\n'}" "pr run is not reviewed"
 }
 
 # #34: 管理ファイルの変更・削除を検知する

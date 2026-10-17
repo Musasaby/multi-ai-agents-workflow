@@ -405,6 +405,7 @@ Invoke-TestCase "check: PR作成のrunは変更0件でも正常" {
     New-Run 0 "## 完了報告`n- PR URL: https://github.com/o/r/pull/1`n- タイトル: t" 'pr-1-1'
     Invoke-Script dispatch-check.ps1 -TaskId pr-1 -Attempt 1
     Assert-Eq 0 $script:Code "pr run is not checked for changes: $($script:Out)"
+    Assert-Eq "Next: wait-merge" (($script:Out -split "`n")[-1]) "pr run is not reviewed"
 }
 
 # #34: 管理ファイルの変更・削除を検知する

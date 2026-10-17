@@ -191,12 +191,12 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 | 行動 | 意味 | 出すスクリプト |
 |------|------|----------------|
 | `dispatch <ID>` | そのタスクを dispatch する | next-task(exit 0) |
-| `review <ID>` | そのタスクをレビューする | next-task(exit 0、`in_review`)・dispatch-check(exit 0) |
+| `review <ID>` | そのタスクをレビューする | next-task(exit 0、`in_review`)・dispatch-check(exit 0。PR 作成の run を除く) |
 | `wait` | 子がまだ実行中。完了を待つ | dispatch-check(exit 2) |
 | `finish` | 全タスク完了。サマリー報告へ | next-task(exit 3) |
 | `group-advance` | グループ境界。group-advance を実行する | next-task(exit 6) |
 | `create-pr` | PR を作成する | group-advance(exit 7) |
-| `wait-merge` | PR のマージを待つ(報告して停止) | group-advance(exit 8) |
+| `wait-merge` | PR のマージを待つ(報告して停止) | group-advance(exit 8)・dispatch-check(exit 0、PR 作成の run `pr-*`。PR を検証してから報告する) |
 | `continue` | そのまま作業を続ける | branch-check(exit 0)・group-advance(exit 0) |
 | `switch-branch` | 専用ブランチを作る(`reason=main` / `merged`) | branch-check(exit 2 / 3) |
 | `escalate` | ユーザーに理由を説明し判断を仰ぐ | 下の reason 一覧 |
