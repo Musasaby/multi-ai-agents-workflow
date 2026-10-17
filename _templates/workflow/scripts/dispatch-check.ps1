@@ -4,7 +4,8 @@
 #     変わった/消えた、guard.sha256・output.log・git-state.txt が無い、output.log が実行中に
 #     切り詰められた、本物のリポジトリの git 状態(HEAD・ブランチ・参照・設定)が変わった)
 #   4=異常終了(非0・signal・crashed)
-#   6=権限拒否で中断(output.log に子CLIの権限拒否の記録がある)
+#   6=権限拒否で中断(output.log に子CLIの権限拒否の記録がある)、または、ツール実行の記録に
+#     プロジェクト外(/tmp 等)へのアクセスがある
 #   5=完了報告が無い・無効(最後の `## 完了報告` の後にツール実行の記録が続く、必須項目が無い・テンプレートのまま)
 #   7=変更0件(完了報告はあるが作業ツリーに変更が無い。PR 作成の run(pr-*)では判定しない)
 #   0=正常終了かつ完了報告あり / 1=done マーカーが無い・使い方不備
@@ -138,6 +139,20 @@ $deniedLines = @($cleanLines | Where-Object { $_ -match '^! permission requested
 $toolRe = '^' + [regex]::Escape($esc) + '\[[0-9;]*m(\$|→|←|✱|✗|⚙|!) ' + [regex]::Escape($esc) + '\[[0-9;]*m'
 $toolFlags = @($rawLines | ForEach-Object { ($_ -match $toolRe) -or ($_ -match '^\[tool_(use|result)\]') })
 
+# --- プロジェクト外(/tmp 等)へのアクセスの検出 ---
+# 権限を拒否されずに成功したプロジェクト外アクセス(例: bash -c "... > /tmp/x.log")を検出する。
+# 対象はツール実行の記録行だけ: opencode の色付きマーカー行($ / → / ← / ✱ / ✗ / ⚙ で始まるもの。
+# ! は権限拒否の行なので除く)と stream-json の [tool_use] 行。ツールの出力(色なしの行・
+# [tool_result] 行)や完了報告の本文には反応しない。判定は ANSI エスケープを除いた行に対して行う。
+# 条件の正規表現は $outsidePattern にまとめる(条件を足したくなったらここへ追記する)。
+$outsidePattern = '(^|[ \t"''=(<>])/(var/)?tmp([/ \t"'');]|$)'
+$outsideExecRe = '^' + [regex]::Escape($esc) + '\[[0-9;]*m(\$|→|←|✱|✗|⚙) ' + [regex]::Escape($esc) + '\[[0-9;]*m'
+$outsideLines = @()
+for ($i = 0; $i -lt $rawLines.Count; $i++) {
+    $isToolExec = ($rawLines[$i] -match $outsideExecRe) -or ($rawLines[$i] -match '^\[tool_use\]')
+    if ($isToolExec -and ($cleanLines[$i] -match $outsidePattern)) { $outsideLines += $cleanLines[$i] }
+}
+
 # --- 完了報告の判定 ---
 # 最後に出現する `## 完了報告` だけを対象にし、その後にツール実行の記録が続く場合は無効とする
 # (子がテンプレートやドキュメントを表示しただけの行に一致させないため)。必須項目は
@@ -179,6 +194,8 @@ if ($guardIssues.Count -gt 0) {
     $verdict = 'abnormal-exit'; $code = 4
 } elseif ($deniedLines.Count -gt 0) {
     $verdict = 'permission-denied'; $code = 6
+} elseif ($outsideLines.Count -gt 0) {
+    $verdict = 'outside-access'; $code = 6
 } elseif ($reportResult -ne 'found') {
     $verdict = 'no-report'; $code = 5
 } elseif (-not $isPr -and $changeCount -eq 0) {
@@ -201,6 +218,12 @@ if ($deniedLines.Count -gt 0) {
     $deniedLines | ForEach-Object { Write-Output "  $_" }
 } else {
     Write-Output "Permission denied: no"
+}
+if ($outsideLines.Count -gt 0) {
+    Write-Output "Outside access: yes"
+    $outsideLines | ForEach-Object { Write-Output "  $_" }
+} else {
+    Write-Output "Outside access: no"
 }
 Write-Output "Completion report: $reportResult"
 Write-Output "Changes: $changeCount"

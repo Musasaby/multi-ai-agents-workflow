@@ -16,9 +16,3 @@ test-tasks.sh: __pycache__ を作らない
 
 # test-exitcode.sh は存在しない(sh 側では各テストが直接 exit code を断言する)
 test-exitcode.ps1: *
-
-# T12: プロジェクト外(/tmp 等)アクセスの検出は sh(dispatch-check.sh)だけが対応。T13 で ps1 版を作ったら削除
-test-dispatch.sh: check: ツール実行行の /tmp への書き込みは exit 6(outside-access)
-test-dispatch.sh: check: runs/<ID>/tmp 配下へのアクセスは検出しない
-test-dispatch.sh: check: ツールの出力中の /tmp には反応しない
-test-dispatch.sh: check: 権限拒否とプロジェクト外アクセスが両方あれば permission-denied
