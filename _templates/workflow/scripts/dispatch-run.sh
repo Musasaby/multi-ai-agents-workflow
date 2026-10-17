@@ -6,7 +6,8 @@ if ! [[ "$TASK_ID" =~ ^[A-Za-z0-9_-]+$ ]] || ! [[ "$ATTEMPT" =~ ^[0-9]+$ ]]; the
   echo "Invalid TaskId/Attempt: '$TASK_ID' '$ATTEMPT'" >&2
   exit 1
 fi
-cd "$(dirname "$0")/../../.."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR/../../.."
 # child_agent.isolate_xdg が true のときだけ、子CLIの設定・データの置き場所をプロジェクト内に切り替える
 # (sandbox で ~/.config 等に書けない環境向け)。既定(未指定・false)は呼び出し元の XDG をそのまま使う。
 # 切り替えると ~/.local/share/<CLI>/auth.json 等の認証情報が見えなくなる点に注意。
@@ -22,6 +23,18 @@ if [ "$ISOLATE_XDG" = true ]; then
 fi
 RUN_DIR=".agents/workflow/runs/${TASK_ID}-${ATTEMPT}"
 mkdir -p "$RUN_DIR"
+# 子の一時ファイルをプロジェクト内(runs/<ID>-<試行>/tmp/)に置かせ、そこで実行された git が
+# 本物のリポジトリにたどり着かないようにする(#46)。git は ceiling と同じディレクトリが
+# カレントのときは探索を止めないため、tmp/ の親(runs/<ID>-<試行>/)を上限にする
+CHILD_TMP="$(pwd)/$RUN_DIR/tmp"
+mkdir -p "$CHILD_TMP"
+CHILD_CEILING="$(pwd)/$RUN_DIR"
+# Windows ネイティブの子プロセスは /c/... 形式を解釈できないため C:/... 形式にする
+if command -v cygpath > /dev/null 2>&1; then
+  CHILD_TMP="$(cygpath -m "$CHILD_TMP")"
+  CHILD_CEILING="$(cygpath -m "$CHILD_CEILING")"
+fi
+export TMPDIR="$CHILD_TMP" TEMP="$CHILD_TMP" TMP="$CHILD_TMP" GIT_CEILING_DIRECTORIES="$CHILD_CEILING"
 LOG_PATH="$RUN_DIR/output.log"
 JSONL_PATH="$RUN_DIR/output.jsonl"
 DONE_PATH="$RUN_DIR/done"
@@ -44,6 +57,11 @@ for f in "$PROMPT_PATH" .agents/workflow/state.json .agents/workflow/tasks.md .a
   fi
   printf '%s  %s\n' "$h" "$f" >> "$GUARD_PATH"
 done
+
+# 起動時の git 状態(HEAD・ブランチ・参照・設定)を git-state.txt に記録する。dispatch-check が
+# 実行後の状態と比べて、子がリポジトリのどこを変えたかを特定する(失敗しても起動は止めない)。
+# 実行権限に頼らず bash で呼ぶ(リポジトリ上のスクリプトは mode 100644 のため)
+bash "$SCRIPT_DIR/git-state.sh" > "$RUN_DIR/git-state.txt"
 
 CMD_TEMPLATE=$(jq -r '.child_agent.command_template' .agents/workflow/config.json 2>/dev/null || \
   python3 -c "import json; print(json.load(open('.agents/workflow/config.json'))['child_agent']['command_template'])" 2>/dev/null || \

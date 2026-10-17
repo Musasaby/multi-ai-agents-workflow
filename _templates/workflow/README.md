@@ -10,6 +10,7 @@
 ├── scripts/                      ← 配布物(セットアップ時にコピー、既存は上書きしない。更新は workflow-sync-scripts)
 │   ├── dispatch-run.ps1 / .sh
 │   ├── dispatch-check.ps1 / .sh
+│   ├── git-state.ps1 / .sh  git 状態(HEAD・ブランチ・参照・config)の4行出力(dispatch-run/dispatch-check が使用)
 │   ├── dispatch-prompt-gen.ps1 / .sh
 │   ├── dispatch-prompt-template.md
 │   ├── dispatch-pr-prompt-template.md   PR作成の単発依頼用(dispatch-prompt-gen --pr)
@@ -27,6 +28,8 @@
 │   ├── prompt.md        生成プロンプト
 │   ├── fix-notes.md     リトライ時のレビュー指摘(親が作成)
 │   ├── guard.sha256     起動時の管理ファイルの SHA-256(dispatch-run が作成、dispatch-check が改ざん検知に使う)
+│   ├── git-state.txt    起動時の git 状態の4行(git-state の出力。dispatch-run が作成、dispatch-check が改ざん検知に使う)
+│   ├── tmp/             子エージェントの一時ディレクトリ(TMPDIR・TEMP・TMP がここを指す。GIT_CEILING_DIRECTORIES はその親の runs/<タスクID>-<試行回数>/ を指す)
 │   ├── output.log       子エージェントの出力
 │   ├── done             完了マーカー(EXIT/END の2行)
 │   ├── exit-signal      シグナル番号の一時ファイル(POSIX版のみ。done 書き出し時に削除)
@@ -251,6 +254,19 @@ Windows にはシグナルの仕組みが無いため、PowerShell 版での強�
 親プロセスのタイムアウト・終了に巻き込まれないよう `Start-Process` / `nohup` 等で
 デタッチ起動する。
 
+子の一時ファイルの置き場所も `dispatch-run` が設定する: 子プロセスには `TMPDIR`・`TEMP`・`TMP`
+を `runs/<タスクID>-<試行回数>/tmp/`(起動時に作成する)に設定するため、子が `mktemp` 等で作る
+一時ファイルはプロジェクト内の `tmp/` に置かれる。`GIT_CEILING_DIRECTORIES` には `tmp/` の親である
+`runs/<タスクID>-<試行回数>/` を設定する(`tmp/` そのものではない)。git は ceiling と同じ
+ディレクトリが cwd のときも探索を止めないため、その下の `tmp/` で実行された `git` が本物の
+リポジトリを探索でたどり着かないようにする。PowerShell 版は
+呼び出し元の `TEMP` 系環境変数の元の値を保存しておき、ラッパーの終了時(finally)に元に戻す。
+
+起動時の git 状態(HEAD・ブランチ・参照・config の SHA-256。「git-state」節の4行)を
+`runs/<タスクID>-<試行回数>/git-state.txt` に記録する(失敗しても起動は止めない)。
+dispatch-check が実行後の状態と比べるため、子がコミットや設定変更でリポジトリのどこを変えたかを
+機械的に特定できる。
+
 ```powershell
 Start-Process pwsh -ArgumentList "-NoProfile -File .agents/workflow/scripts/dispatch-run.ps1 -TaskId T1 -Attempt 1"
 ```
@@ -262,13 +278,30 @@ nohup .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1 &
 
 `done` マーカーを検知したら毎回実行する。終了状態の区分(`ok` / `nonzero` / `signal` /
 `crashed`)、管理ファイルの改ざん検知(`Guard:`)、権限拒否の有無(`Permission denied:`)、
-完了報告の判定(`Completion report:`)、変更件数(`Changes:`)、`git status --porcelain`、
+プロジェクト外アクセスの検出(`Outside access:`)、完了報告の判定(`Completion report:`)、
+変更件数(`Changes:`)、`git status --porcelain`、
 `git diff --stat`、`output.log` の末尾30行をまとめて出力する。
 
 - **改ざん検知**: `dispatch-run` は起動時に `prompt.md`・`state.json`・`tasks.md`・`config.json` の
   SHA-256 を `runs/<タスクID>-<試行回数>/guard.sha256` に記録する。`dispatch-check` はこれと
-  現在の内容を比べ、変更・削除を検知する。`guard.sha256`・`output.log` が無い場合や、
-  `output.log` に NUL バイトがある(実行中に空にされた)場合も改ざんとみなす
+  現在の内容を比べ、変更・削除を検知する。`guard.sha256`・`output.log`・`git-state.txt` が無い場合や、
+  `output.log` に NUL バイトがある(実行中に空にされた)場合も改ざんとみなす。
+  `git-state.txt not found` は、この版より前の `dispatch-run`(起動時に `git-state.txt` を記録しない版)
+  で起動した run を更新後の `dispatch-check` で判定した場合にも記録される。その場合は run を
+  やり直す(再 dispatch)
+- **git 状態の比較**: `dispatch-check` は `git-state.txt`(dispatch-run が起動時に記録)と現在の
+  `git-state` の出力を比べ、`head`・`branch`・`refs`・`config` のいずれかが変わっていれば
+  `git changed: <名前>` を改ざん検知の問題に加える(例: 子が `git commit` や `git config` で
+  リポジトリの git 状態を変えた場合)。PR 作成の run(`pr-*`)だけは `config` を比べない
+  (子が `git push -u` で `.git/config` を正当に変えるため)
+- **プロジェクト外アクセス**: `Outside access: yes` と一致した行を出す。対象はツール実行の記録行
+  だけ(opencode の色付きマーカー行 `$` / `→` / `←` / `✱` / `✗` / `⚙` で始まるものと stream-json の
+  `[tool_use]` 行。`!` で始まる権限拒否の行は除く。ツールの出力(色なしの行・`[tool_result]` 行)や
+  完了報告の本文には反応しない。ANSI エスケープを除いた行に対して判定する)。検出条件は次の3つ:
+  1) `/tmp`・`/var/tmp` の参照、2) ホームディレクトリの参照(`~/`・`$HOME`・`${HOME}`・
+  `$env:HOME`・`$env:USERPROFILE`・`%USERPROFILE%`)、3) Windows のユーザー一時ディレクトリの参照
+  (`AppData\Local\Temp`・`AppData/Local/Temp`)。2 と 3 は大文字小文字を区別しない。`$env:TEMP`・`%TEMP%`・
+  `$TMPDIR` は `dispatch-run` がプロジェクト内の `tmp/` を指させるため検出しない
 - **完了報告**: `output.log` で**最後に出現する** `## 完了報告` 行だけを対象にする。
   その後にツール実行の記録(opencode が色付きで出すマーカー行 = ANSI エスケープに挟まれた
   `$ ` / `→ ` / `← ` / `✱ ` / `✗ ` / `⚙ ` / `! `、stream-json の `[tool_use]` / `[tool_result]` 行)が
@@ -290,9 +323,9 @@ exit code(複数に当たる場合は上の行を優先する):
 
 | exit | Verdict | 意味 |
 |------|---------|------|
-| `8` | `tampered` | 管理ファイルの改ざん(上記) |
+| `8` | `tampered` | 管理ファイルの改ざん・git 状態の変化(上記の `Guard:`。`git changed: <名前>` を含む) |
 | `4` | `abnormal-exit` | 異常終了(非0・`signal:*`・`crashed:*`) |
-| `6` | `permission-denied` | 権限拒否で中断 |
+| `6` | `permission-denied` / `outside-access` | 権限拒否で中断(`Permission denied: yes`)、またはプロジェクト外アクセスの検出(`Outside access: yes`) |
 | `5` | `no-report` | 完了報告が無い・無効 |
 | `7` | `no-changes` | 完了報告はあるが作業ツリーに変更が無い(`pr-*` の run では判定しない) |
 | `0` | `ok` | 正常終了かつ完了報告あり |
@@ -300,6 +333,30 @@ exit code(複数に当たる場合は上の行を優先する):
 
 `0` 以外の場合はレビューに進まず、出力された内容をユーザーに報告する(`7` は、変更が無いのが
 正しいタスクに限り検証に進んでよい。詳細は `agent-dispatch` skill §4)。
+
+### git-state — git 状態の4行出力
+
+カレントディレクトリのリポジトリの git 状態を、この順に4行で出力する(何も書き換えない)。
+項目の取得に失敗した値は `-` にする。git リポジトリの中でなければ stderr に
+`not a git repository` を出して exit 1:
+
+```
+head <HEAD コミットの SHA-1(git rev-parse --verify -q HEAD)>
+branch <HEAD の参照名(git symbolic-ref -q HEAD。例: refs/heads/main)>
+refs <参照一覧の SHA-256(16進小文字): git for-each-ref の refs/heads・refs/tags・refs/stash の出力>
+config <git config ファイルの SHA-256(16進小文字)>
+```
+
+`refs` は push で正当に変わる `refs/remotes` を含めない。
+`dispatch-run` が子の起動時にこの出力を `git-state.txt` に記録し、`dispatch-check` が実行後の
+出力と比べて、子がリポジトリのどこを変えたか(HEAD・ブランチ・参照・設定)を特定する。
+
+```powershell
+.agents/workflow/scripts/git-state.ps1
+```
+```bash
+.agents/workflow/scripts/git-state.sh
+```
 
 ### state-sync — state.json の機械生成・追記同期
 

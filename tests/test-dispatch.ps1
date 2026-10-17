@@ -13,7 +13,8 @@ function Set-Child {
 
 function Get-DoneExit { return (Get-Content "$script:Proj/.agents/workflow/runs/T1-1/done" -Encoding utf8)[0] }
 
-# dispatch-run と同じ形式で guard.sha256 を書く(runs/<run>/prompt.md と管理ファイル)
+# dispatch-run と同じ形式で guard.sha256 を書き(runs/<run>/prompt.md と管理ファイル)、
+# dispatch-run と同じく git-state.ps1 の出力で git-state.txt も書く
 function Write-Guard {
     param([string]$Run)
     Push-Location $script:Proj
@@ -23,6 +24,10 @@ function Write-Guard {
     }
     Pop-Location
     Write-Utf8File "$script:Proj/.agents/workflow/runs/$Run/guard.sha256" (($lines -join "`n") + "`n")
+    Push-Location $script:Proj
+    $gitState = @(& pwsh -NoProfile -File .agents/workflow/scripts/git-state.ps1)
+    Pop-Location
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/$Run/git-state.txt" (($gitState -join "`n") + "`n")
 }
 
 function New-Run {
@@ -48,6 +53,79 @@ function Get-ChildXdg {
     return [System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.log")
 }
 
+# T10(#46): 子の環境変数を NAME=<値>(\ は / に置換)で1行ずつ出力する子(既存 Set-Child の pwsh の子)
+function Set-EnvChild {
+    Set-Child (
+        'Write-Output ("TMPDIR=" + ($env:TMPDIR -replace "\\", "/")); ' +
+        'Write-Output ("TEMP=" + ($env:TEMP -replace "\\", "/")); ' +
+        'Write-Output ("TMP=" + ($env:TMP -replace "\\", "/")); ' +
+        'Write-Output ("GIT_CEILING_DIRECTORIES=" + ($env:GIT_CEILING_DIRECTORIES -replace "\\", "/"))'
+    )
+}
+
+# T18: Python の子(sh 版の set_py_child と同じ構え)を登録する
+function Set-PyChild {
+    param([string]$Body)
+    Write-Utf8File "$script:Proj/child.py" $Body
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg.child_agent.command_template = 'python3 ./child.py "{prompt}"'
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/T1-1/prompt.md" "prompt`n"
+}
+
+# output.log から <変数名>=<値> の行の値を返す(無ければ空文字列)。
+# Where-Object で絞り込む(1行だけのとき、配列の -match フィルタがブール値に化けるのを防ぐため)
+function Get-ChildEnvValue {
+    param([string]$Name)
+    $line = ((@((Get-Content "$script:Proj/.agents/workflow/runs/T1-1/output.log" -Encoding utf8 -ErrorAction SilentlyContinue)) | Where-Object { $_ -match "^$Name=" }) | Select-Object -First 1)
+    return ("$line" -replace "^$Name=", '')
+}
+
+# 値が .agents/workflow/runs/T1-1/tmp で終わる絶対パス(/ または <ドライブ>:/ 始まり)かを確かめる
+function Assert-RunTmpPath {
+    param([string]$Value, [string]$Message)
+    $norm = $Value -replace '\\', '/'
+    $ok = ($norm -cmatch '^[A-Za-z]:/.*/\.agents/workflow/runs/T1-1/tmp$') -or ($norm -cmatch '^/.*/\.agents/workflow/runs/T1-1/tmp$')
+    Add-Result $ok "$Message (expected / or drive-letter path ending with .agents/workflow/runs/T1-1/tmp, got '$Value')"
+}
+
+# 値が .agents/workflow/runs/T1-1 で終わる絶対パス(/ または <ドライブ>:/ 始まり)かを確かめる(GIT_CEILING_DIRECTORIES 用)
+function Assert-RunRunPath {
+    param([string]$Value, [string]$Message)
+    $norm = $Value -replace '\\', '/'
+    $ok = ($norm -cmatch '^[A-Za-z]:/.*/\.agents/workflow/runs/T1-1$') -or ($norm -cmatch '^/.*/\.agents/workflow/runs/T1-1$')
+    Add-Result $ok "$Message (expected / or drive-letter path ending with .agents/workflow/runs/T1-1, got '$Value')"
+}
+
+# 呼び出し元の TMP 系環境変数を実在ディレクトリ($script:Proj/caller-tmp)に差し替えて、
+# dispatch-run を同じプロセス内で呼ぶ(test-exitcode.ps1 の Invoke-InProcess と同じ形式)。
+# 一時ファイルを作るヘルパー(TempFileName 等)が TEMP を実在パスとして使うため実在ディレクトリにする
+# dispatch-run.ps1 直後の呼び出し元の値を $script:CallerEnvAfterRun に保存する
+# (ヘルパーの finally で戻す前の値。ケース3で「呼び出し元を書き換えない」の検証に使う)
+$script:CallerEnvAfterRun = @{}
+function Invoke-RunWithCallerTmp {
+    $null = New-Item -ItemType Directory -Force "$script:Proj/caller-tmp"
+    $saved = @{}
+    foreach ($name in @('TMPDIR', 'TEMP', 'TMP', 'GIT_CEILING_DIRECTORIES')) {
+        $saved[$name] = [System.Environment]::GetEnvironmentVariable($name)
+        Set-Item -Path "Env:$name" -Value "$script:Proj/caller-tmp"
+    }
+    Push-Location $script:Proj
+    try {
+        & "$script:Proj/.agents/workflow/scripts/dispatch-run.ps1" -TaskId T1 -Attempt 1 *> $null
+        foreach ($name in @('TMPDIR', 'TEMP', 'TMP', 'GIT_CEILING_DIRECTORIES')) {
+            $script:CallerEnvAfterRun[$name] = [System.Environment]::GetEnvironmentVariable($name)
+        }
+    } finally {
+        Pop-Location
+        foreach ($name in $saved.Keys) {
+            if ($null -eq $saved[$name]) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
+            else { Set-Item -Path "Env:$name" -Value $saved[$name] }
+        }
+    }
+}
+
 $report = "作業しました`n## 完了報告`n- 変更ファイル: a.txt`n- テスト結果: 全件パス"
 
 Write-Host "test-dispatch.ps1"
@@ -57,6 +135,15 @@ Invoke-TestCase "run: 正常終了はEXIT:0" {
     Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
     Assert-Eq "EXIT:0" (Get-DoneExit) "done marker"
     Assert-Contains ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.log")) "hello" "output.log"
+}
+
+Invoke-TestCase "run: 起動時の git 状態を git-state.txt に記録する" {
+    Set-Child 'Write-Output hello; exit 0'
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    $expected = "$(git -C "$script:Proj" rev-parse HEAD)".Trim()
+    $gitStateLines = [System.IO.File]::ReadAllLines("$script:Proj/.agents/workflow/runs/T1-1/git-state.txt")
+    Assert-Eq "head $expected" $gitStateLines[0] "git-state.txt first line"
+    Assert-Eq 4 $gitStateLines.Count "git-state.txt has 4 lines"
 }
 
 Invoke-TestCase "run: 通常の非0は数値のまま" {
@@ -77,6 +164,45 @@ Invoke-TestCase "run: isolate_xdg true は XDG を切り替える" {
     Set-Child 'Write-Output "DATA=$env:XDG_DATA_HOME"'
     Set-Isolate true
     Assert-Contains (Get-ChildXdg) "DATA=.agents/workflow/.config" "true: XDG isolated"
+}
+
+# T10(#46): sh 版(test-dispatch.sh)と同じ名前の3ケース
+Invoke-TestCase "run: 子の TMPDIR/TEMP/TMP は runs/<ID>-<試行>/tmp を指す" {
+    Set-EnvChild
+    Invoke-RunWithCallerTmp
+    Assert-RunTmpPath (Get-ChildEnvValue 'TMPDIR') "child TMPDIR points to runs/T1-1/tmp"
+    Assert-RunTmpPath (Get-ChildEnvValue 'TEMP') "child TEMP points to runs/T1-1/tmp"
+    Assert-RunTmpPath (Get-ChildEnvValue 'TMP') "child TMP points to runs/T1-1/tmp"
+    Add-Result (Test-Path -Path "$script:Proj/.agents/workflow/runs/T1-1/tmp" -PathType Container) "runs/T1-1/tmp directory exists"
+}
+
+Invoke-TestCase "run: 子の GIT_CEILING_DIRECTORIES は runs/<ID>-<試行> を指す" {
+    Set-EnvChild
+    Invoke-RunWithCallerTmp
+    Assert-RunRunPath (Get-ChildEnvValue 'GIT_CEILING_DIRECTORIES') "child GIT_CEILING_DIRECTORIES points to runs/T1-1"
+}
+
+# T18: Python の子が TMPDIR 直下で git rev-parse を実行し、本物のリポジトリが見つからない(returncode 非0)ことを確かめる
+Invoke-TestCase "run: 子が TMPDIR 直下で実行した git は本物のリポジトリを見つけない" {
+    Set-PyChild @'
+import os, subprocess
+r = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=os.environ["TMPDIR"], capture_output=True)
+print("GITRC=" + str(r.returncode))
+'@
+    Invoke-RunWithCallerTmp
+    $rc = (Get-ChildEnvValue 'GITRC').Trim()
+    Add-Result ($rc -cmatch '^\d+$' -and $rc -ne '0') "git under TMPDIR must not find the caller repo (GITRC='$rc')"
+}
+
+Invoke-TestCase "run: 呼び出し元の TMPDIR/TEMP/TMP を書き換えない" {
+    Set-EnvChild
+    Invoke-RunWithCallerTmp
+    # dispatch-run.ps1 呼び出し直後の値(ヘルパー finally で戻す前)が、
+    # 呼び出し元で設定した値のまま(= dispatch-run.ps1 が finally で戻せている)ことを確かめる
+    foreach ($name in @('TMPDIR', 'TEMP', 'TMP', 'GIT_CEILING_DIRECTORIES')) {
+        $after = $script:CallerEnvAfterRun[$name]
+        Add-Result ("$after" -ceq "$script:Proj/caller-tmp") "caller $name unchanged right after dispatch-run (expected '$script:Proj/caller-tmp', got '$after')"
+    }
 }
 
 Invoke-TestCase "check: 正常" {
@@ -216,6 +342,15 @@ Invoke-TestCase "check: guard.sha256が無ければexit 8" {
     Assert-Contains $script:Out "guard.sha256 not found" "issue"
 }
 
+Invoke-TestCase "check: git-state.txt が無ければ exit 8" {
+    New-Run 0 $report
+    Remove-Item "$script:Proj/.agents/workflow/runs/T1-1/git-state.txt"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 8 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Guard: NG" "guard ng"
+    Assert-Contains $script:Out "git-state.txt not found" "issue"
+}
+
 Invoke-TestCase "check: output.logの切り詰めはexit 8" {
     New-Run 0 $report
     Write-Utf8File "$script:Proj/a.txt" "x`n"
@@ -252,6 +387,37 @@ Invoke-TestCase "run+check: 子がprompt.mdを消せばexit 8" {
     Assert-Eq 8 $script:Code "exit code: $($script:Out)"
 }
 
+# T8: 子が本物のリポジトリの git 状態(HEAD・ブランチ・参照・設定)を変えれば exit 8
+Invoke-TestCase "run+check: 子がコミットすれば exit 8(git changed: head)" {
+    Set-State 'T1:in_progress'
+    Set-Child "git commit -q --allow-empty -m x"
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 8 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Guard: NG" "guard ng"
+    Assert-Contains $script:Out "git changed: head" "issue"
+}
+
+Invoke-TestCase "run+check: 子が git config を変えれば exit 8(git changed: config)" {
+    Set-State 'T1:in_progress'
+    Set-Child "git config user.name x"
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 8 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Guard: NG" "guard ng"
+    Assert-Contains $script:Out "git changed: config" "issue"
+}
+
+Invoke-TestCase "run+check: 子がブランチを作れば exit 8(git changed: refs)" {
+    Set-State 'T1:in_progress'
+    Set-Child "git branch x"
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 8 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Guard: NG" "guard ng"
+    Assert-Contains $script:Out "git changed: refs" "issue"
+}
+
 Invoke-TestCase "check: 報告本文の→や$で始まる行は有効" {
     New-Run 0 "## 完了報告`n- 変更ファイル: a.txt`n- テスト結果: 全件パス`n`$ npm test`n→ 要確認"
     Write-Utf8File "$script:Proj/a.txt" "x`n"
@@ -271,6 +437,95 @@ Invoke-TestCase "check: 色付きの権限拒否行もexit 6" {
     New-Run 0 "$esc[91m! permission requested: external_directory (/tmp/*); auto-rejecting$esc[0m"
     Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
     Assert-Eq 6 $script:Code "colored permission line detected: $($script:Out)"
+}
+
+# T13(#46): sh 版(test-dispatch.sh)と同じ名前の4ケース
+Invoke-TestCase "check: ツール実行行の /tmp への書き込みは exit 6(outside-access)" {
+    New-Run 0 ($report + "`n" + "$esc[0m`$ $esc[0mbash -c `"bash tests/x.sh > /tmp/dsp-ps1.log`"")
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 6 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Verdict: outside-access" "verdict"
+    Assert-Contains $script:Out "Outside access: yes" "flag"
+    Assert-Contains $script:Out "/tmp/dsp-ps1.log" "line shown"
+}
+
+Invoke-TestCase "check: runs/<ID>/tmp 配下へのアクセスは検出しない" {
+    New-Run 0 ("$esc[0m`$ $esc[0mbash tests/x.sh > .agents/workflow/runs/T1-1/tmp/out.log`n$esc[0m`$ $esc[0mecho `$TMPDIR`n" + $report)
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Outside access: no" "flag"
+}
+
+Invoke-TestCase "check: ツールの出力中の /tmp には反応しない" {
+    New-Run 0 ("PROJ=/tmp/tmp.abc`n[tool_result] /tmp/x`n" + $report)
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Outside access: no" "flag"
+}
+
+Invoke-TestCase "check: 権限拒否とプロジェクト外アクセスが両方あれば permission-denied" {
+    New-Run 0 ("! permission requested: external_directory (/tmp/*); auto-rejecting`n$esc[0m`$ $esc[0mbash -c `"bash tests/x.sh > /tmp/dsp-ps1.log`"")
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 6 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Verdict: permission-denied" "verdict"
+    Assert-Contains $script:Out "Permission denied: yes" "flag"
+    Assert-Contains $script:Out "Outside access: yes" "flag"
+}
+
+Invoke-TestCase "check: 大文字の /TMP は検出しない" {
+    # /tmp の参照は大文字小文字を区別する(/TMP は検出しない)
+    New-Run 0 ("$esc[0m`$ $esc[0mls /TMP/x`n" + $report)
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Outside access: no" "flag"
+}
+
+Invoke-TestCase "check: リダイレクト直後の ~/ は exit 6" {
+    # リダイレクト(`>`)の直後の ~/ もホームディレクトリの参照とみなす
+    New-Run 0 ($report + "`n" + "$esc[0m`$ $esc[0mbash tests/x.sh >~/out.log")
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 6 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Verdict: outside-access" "verdict"
+    Assert-Contains $script:Out "~/out.log" "line shown"
+}
+
+# T14(#46): sh 版(test-dispatch.sh)と同じ名前の3ケース
+Invoke-TestCase "check: tool_use 行のホームディレクトリ参照は exit 6" {
+    New-Run 0 ($report + "`n" + '[tool_use] bash: {"command": "cat ~/x.log"}')
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 6 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Verdict: outside-access" "verdict"
+    Assert-Contains $script:Out "Outside access: yes" "flag"
+    Assert-Contains $script:Out "~/x.log" "line shown"
+}
+
+Invoke-TestCase "check: 色付きツール実行行の USERPROFILE・AppData の Temp 参照は exit 6" {
+    New-Run 0 ("$esc[0m`$ $esc[0mGet-Content `$env:USERPROFILE\x.log`n" + $report) 'T1-2'
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 2
+    Assert-Eq 6 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Verdict: outside-access" "verdict"
+    Assert-Contains $script:Out "Outside access: yes" "flag"
+    New-Run 0 ("$esc[0m`$ $esc[0mls C:\Users\u\AppData\Local\Temp`n" + $report) 'T1-3'
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 3
+    Assert-Eq 6 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Verdict: outside-access" "verdict"
+    Assert-Contains $script:Out "Outside access: yes" "flag"
+}
+
+Invoke-TestCase "check: HOMEBREW_PREFIX や env:TEMP は検出しない" {
+    New-Run 0 ("$esc[0m`$ $esc[0mecho `$HOMEBREW_PREFIX`n$esc[0m`$ $esc[0mGet-ChildItem `$env:TEMP`n" + $report)
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Outside access: no" "flag"
 }
 
 Invoke-TestCase "check: UTF-16LEのoutput.log(Windows PowerShell 5.1)を読める" {

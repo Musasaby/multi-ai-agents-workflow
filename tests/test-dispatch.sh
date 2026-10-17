@@ -53,6 +53,38 @@ t_run_exit0() {
     assert_contains "$(cat "$PROJ/.agents/workflow/runs/T1-1/output.log")" "hello" "output.log"
 }
 
+t_run_git_state() {
+    set_child 'echo hello'
+    run_script dispatch-run.sh T1 1
+    local expected first lines
+    expected="$(git -C "$PROJ" rev-parse HEAD)"
+    first="$(head -1 "$PROJ/.agents/workflow/runs/T1-1/git-state.txt")"
+    assert_eq "head $expected" "$first" "git-state.txt first line"
+    lines="$(wc -l < "$PROJ/.agents/workflow/runs/T1-1/git-state.txt" | tr -d '[:space:]')"
+    assert_eq 4 "$lines" "git-state.txt has 4 lines"
+}
+
+t_run_git_state_no_exec() {
+    set_child 'echo hello'
+    chmod -x "$PROJ/.agents/workflow/scripts/git-state.sh"
+    run_script dispatch-run.sh T1 1
+    local expected first lines
+    expected="$(git -C "$PROJ" rev-parse HEAD)"
+    first="$(head -1 "$PROJ/.agents/workflow/runs/T1-1/git-state.txt")"
+    assert_eq "head $expected" "$first" "git-state.txt first line"
+    lines="$(wc -l < "$PROJ/.agents/workflow/runs/T1-1/git-state.txt" | tr -d '[:space:]')"
+    assert_eq 4 "$lines" "git-state.txt has 4 lines"
+}
+
+t_run_git_state_from_subdir() {
+    set_child 'echo hello'
+    mkdir -p "$PROJ/sub"
+    (cd "$PROJ/sub" && ../.agents/workflow/scripts/dispatch-run.sh T1 1) > /dev/null 2>&1
+    local lines
+    lines="$(wc -l < "$PROJ/.agents/workflow/runs/T1-1/git-state.txt" | tr -d '[:space:]')"
+    assert_eq 4 "$lines" "git-state.txt has 4 lines"
+}
+
 t_run_exit_nonzero() {
     set_child 'exit 3'
     run_script dispatch-run.sh T1 1
@@ -101,10 +133,14 @@ PY
 }
 
 # 子を python にする(Windows ネイティブ python から呼ぶ bash は WSL の bash になることがあり、
-# その場合は Windows 側の環境変数を引き継がないため)
+# その場合は Windows 側の環境変数を引き継がないため)。$1 = child.py の本文(省略時は XDG_DATA_HOME の表示)
 set_py_child() {
     set_child ''
-    printf 'import os\nprint("DATA=" + os.environ.get("XDG_DATA_HOME", ""))\n' > "$PROJ/child.py"
+    if [ -n "$1" ]; then
+        printf '%s\n' "$1" > "$PROJ/child.py"
+    else
+        printf 'import os\nprint("DATA=" + os.environ.get("XDG_DATA_HOME", ""))\n' > "$PROJ/child.py"
+    fi
     python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" <<'PY'
 import json, sys
 p = sys.argv[1]
@@ -135,9 +171,93 @@ t_run_xdg_isolated() {
     assert_contains "$(child_xdg)" "DATA=.agents/workflow/.config" "true: XDG isolated"
 }
 
+# T9(#46): 子の環境変数を NAME=<値>(\ は / に置換)で1行ずつ出力する子
+set_env_py_child() {
+    set_py_child 'import os
+print("TMPDIR=" + os.environ.get("TMPDIR", "").replace("\\", "/"))
+print("TEMP=" + os.environ.get("TEMP", "").replace("\\", "/"))
+print("TMP=" + os.environ.get("TMP", "").replace("\\", "/"))
+print("GIT_CEILING_DIRECTORIES=" + os.environ.get("GIT_CEILING_DIRECTORIES", "").replace("\\", "/"))'
+}
+
+# output.log から <変数名>=<値> の行の値を取り出す(CR を除く)
+child_env() { # $1 = 変数名
+    sed -n "s/^$1=//p" "$PROJ/.agents/workflow/runs/T1-1/output.log" | tr -d '\r'
+}
+
+# 値が .agents/workflow/runs/T1-1/tmp で終わる絶対パス(/ または <ドライブ>:/ 始まり)かを確かめる
+assert_run_tmp_path() { # $1 = 値, $2 = メッセージ
+    case "$1" in
+        /*/.agents/workflow/runs/T1-1/tmp|[A-Za-z]:/*/.agents/workflow/runs/T1-1/tmp) _record ok ;;
+        *) _record ng "$2 (expected / or drive-letter path ending with .agents/workflow/runs/T1-1/tmp, got '$1')" ;;
+    esac
+}
+
+# 値が .agents/workflow/runs/T1-1 で終わる絶対パス(/ または <ドライブ>:/ 始まり)かを確かめる(GIT_CEILING_DIRECTORIES 用)
+assert_run_run_path() { # $1 = 値, $2 = メッセージ
+    case "$1" in
+        /*/.agents/workflow/runs/T1-1|[A-Za-z]:/*/.agents/workflow/runs/T1-1) _record ok ;;
+        *) _record ng "$2 (expected / or drive-letter path ending with .agents/workflow/runs/T1-1, got '$1')" ;;
+    esac
+}
+
+# 呼び出し元の TMP 系環境変数を /caller/tmp にして dispatch-run を実行する
+run_with_caller_tmp() {
+    (
+        cd "$PROJ" &&
+        TMPDIR=/caller/tmp TEMP=/caller/tmp TMP=/caller/tmp GIT_CEILING_DIRECTORIES=/caller/tmp \
+            .agents/workflow/scripts/dispatch-run.sh T1 1
+    ) > /dev/null 2>&1
+}
+
+t_run_child_tmp_dir() {
+    set_env_py_child
+    run_with_caller_tmp
+    assert_run_tmp_path "$(child_env TMPDIR)" "child TMPDIR points to runs/T1-1/tmp"
+    assert_run_tmp_path "$(child_env TEMP)" "child TEMP points to runs/T1-1/tmp"
+    assert_run_tmp_path "$(child_env TMP)" "child TMP points to runs/T1-1/tmp"
+    if [ -d "$PROJ/.agents/workflow/runs/T1-1/tmp" ]; then _record ok; else _record ng "runs/T1-1/tmp directory exists"; fi
+}
+
+t_run_child_git_ceiling() {
+    set_env_py_child
+    run_with_caller_tmp
+    assert_run_run_path "$(child_env GIT_CEILING_DIRECTORIES)" "child GIT_CEILING_DIRECTORIES points to runs/T1-1"
+}
+
+# T18: 子が TMPDIR 直下で git rev-parse を実行し、本物のリポジトリが見つからない(returncode 非0)ことを確かめる
+t_run_child_git_no_repo() {
+    set_py_child 'import os, subprocess
+r = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=os.environ["TMPDIR"], capture_output=True)
+print("GITRC=" + str(r.returncode))'
+    run_with_caller_tmp
+    local rc
+    rc="$(child_env GITRC)"
+    case "$rc" in
+        ''|0) _record ng "git under TMPDIR must not find the caller repo (GITRC='$rc')" ;;
+        *) _record ok ;;
+    esac
+}
+
+t_run_caller_tmp_unchanged() {
+    set_env_py_child
+    local result
+    # 呼び出し元のシェル(このサブシェル)の TMPDIR/TEMP/TMP が実行後も書き換わらないことを確かめる
+    result="$(
+        export TMPDIR=/caller/tmp TEMP=/caller/tmp TMP=/caller/tmp
+        cd "$PROJ" || exit 1
+        .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1
+        printf 'TMPDIR=%s\nTEMP=%s\nTMP=%s\n' "$TMPDIR" "$TEMP" "$TMP"
+    )"
+    assert_contains "$result" "TMPDIR=/caller/tmp" "caller TMPDIR unchanged"
+    assert_contains "$result" "TEMP=/caller/tmp" "caller TEMP unchanged"
+    assert_contains "$result" "TMP=/caller/tmp" "caller TMP unchanged"
+}
+
 # ---------- dispatch-check ----------
 
-# dispatch-run と同じ形式で guard.sha256 を書く(runs/<run>/prompt.md と管理ファイル)
+# dispatch-run と同じ形式で guard.sha256 を書き(runs/<run>/prompt.md と管理ファイル)、
+# dispatch-run と同じく git-state.sh の出力で git-state.txt も書く
 write_guard() { # $1 = run 名(例: T1-1)
     local run="$1" f h
     (
@@ -148,6 +268,7 @@ write_guard() { # $1 = run 名(例: T1-1)
             printf '%s  %s\n' "$h" "$f" >> ".agents/workflow/runs/$run/guard.sha256"
         done
     )
+    (cd "$PROJ" && .agents/workflow/scripts/git-state.sh) > "$PROJ/.agents/workflow/runs/$run/git-state.txt"
 }
 
 make_run() { # $1 = EXIT 値, $2 = output.log の内容, $3 = run 名(省略時 T1-1)
@@ -305,6 +426,25 @@ t_check_guard_missing() {
     assert_contains "$OUT" "guard.sha256 not found" "issue"
 }
 
+t_check_git_state_missing() {
+    make_run 0 "$REPORT"
+    rm "$PROJ/.agents/workflow/runs/T1-1/git-state.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 8 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Guard: NG" "guard ng"
+    assert_contains "$OUT" "git-state.txt not found" "issue"
+}
+
+t_check_git_state_no_exec() {
+    make_run 0 "$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    chmod -x "$PROJ/.agents/workflow/scripts/git-state.sh"
+    (cd "$PROJ" && git commit --allow-empty -q -m x)
+    run_script dispatch-check.sh T1 1
+    assert_eq 8 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "git changed: head" "issue"
+}
+
 t_check_log_truncated() {
     make_run 0 "$REPORT"
     printf 'x\n' > "$PROJ/a.txt"
@@ -344,6 +484,50 @@ t_run_then_check_child_deletes_prompt() {
     assert_eq 8 "$CODE" "exit code: $OUT"
 }
 
+# git を実行する子を python にする(Windows で bash が WSL の bash に解決される場合があるため、
+# 既存の set_py_child と同じ python の子にする)。$1 = child.py の本文
+set_git_py_child() {
+    set_child ''
+    printf '%s\n' "$1" > "$PROJ/child.py"
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" <<'PY'
+import json, sys
+p = sys.argv[1]
+with open(p, encoding='utf-8') as f:
+    cfg = json.load(f)
+cfg['child_agent']['command_template'] = 'python3 ./child.py "{prompt}"'
+with open(p, 'w', encoding='utf-8') as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+PY
+}
+
+# T7: 子が本物のリポジトリの git 状態(HEAD・ブランチ・参照・設定)を変えれば exit 8
+t_run_then_check_child_commits() {
+    set_git_py_child 'import subprocess; subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "x"])'
+    run_script dispatch-run.sh T1 1
+    run_script dispatch-check.sh T1 1
+    assert_eq 8 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Guard: NG" "guard ng"
+    assert_contains "$OUT" "git changed: head" "issue"
+}
+
+t_run_then_check_child_changes_config() {
+    set_git_py_child 'import subprocess; subprocess.run(["git", "config", "user.name", "x"])'
+    run_script dispatch-run.sh T1 1
+    run_script dispatch-check.sh T1 1
+    assert_eq 8 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Guard: NG" "guard ng"
+    assert_contains "$OUT" "git changed: config" "issue"
+}
+
+t_run_then_check_child_creates_branch() {
+    set_git_py_child 'import subprocess; subprocess.run(["git", "branch", "x"])'
+    run_script dispatch-run.sh T1 1
+    run_script dispatch-check.sh T1 1
+    assert_eq 8 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Guard: NG" "guard ng"
+    assert_contains "$OUT" "git changed: refs" "issue"
+}
+
 t_check_report_body_symbols() {
     # 報告本文の `→ ` や `$ ` で始まる行(色なし)はツール実行の記録とみなさない
     make_run 0 $'## 完了報告\n- 変更ファイル: a.txt\n- テスト結果: 全件パス\n$ npm test\n→ 要確認'
@@ -370,15 +554,124 @@ t_check_permission_denied_colored() {
     assert_eq 6 "$CODE" "colored permission line detected: $OUT"
 }
 
+# T12: 権限を拒否されずに成功したプロジェクト外(/tmp 等)へのアクセスを検出する(exit 6)
+t_check_outside_access_tmp_write() {
+    make_run 0 "$REPORT
+${ESC}[0m\$ ${ESC}[0mbash -c \"bash tests/x.sh > /tmp/dsp-sh.log\""
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 6 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Verdict: outside-access" "verdict"
+    assert_contains "$OUT" "Outside access: yes" "flag"
+    assert_contains "$OUT" "/tmp/dsp-sh.log" "line shown"
+}
+
+t_check_outside_access_runs_tmp_ok() {
+    make_run 0 "${ESC}[0m\$ ${ESC}[0mbash tests/x.sh > .agents/workflow/runs/T1-1/tmp/out.log
+${ESC}[0m\$ ${ESC}[0mecho \$TMPDIR
+$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Outside access: no" "flag"
+}
+
+t_check_outside_access_tool_output_ignored() {
+    make_run 0 "PROJ=/tmp/tmp.abc
+[tool_result] /tmp/x
+$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Outside access: no" "flag"
+}
+
+t_check_outside_access_with_permission_denied() {
+    make_run 0 "! permission requested: external_directory (/tmp/*); auto-rejecting
+${ESC}[0m\$ ${ESC}[0mbash -c \"bash tests/x.sh > /tmp/dsp-sh.log\""
+    run_script dispatch-check.sh T1 1
+    assert_eq 6 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Verdict: permission-denied" "verdict"
+    assert_contains "$OUT" "Permission denied: yes" "flag"
+    assert_contains "$OUT" "Outside access: yes" "flag"
+}
+
+t_check_outside_access_tmp_uppercase_ok() {
+    # /tmp の参照は大文字小文字を区別する(/TMP は検出しない)
+    make_run 0 "${ESC}[0m\$ ${ESC}[0mls /TMP/x
+$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Outside access: no" "flag"
+}
+
+t_check_outside_access_home_redirect() {
+    # リダイレクト(`>`)の直後の ~/ もホームディレクトリの参照とみなす
+    make_run 0 "$REPORT
+${ESC}[0m\$ ${ESC}[0mbash tests/x.sh >~/out.log"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 6 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Verdict: outside-access" "verdict"
+    assert_contains "$OUT" "~/out.log" "line shown"
+}
+
+# T14: ホームディレクトリ・AppData の Temp への参照も検出する(exit 6)
+t_check_outside_access_tool_use_home() {
+    make_run 0 "$REPORT
+[tool_use] bash: {\"command\": \"cat ~/x.log\"}"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 6 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Verdict: outside-access" "verdict"
+    assert_contains "$OUT" "Outside access: yes" "flag"
+    assert_contains "$OUT" "~/x.log" "line shown"
+}
+
+t_check_outside_access_userprofile_temp() {
+    make_run 0 "${ESC}[0m\$ ${ESC}[0mGet-Content \$env:USERPROFILE\\x.log
+$REPORT" T1-2
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 2
+    assert_eq 6 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Verdict: outside-access" "verdict"
+    assert_contains "$OUT" "Outside access: yes" "flag"
+    make_run 0 "${ESC}[0m\$ ${ESC}[0mls C:\\Users\\u\\AppData\\Local\\Temp
+$REPORT" T1-3
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 3
+    assert_eq 6 "$CODE" "exit code: $OUT (appdata temp)"
+    assert_contains "$OUT" "Verdict: outside-access" "verdict (appdata temp)"
+    assert_contains "$OUT" "Outside access: yes" "flag (appdata temp)"
+}
+
+t_check_outside_access_home_not_detected() {
+    make_run 0 "${ESC}[0m\$ ${ESC}[0mecho \$HOMEBREW_PREFIX
+${ESC}[0m\$ ${ESC}[0mGet-ChildItem \$env:TEMP
+$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Outside access: no" "flag"
+}
+
 echo "test-dispatch.sh"
 
 test_case "run: 正常終了はEXIT:0" t_run_exit0
+test_case "run: 起動時の git 状態を git-state.txt に記録する" t_run_git_state
+test_case "run: git-state.sh に実行権限が無くても git-state.txt を4行で書く" t_run_git_state_no_exec
+test_case "run: プロジェクトルート以外から相対パスで起動しても git-state.txt を書く" t_run_git_state_from_subdir
 test_case "run: 通常の非0は数値のまま" t_run_exit_nonzero
 test_case "run: SIGTERMはsignal:15(python経路)" t_run_signal_python
 test_case "run: SIGTERMはsignal:15(フォールバック経路)" t_run_signal_fallback
 test_case "run: 通常の非0は数値のまま(フォールバック経路)" t_run_exit_fallback
 test_case "run: isolate_xdg 未指定/false は XDG を引き継ぐ" t_run_xdg_inherited_by_default
 test_case "run: isolate_xdg true は XDG を切り替える" t_run_xdg_isolated
+test_case "run: 子の TMPDIR/TEMP/TMP は runs/<ID>-<試行>/tmp を指す" t_run_child_tmp_dir
+test_case "run: 子の GIT_CEILING_DIRECTORIES は runs/<ID>-<試行> を指す" t_run_child_git_ceiling
+test_case "run: 子が TMPDIR 直下で実行した git は本物のリポジトリを見つけない" t_run_child_git_no_repo
+test_case "run: 呼び出し元の TMPDIR/TEMP/TMP を書き換えない" t_run_caller_tmp_unchanged
 test_case "check: 正常" t_check_ok
 test_case "check: signalはexit 4" t_check_signal
 test_case "check: 非0はexit 4" t_check_nonzero
@@ -396,11 +689,25 @@ test_case "check: PR作成のrunは変更0件でも正常" t_check_pr_run_withou
 test_case "check: state.jsonの変更はexit 8" t_check_state_changed
 test_case "check: prompt.mdの削除はexit 8" t_check_prompt_deleted
 test_case "check: guard.sha256が無ければexit 8" t_check_guard_missing
+test_case "check: git-state.txt が無ければ exit 8" t_check_git_state_missing
+test_case "check: git-state.sh に実行権限が無くても git 状態の変化を検出する" t_check_git_state_no_exec
 test_case "check: output.logの切り詰めはexit 8" t_check_log_truncated
 test_case "check: 切り詰められたoutput.logの表示にNULを含めない" t_check_log_truncated_display_no_nul
 test_case "run+check: 子が正常に完了すればexit 0" t_run_then_check_ok
 test_case "run+check: 子がprompt.mdを消せばexit 8" t_run_then_check_child_deletes_prompt
+test_case "run+check: 子がコミットすれば exit 8(git changed: head)" t_run_then_check_child_commits
+test_case "run+check: 子が git config を変えれば exit 8(git changed: config)" t_run_then_check_child_changes_config
+test_case "run+check: 子がブランチを作れば exit 8(git changed: refs)" t_run_then_check_child_creates_branch
 test_case "check: 報告本文の→や$で始まる行は有効" t_check_report_body_symbols
 test_case "check: 表示されたソース中の権限拒否の文字列には反応しない" t_check_quoted_permission_text
 test_case "check: 色付きの権限拒否行もexit 6" t_check_permission_denied_colored
+test_case "check: ツール実行行の /tmp への書き込みは exit 6(outside-access)" t_check_outside_access_tmp_write
+test_case "check: runs/<ID>/tmp 配下へのアクセスは検出しない" t_check_outside_access_runs_tmp_ok
+test_case "check: ツールの出力中の /tmp には反応しない" t_check_outside_access_tool_output_ignored
+test_case "check: 権限拒否とプロジェクト外アクセスが両方あれば permission-denied" t_check_outside_access_with_permission_denied
+test_case "check: 大文字の /TMP は検出しない" t_check_outside_access_tmp_uppercase_ok
+test_case "check: リダイレクト直後の ~/ は exit 6" t_check_outside_access_home_redirect
+test_case "check: tool_use 行のホームディレクトリ参照は exit 6" t_check_outside_access_tool_use_home
+test_case "check: 色付きツール実行行の USERPROFILE・AppData の Temp 参照は exit 6" t_check_outside_access_userprofile_temp
+test_case "check: HOMEBREW_PREFIX や env:TEMP は検出しない" t_check_outside_access_home_not_detected
 summary
