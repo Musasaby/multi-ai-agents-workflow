@@ -39,14 +39,17 @@ stdout の最後の `Next:` 行で機械的に分岐する(exit code の帯と r
 
 - **`Next: wait`**: 起動できた。ユーザーに Run ID・`Log:`・`Watch:` の行を報告して §2 へ進む
 - **`Next: switch-branch` / `Next: escalate`**: 起動していない。reason と stderr の内容をユーザーに
-  説明して中断する
+  説明して中断する。`reason=launch`(`dispatch-run` の起動を確認できない)の場合は、state.json が
+  `in_progress` のままなので、原因を直した後に同じ引数で `dispatch-start` を再実行できる
 
 **親は生成された prompt.md の全文を会話に読み込まない**(読み込むとスクリプト化によるトークン節約が
 無意味になる)。異常が疑われる場合のみ、先頭数十行を確認するにとどめる。
 
 **リトライ(試行回数 2 以上)**: 先に、レビュー指摘事項を `runs/<タスクID>-<試行回数>/fix-notes.md` に
 親が保存する(ここだけは親の LLM 出力)。生成スクリプトがそれをプロンプト冒頭に結合する。
-`fix-notes.md` が無いと失敗する。
+`fix-notes.md` が無いと `dispatch-start` が止まる(前の試行の変更が作業ツリーに残っていれば
+exit 20 `reason=dirty-tree` で stderr に `fix-notes.md not found` を出し、作業ツリーがクリーンなら
+exit 43 `reason=prompt-gen`)。
 
 **フォールバック(手動プロンプト作成)**: 指摘事項が複雑で fix-notes に収まらない場合のみ、
 `dispatch-prompt-gen` を使わず、親が `runs/<タスクID>-<試行回数>/prompt.md` を直接書く。
