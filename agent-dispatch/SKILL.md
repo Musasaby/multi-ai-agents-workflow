@@ -261,7 +261,7 @@ exit 3 になる。
   完了報告の判定・変更件数・`git status --porcelain`・`git diff --stat`・`output.log` の
   末尾30行をまとめて出力する。完了報告は「`output.log` の最後の `## 完了報告`」だけを対象にし、
   その後にツール実行の記録が続く場合や、必須項目(`- 変更ファイル:` / `- テスト結果:`。
-  PR 作成の run は `- PR URL:`)が無い・テンプレートのままの場合は無効とする
+  PR 作成の run は `- PR URL:`。区切りは全角 `：` も可)が無い・テンプレートのままの場合は無効とする
   (子がテンプレートを表示しただけの行を完了報告と誤認しないため)
   ```powershell
   .agents/workflow/scripts/dispatch-check.ps1 -TaskId T1 -Attempt 1

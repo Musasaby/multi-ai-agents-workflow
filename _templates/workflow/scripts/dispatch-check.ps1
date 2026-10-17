@@ -193,6 +193,7 @@ if ($cliLog -ne '') {
 # 最後に出現する `## 完了報告` だけを対象にし、その後にツール実行の記録が続く場合は無効とする
 # (子がテンプレートやドキュメントを表示しただけの行に一致させないため)。必須項目は
 # 通常のタスクが「変更ファイル」「テスト結果」、PR 作成の run(pr-*)が「PR URL」。
+# 必須項目行の区切りは半角 `:` と全角 `：` のどちらでもよい。
 # 値が同じ行に無い場合は、次の行からのインデントされた箇条書きを値とみなす。
 function Get-ReportResult {
     param([string[]]$Lines, [bool[]]$ToolFlags, [string[]]$Required)
@@ -211,10 +212,13 @@ function Get-ReportResult {
     $end = $Lines.Count - 1
     for ($i = $last + 1; $i -lt $Lines.Count; $i++) { if ($Lines[$i] -match '^## ') { $end = $i - 1; break } }
     foreach ($field in $Required) {
-        $prefix = "- ${field}:"
+        # 区切りは半角 `:` と全角 `：` のどちらも受け付ける(#55: 日本語で応答する子は全角で書くことがある)
+        $prefixes = @("- ${field}:", "- ${field}：")
         $found = $false
         for ($i = $last + 1; $i -le $end; $i++) {
-            if (-not $Lines[$i].StartsWith($prefix, [System.StringComparison]::Ordinal)) { continue }
+            $prefix = $null
+            foreach ($p in $prefixes) { if ($Lines[$i].StartsWith($p, [System.StringComparison]::Ordinal)) { $prefix = $p; break } }
+            if ($null -eq $prefix) { continue }
             $value = $Lines[$i].Substring($prefix.Length).Trim()
             if ($value -eq '' -and $i -lt $end -and $Lines[$i + 1] -match '^[ \t]+[^ \t]') { $value = '(list)' }
             if ($value -eq '') { return "invalid (empty field: $field)" }

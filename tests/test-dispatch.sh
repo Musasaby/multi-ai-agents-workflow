@@ -444,6 +444,21 @@ t_check_report_missing_field() {
     assert_contains "$OUT" "missing field: テスト結果" "reason"
 }
 
+t_check_report_fullwidth_required_fields() {
+    make_run 0 $'## 完了報告\n- 変更ファイル：\n  - a.txt\n- テストコマンド: bash tests/test.sh\n- テスト結果： 全件パス'
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Completion report: found" "report"
+}
+
+t_check_report_fullwidth_pr_url() {
+    make_run 0 $'## 完了報告\n- PR URL： https://github.com/o/r/pull/1' pr-1-1
+    run_script dispatch-check.sh pr-1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Completion report: found" "report"
+}
+
 t_check_report_list_value_and_ansi() {
     # 値が次行以降の箇条書き・CRLF・ANSI エスケープ・前方のツール実行行があっても有効
     make_run 0 "${ESC}[0m\$ ${ESC}[0mbash tests/test.sh"$'\r\n## 完了報告\r\n- 変更ファイル:\r\n  - `a.txt`\r\n- テスト結果: 全件パス\r'
@@ -802,6 +817,8 @@ test_case "check: BOM付きdone" t_check_bom_done
 test_case "check: 完了報告の後にツール実行が続けば無効(exit 5)" t_check_report_then_tool_activity
 test_case "check: テンプレートのままの完了報告は無効(exit 5)" t_check_report_placeholder
 test_case "check: 必須項目が無い完了報告は無効(exit 5)" t_check_report_missing_field
+test_case "check: 全角コロンの必須項目も有効(exit 0)" t_check_report_fullwidth_required_fields
+test_case "check: 全角コロンのPR URLも有効(exit 0)" t_check_report_fullwidth_pr_url
 test_case "check: 箇条書きの値・CRLF・ANSIを含む完了報告は有効" t_check_report_list_value_and_ansi
 test_case "check: 権限拒否はexit 6" t_check_permission_denied
 test_case "check: 変更0件はexit 7" t_check_no_changes

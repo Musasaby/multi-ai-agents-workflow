@@ -318,7 +318,8 @@ nohup .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1 &
   その後にツール実行の記録(opencode が色付きで出すマーカー行 = ANSI エスケープに挟まれた
   `$ ` / `→ ` / `← ` / `✱ ` / `✗ ` / `⚙ ` / `! `、stream-json の `[tool_use]` / `[tool_result]` 行)が
   続く場合は無効(報告本文の色なしの `→ 要確認` や `$ npm test` はツール実行とみなさない)。必須項目は通常のタスクが
-  `- 変更ファイル:` と `- テスト結果:`、PR 作成の run(`pr-*`)が `- PR URL:`。値が空・
+  `- 変更ファイル:` と `- テスト結果:`、PR 作成の run(`pr-*`)が `- PR URL:`。項目名の後の区切りは
+  半角 `:` と全角 `：` のどちらでもよい(#55)。値が空・
   `<...>` のまま(テンプレート)の場合も無効。報告が無い場合は `missing` で、最後のツール実行の
   記録より後に子が何も出力せず終わった場合は
   `missing (no output after the last tool call; the model may have hit the output token limit)` になる

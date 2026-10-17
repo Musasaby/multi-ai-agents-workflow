@@ -186,6 +186,7 @@ fi
 # opencode が色付きで出すマーカー行(`ESC[0m$ ESC[0m...` 等)と stream-json の `[tool_use]` /
 # `[tool_result]` 行に限る(報告本文の `→ 要確認` や `$ npm test` は対象外)。必須項目は
 # 通常のタスクが「変更ファイル」「テスト結果」、PR 作成の run(pr-*)が「PR URL」。
+# 区切りは半角 `:` と全角 `：` のどちらでもよい。
 # 値が同じ行に無い場合は、次の行からのインデントされた箇条書きを値とみなす。
 REPORT_RESULT="$(printf '%s\n' "$RAW_LOG" | LC_ALL=C awk -v esc="$ESC" -v required="$REQUIRED" '
     {
@@ -211,11 +212,14 @@ REPORT_RESULT="$(printf '%s\n' "$RAW_LOG" | LC_ALL=C awk -v esc="$ESC" -v requir
         for (i = last + 1; i <= NR; i++) if (lines[i] ~ /^## /) { end = i - 1; break }
         n = split(required, fields, "|")
         for (k = 1; k <= n; k++) {
-            prefix = "- " fields[k] ":"
             found = 0
             for (i = last + 1; i <= end; i++) {
-                if (index(lines[i], prefix) != 1) continue
-                value = substr(lines[i], length(prefix) + 1)
+                # 区切りは半角 `:` と全角 `：` のどちらも受け付ける(#55: 日本語で応答する子は全角で書くことがある)
+                plen = 0
+                if (index(lines[i], "- " fields[k] ":") == 1) plen = length("- " fields[k] ":")
+                else if (index(lines[i], "- " fields[k] "：") == 1) plen = length("- " fields[k] "：")
+                if (!plen) continue
+                value = substr(lines[i], plen + 1)
                 gsub(/^[ \t]+|[ \t]+$/, "", value)
                 if (value == "" && i < end && lines[i + 1] ~ /^[ \t]+[^ \t]/) value = "(list)"
                 if (value == "") { print "invalid (empty field: " fields[k] ")"; exit }
