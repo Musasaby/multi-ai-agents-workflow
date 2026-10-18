@@ -87,10 +87,40 @@ t_old_layout() {
     remove_claude_link
 }
 
+t_xdg_false() {
+    setup_empty_project
+    run_setup
+    assert_eq 0 "$CODE" "exit 0: $OUT $ERR"
+    assert_file_absent "$PROJ/.agents/workflow/.config" ".config not created"
+    assert_not_contains "$OUT" "CREATED .agents/workflow/.config" "no .config CREATED line"
+    remove_claude_link
+}
+
+t_xdg_true() {
+    setup_empty_project
+    run_setup
+    python3 - "$PROJ/.agents/workflow/config.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+c = json.load(open(p, encoding='utf-8'))
+c.setdefault('child_agent', {})['isolate_xdg'] = True
+c['child_agent']['note'] = '日本語'
+json.dump(c, open(p, 'w', encoding='utf-8'), indent=2, ensure_ascii=False)
+PY
+    run_setup
+    assert_eq 0 "$CODE" "2nd run exit 0: $OUT $ERR"
+    assert_contains "$OUT" "CREATED .agents/workflow/.config" "CREATED .config"
+    if [ -d "$PROJ/.agents/workflow/.config" ]; then _record ok; else _record ng ".config dir not created"; fi
+    assert_file_absent "$PROJ/.agents/workflow/.config/opencode" "opencode dir not created"
+    remove_claude_link
+}
+
 echo "test-workflow-setup.sh"
 test_case "setup: 空の利用先に必要なものを揃える" t_setup
 test_case "setup: 2回目の実行では何も変えない" t_idempotent
 test_case "setup: 既存の CLAUDE.md の内容は上書きせず DECIDE を出す" t_claude_md_kept
 test_case "setup: --check は何も変えずに不足を出す" t_check
 test_case "setup: 旧レイアウトを DECIDE で知らせる" t_old_layout
+test_case "setup: isolate_xdg が false なら .agents/workflow/.config を作らない" t_xdg_false
+test_case "setup: isolate_xdg が true なら .agents/workflow/.config を作る" t_xdg_true
 summary
