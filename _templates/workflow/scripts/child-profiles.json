@@ -1,0 +1,38 @@
+{
+  "auto": {
+    "description": "profile 未指定時の既定。command_template に stream-json を含めば claude-stream-json の出力変換を行い、検知には opencode と claude-stream-json の両方のパターンを使う(従来の挙動)",
+    "output_format": "auto",
+    "tool_activity_pattern": "^\u001b\\[[0-9;]*m(\\$|→|←|✱|✗|⚙|!) \u001b\\[[0-9;]*m|^\\[tool_(use|result)\\]",
+    "tool_call_pattern": "^\u001b\\[[0-9;]*m(\\$|→|←|✱|✗|⚙) \u001b\\[[0-9;]*m|^\\[tool_use\\]",
+    "permission_denied_pattern": "^! permission requested: .*auto-rejecting",
+    "provider_error_pattern": "usage limit|rate limit|endpoint is unavailable|(^|[^0-9a-z])429([^0-9a-z]|$)",
+    "agents_md_imports": false
+  },
+  "opencode": {
+    "description": "opencode run(テキスト出力。ツール実行は ANSI 色付きのマーカー行)",
+    "output_format": "text",
+    "tool_activity_pattern": "^\u001b\\[[0-9;]*m(\\$|→|←|✱|✗|⚙|!) \u001b\\[[0-9;]*m",
+    "tool_call_pattern": "^\u001b\\[[0-9;]*m(\\$|→|←|✱|✗|⚙) \u001b\\[[0-9;]*m",
+    "permission_denied_pattern": "^! permission requested: .*auto-rejecting",
+    "provider_error_pattern": "usage limit|rate limit|endpoint is unavailable|(^|[^0-9a-z])429([^0-9a-z]|$)",
+    "agents_md_imports": false
+  },
+  "claude-stream-json": {
+    "description": "Claude Code(claude -p --output-format stream-json --verbose)。dispatch-run が JSON 行を [tool_use] / [tool_result] 等の行に変換する",
+    "output_format": "claude-stream-json",
+    "tool_activity_pattern": "^\\[tool_(use|result)\\]",
+    "tool_call_pattern": "^\\[tool_use\\]",
+    "permission_denied_pattern": "",
+    "provider_error_pattern": "usage limit|rate limit|endpoint is unavailable|(^|[^0-9a-z])429([^0-9a-z]|$)",
+    "agents_md_imports": true
+  },
+  "plain": {
+    "description": "出力形式が不明な CLI。出力はそのまま output.log に書き、ログに依存する検知はすべて無効",
+    "output_format": "text",
+    "tool_activity_pattern": "",
+    "tool_call_pattern": "",
+    "permission_denied_pattern": "",
+    "provider_error_pattern": "",
+    "agents_md_imports": false
+  }
+}
