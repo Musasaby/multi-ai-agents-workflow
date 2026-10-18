@@ -225,6 +225,7 @@ if insert:
 try:
     tasklib.resolve_deps(tasks, check_cycles=True)
     tasklib.check_group_deps(tasks, order)
+    req_table = tasklib.check_requirements(tasks, content)
 except tasklib.TaskFileError as e:
     fail(str(e))
 
@@ -264,6 +265,9 @@ if lines is not None:
 with open(state_path, 'w', encoding='utf-8', newline='\n') as f:
     json.dump(state, f, ensure_ascii=False, indent=2)
     f.write('\n')
+
+for label, tids in req_table:
+    print('Requirement ' + label + ': ' + ', '.join(tids))
 PY
 
 echo "Synced: $STATE_PATH"

@@ -151,6 +151,56 @@ Invoke-TestCase "sync: 追記 タイトル不変なら Updated を出さない" 
     Assert-NotContains $script:Out "Updated title" "no Updated title when unchanged"
 }
 
+# ---------- 要件の検証と対応表 (#66) ----------
+
+Invoke-TestCase "sync: 要件がすべてタスクに対応すれば対応表を出す" {
+    Set-Tasks "## 要件`n- R1: 一つ目`n- R2: 二つ目`n`n## T1: a`n- **要件**: R1, R2`n- **依存**: なし`n`n## T2: b`n- **要件**: R1`n- **依存**: T1`n`n## T3: c`n- **要件**: なし`n- **依存**: T2`n"
+    Invoke-Script state-sync.ps1 -Init -Source test
+    Assert-Eq 0 $script:Code "init succeeds: $($script:Err)"
+    Assert-Contains $script:Out "Requirement R1: T1, T2" "R1 row"
+    Assert-Contains $script:Out "Requirement R2: T1" "R2 row"
+    Assert-Contains $script:Out "Requirement なし: T3" "none row"
+}
+
+Invoke-TestCase "sync: 要件節も要件欄も無ければ対応表を出さない" {
+    Set-Tasks $basicTasks
+    Invoke-Script state-sync.ps1 -Init -Source test
+    Assert-Eq 0 $script:Code "init succeeds: $($script:Err)"
+    Assert-NotContains $script:Out "Requirement" "no Requirement lines"
+}
+
+Invoke-TestCase "sync: どのタスクにも対応しない要件はexit 1" {
+    Set-Tasks "## 要件`n- R1: 一つ目`n- R2: 二つ目`n`n## T1: a`n- **要件**: R1`n- **依存**: なし`n"
+    Invoke-Script state-sync.ps1 -Init -Source test
+    Assert-Eq 1 $script:Code "exit code"
+    Assert-Contains $script:Err "Uncovered requirement: R2" "stderr names uncovered requirement"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/state.json" "state.json not created"
+}
+
+Invoke-TestCase "sync: 存在しない要件IDはexit 1" {
+    Set-Tasks "## 要件`n- R1: 一つ目`n`n## T1: a`n- **要件**: R1, R9`n- **依存**: なし`n"
+    Invoke-Script state-sync.ps1 -Init -Source test
+    Assert-Eq 1 $script:Code "exit code"
+    Assert-Contains $script:Err "unknown requirement 'R9'" "stderr names unknown id"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/state.json" "state.json not created"
+}
+
+Invoke-TestCase "sync: 要件節があるのに要件欄が無いタスクはexit 1" {
+    Set-Tasks "## 要件`n- R1: 一つ目`n`n## T1: a`n- **要件**: R1`n- **依存**: なし`n`n## T2: b`n- **依存**: T1`n"
+    Invoke-Script state-sync.ps1 -Init -Source test
+    Assert-Eq 1 $script:Code "exit code"
+    Assert-Contains $script:Err "T2: requirement line" "stderr names the task"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/state.json" "state.json not created"
+}
+
+Invoke-TestCase "sync: 要件節の形式違反の行はexit 1" {
+    Set-Tasks "## 要件`n- R1: 一つ目`n- 二つ目`n`n## T1: a`n- **要件**: R1`n- **依存**: なし`n"
+    Invoke-Script state-sync.ps1 -Init -Source test
+    Assert-Eq 1 $script:Code "exit code"
+    Assert-Contains $script:Err "Malformed requirement line" "stderr reports malformed line"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/state.json" "state.json not created"
+}
+
 # ---------- グループ解析とグループ間依存の検証 (#30) ----------
 
 # tasklib のグループ解析(Read-TaskList / Get-GroupOrder)を直接検証する

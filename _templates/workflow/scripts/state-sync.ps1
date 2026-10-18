@@ -132,9 +132,11 @@ if ($Insert) {
 }
 
 # --- 依存欄とグループの検証(全モード共通。state.json を書く前に失敗させる) ---
+$reqTable = @()
 try {
     [void](Resolve-TaskDeps $tasks -CheckCycles)
     [void](Test-GroupDeps $tasks $groupOrder)
+    $reqTable = @(Test-Requirements $tasks $lines)
 } catch {
     Fail $_.Exception.Message
 }
@@ -195,5 +197,6 @@ if ($tasksChanged) {
 
 $json = $state | ConvertTo-Json -Depth 10
 [System.IO.File]::WriteAllText($StatePath, $json + "`n", $utf8NoBom)
+foreach ($row in $reqTable) { Write-Output "Requirement $($row.label): $($row.tasks -join ', ')" }
 Write-Output "Synced: $StatePath"
 exit 0

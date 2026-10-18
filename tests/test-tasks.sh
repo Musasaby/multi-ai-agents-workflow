@@ -193,6 +193,105 @@ t_sync_append_title_unchanged_silent() {
     assert_not_contains "$OUT" "Updated title" "no Updated title when unchanged"
 }
 
+# ---------- 要件の検証と対応表 (#66) ----------
+
+t_sync_req_table_printed() {
+    write_tasks <<'EOT'
+## 要件
+- R1: 一つ目
+- R2: 二つ目
+
+## T1: a
+- **要件**: R1, R2
+- **依存**: なし
+
+## T2: b
+- **要件**: R1
+- **依存**: T1
+
+## T3: c
+- **要件**: なし
+- **依存**: T2
+EOT
+    run_script state-sync.sh --init --source test
+    assert_eq 0 "$CODE" "init succeeds: $ERR"
+    assert_contains "$OUT" "Requirement R1: T1, T2" "R1 row"
+    assert_contains "$OUT" "Requirement R2: T1" "R2 row"
+    assert_contains "$OUT" "Requirement なし: T3" "none row"
+}
+
+t_sync_req_no_section_unchanged() {
+    basic_tasks
+    run_script state-sync.sh --init --source test
+    assert_eq 0 "$CODE" "init succeeds: $ERR"
+    assert_not_contains "$OUT" "Requirement" "no Requirement lines"
+}
+
+t_sync_req_uncovered_rejected() {
+    write_tasks <<'EOT'
+## 要件
+- R1: 一つ目
+- R2: 二つ目
+
+## T1: a
+- **要件**: R1
+- **依存**: なし
+EOT
+    run_script state-sync.sh --init --source test
+    assert_eq 1 "$CODE" "exit code"
+    assert_contains "$ERR" "Uncovered requirement: R2" "stderr names uncovered requirement"
+    assert_file_absent "$PROJ/.agents/workflow/state.json" "state.json not created"
+}
+
+t_sync_req_unknown_id_rejected() {
+    write_tasks <<'EOT'
+## 要件
+- R1: 一つ目
+
+## T1: a
+- **要件**: R1, R9
+- **依存**: なし
+EOT
+    run_script state-sync.sh --init --source test
+    assert_eq 1 "$CODE" "exit code"
+    assert_contains "$ERR" "unknown requirement 'R9'" "stderr names unknown id"
+    assert_file_absent "$PROJ/.agents/workflow/state.json" "state.json not created"
+}
+
+t_sync_req_missing_field_rejected() {
+    write_tasks <<'EOT'
+## 要件
+- R1: 一つ目
+
+## T1: a
+- **要件**: R1
+- **依存**: なし
+
+## T2: b
+- **依存**: T1
+EOT
+    run_script state-sync.sh --init --source test
+    assert_eq 1 "$CODE" "exit code"
+    assert_contains "$ERR" "T2: requirement line" "stderr names the task"
+    assert_file_absent "$PROJ/.agents/workflow/state.json" "state.json not created"
+}
+
+t_sync_req_malformed_line_rejected() {
+    write_tasks <<'EOT'
+## 要件
+- R1: 一つ目
+- 二つ目
+
+## T1: a
+- **要件**: R1
+- **依存**: なし
+EOT
+    run_script state-sync.sh --init --source test
+    assert_eq 1 "$CODE" "exit code"
+    assert_contains "$ERR" "Malformed requirement line" "stderr reports malformed line"
+    assert_file_absent "$PROJ/.agents/workflow/state.json" "state.json not created"
+}
+
 # ---------- グループ解析とグループ間依存の検証 (#30) ----------
 
 # 解析結果のグループ一覧: 標準出力に "T1=,T2=P,..." 形式
@@ -957,6 +1056,12 @@ test_case "sync: 追記 不正ならstate不変" t_sync_append_invalid_keeps_sta
 test_case "sync: 追記 正常" t_sync_append_valid
 test_case "sync: 追記 既存タスクのタイトルを更新" t_sync_append_title_updated
 test_case "sync: 追記 タイトル不変なら Updated を出さない" t_sync_append_title_unchanged_silent
+test_case "sync: 要件がすべてタスクに対応すれば対応表を出す" t_sync_req_table_printed
+test_case "sync: 要件節も要件欄も無ければ対応表を出さない" t_sync_req_no_section_unchanged
+test_case "sync: どのタスクにも対応しない要件はexit 1" t_sync_req_uncovered_rejected
+test_case "sync: 存在しない要件IDはexit 1" t_sync_req_unknown_id_rejected
+test_case "sync: 要件節があるのに要件欄が無いタスクはexit 1" t_sync_req_missing_field_rejected
+test_case "sync: 要件節の形式違反の行はexit 1" t_sync_req_malformed_line_rejected
 test_case "sync: グループ区切りの解析" t_sync_group_parse
 test_case "sync: グループ欄は位置より優先" t_sync_group_field_overrides
 test_case "sync: 存在しないグループ名はexit 1" t_sync_group_unknown_rejected

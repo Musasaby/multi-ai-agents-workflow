@@ -9,6 +9,10 @@ $script:DepFormatHint = "expected 'なし' or comma-separated task IDs like 'T1,
 $script:GroupLinePattern = '^<!--\s*グループ\s+([^\s:]+)(?:\s*:\s*(.*?))?\s*-->\s*$'
 $script:GroupFieldPattern = '^(\s*-\s+\*\*グループ\*\*:)[ \t]*(.*?)[ \t]*$'
 $script:DefaultGroup = ''
+$script:ReqSection = '## 要件'
+$script:ReqLinePattern = '^- (R\d+):[ \t]*(\S.*?)[ \t]*$'
+$script:ReqFieldPattern = '^(\s*-\s+\*\*要件\*\*:)[ \t]*(.*?)[ \t]*$'
+$script:ReqFormatHint = "expected 'なし' or comma-separated requirement IDs like 'R1, R2'"
 
 # 改行コードを保持したまま行に分割する(CRLF の tasks.md をそのまま書き戻すため)
 function Split-TaskLines {
@@ -41,7 +45,7 @@ function Read-TaskList {
         }
         if ($line.StartsWith('## ')) {
             if ($line -cmatch '^## (T\d+):\s*(.+)') {
-                $current = [pscustomobject]@{ id = $Matches[1]; title = $Matches[2].Trim(); depRaw = $null; depLine = -1; group = $currentGroup; groupRaw = $null }
+                $current = [pscustomobject]@{ id = $Matches[1]; title = $Matches[2].Trim(); depRaw = $null; depLine = -1; group = $currentGroup; groupRaw = $null; reqRaw = $null }
                 $tasks[$current.id] = $current
             } else {
                 $current = $null
@@ -54,6 +58,9 @@ function Read-TaskList {
         }
         if ($null -ne $current -and $null -eq $current.groupRaw -and $line -cmatch $script:GroupFieldPattern) {
             $current.groupRaw = $Matches[2]
+        }
+        if ($null -ne $current -and $null -eq $current.reqRaw -and $line -cmatch $script:ReqFieldPattern) {
+            $current.reqRaw = $Matches[2]
         }
     }
     # グループ欄による上書き(欄の名前が区切りに存在する場合のみ)
@@ -113,6 +120,109 @@ function Test-GroupDeps {
         }
     }
     if ($errors.Count -gt 0) { throw ($errors -join "`n") }
+}
+
+# '## 要件' 節を解析し [pscustomobject]@{ hasSection; items(id / text) } を返す。
+# 形式違反の行・重複ID・要件が0件の節は例外(エラーはすべて集める)
+function Read-Requirements {
+    param([string[]]$Lines)
+    $hasSection = $false
+    $inSection = $false
+    $reqs = [System.Collections.Generic.List[object]]::new()
+    $seen = [System.Collections.Generic.List[string]]::new()
+    $errors = @()
+    foreach ($raw in $Lines) {
+        $line = (Get-LineBody $raw).TrimStart([char]0xFEFF).TrimEnd()
+        if ($line.StartsWith('#')) {
+            $inSection = ($line -ceq $script:ReqSection)
+            if ($inSection) { $hasSection = $true }
+            continue
+        }
+        if (-not $inSection) { continue }
+        if ($line -cmatch $script:ReqLinePattern) {
+            $rid = $Matches[1]
+            if ($seen.Contains($rid)) {
+                $errors += "Duplicate requirement ID: $rid"
+            } else {
+                $seen.Add($rid)
+                $reqs.Add([pscustomobject]@{ id = $rid; text = $Matches[2] })
+            }
+        } elseif ($line.StartsWith('- ')) {
+            $errors += "Malformed requirement line: '$line' (expected '- R<n>: <text>')"
+        }
+    }
+    if ($hasSection -and $reqs.Count -eq 0 -and $errors.Count -eq 0) {
+        $errors += "'## 要件' section has no requirements"
+    }
+    if ($errors.Count -gt 0) { throw ($errors -join "`n") }
+    return [pscustomobject]@{ hasSection = $hasSection; items = @($reqs) }
+}
+
+# 要件節とタスクの要件欄を検証し、対応表(label / tasks を持つ要素の配列)を返す。
+# ラベルは要件の記述順の 'R<n>'、最後に要件欄が 'なし' のタスクがあれば 'なし'。
+# 節も欄も無ければ空。エラーはすべて集めて例外にする
+function Test-Requirements {
+    param($Tasks, [string[]]$Lines)
+    $errors = @()
+    $hasSection = $false
+    $reqs = @()
+    try {
+        $parsed = Read-Requirements $Lines
+        $hasSection = $parsed.hasSection
+        $reqs = @($parsed.items)
+    } catch {
+        $errors += $_.Exception.Message
+        $hasSection = $true
+    }
+    $ids = [System.Collections.Generic.List[string]]::new()
+    $covered = [System.Collections.Generic.Dictionary[string, object]]::new()
+    foreach ($r in $reqs) {
+        $ids.Add($r.id)
+        $covered[$r.id] = [System.Collections.Generic.List[string]]::new()
+    }
+    $noneTasks = [System.Collections.Generic.List[string]]::new()
+    foreach ($t in $Tasks) {
+        $tid = $t.id
+        $raw = $t.reqRaw
+        if (-not $hasSection) {
+            if ($null -ne $raw) {
+                $errors += "${tid}: requirement field is used but tasks.md has no '## 要件' section"
+            }
+            continue
+        }
+        if ($null -eq $raw) {
+            $errors += "${tid}: requirement line ('- **要件**: ...') is missing"
+            continue
+        }
+        if ($raw -ceq 'なし') {
+            $noneTasks.Add($tid)
+            continue
+        }
+        $refs = [System.Collections.Generic.List[string]]::new()
+        foreach ($token in ($raw -split ',')) {
+            $token = $token.Trim()
+            if ($token -cnotmatch '^R\d+$') {
+                $errors += "Invalid requirement in ${tid}: '$token' ($script:ReqFormatHint)"
+            } elseif (-not $ids.Contains($token)) {
+                if ($reqs.Count -gt 0) {
+                    $errors += "${tid}: refers to unknown requirement '$token' (not found in '## 要件')"
+                }
+            } elseif (-not $refs.Contains($token)) {
+                $refs.Add($token)
+            }
+        }
+        foreach ($rid in $refs) { $covered[$rid].Add($tid) }
+    }
+    foreach ($rid in $ids) {
+        if ($covered[$rid].Count -eq 0) {
+            $errors += "Uncovered requirement: $rid (no task refers to it; assign it to a task or move it to '## 対象外')"
+        }
+    }
+    if ($errors.Count -gt 0) { throw ($errors -join "`n") }
+    $table = @()
+    foreach ($rid in $ids) { $table += [pscustomobject]@{ label = $rid; tasks = @($covered[$rid]) } }
+    if ($noneTasks.Count -gt 0) { $table += [pscustomobject]@{ label = 'なし'; tasks = @($noneTasks) } }
+    return $table
 }
 
 # 依存欄を検証してタスクIDの配列を返す。不正なら例外を投げる
