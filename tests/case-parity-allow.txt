@@ -21,7 +21,3 @@ test-tasks.sh: __pycache__ を作らない
 
 # test-exitcode.sh は存在しない(sh 側では各テストが直接 exit code を断言する)
 test-exitcode.ps1: *
-
-# Issue #75: ps1 版(T2)を足すまでの一時的な差
-test-group-advance.sh: advance: OPEN で未 push のコミットがあれば exit 10
-test-group-advance.sh: advance: OPEN でリモートのブランチが無ければ exit 10

@@ -6,16 +6,19 @@
 #   - git status --porcelain が空であること
 # gh pr view <state.json の branch> --json state,url の結果で分岐する:
 #   - PR なし(gh が「no pull requests found」で失敗)→ stdout "NO_PR"、exit 7(親は PR 作成へ)
-#   - OPEN   → stdout "OPEN <PR URL>"、exit 8(マージ待ち。親は報告して停止)
+#   - OPEN   → stdout "OPEN <PR URL>"、exit 8(マージ待ち。親は報告して停止)。ただしローカルの
+#              ブランチに origin/<branch> へ未 push のコミットがある、または origin/<branch> が
+#              無ければ exit 10(Next: update-pr)
 #   - CLOSED → PR がマージされずに閉じている。stderr に説明、exit 9(エスカレーション)
 #   - MERGED → main を最新化(git switch main + git pull --ff-only)し、-Branch で指定した
 #              名前(develop/ 始まり。必須)のブランチを作成・切替。state.json の branch を
 #              新ブランチ名、group を次のグループ(未完了タスクを含む最初のグループ)に更新
 #              して exit 0。stdout に "ADVANCED <新ブランチ名> <新グループ名>"
-# exit: 0=切替完了 / 1=使い方・前提不備 / 7=PR 未作成 / 8=マージ待ち / 9=PR 閉鎖(未マージ)
+# exit: 0=切替完了 / 1=使い方・前提不備 / 7=PR 未作成 / 8=マージ待ち / 9=PR 閉鎖(未マージ) /
+#       10=OPEN の PR に未 push のコミットあり(またはリモートのブランチ無し)
 #       git / gh の失敗時は何も書き換えず、その exit code を返す
 # stdout の最後の行は次アクションを示す "Next:" 行(0=continue / 7=create-pr / 8=wait-merge /
-# 9=escalate reason=pr-closed)。1 と git / gh の失敗をそのまま返す exit では出力しない
+# 9=escalate reason=pr-closed / 10=update-pr)。1 と git / gh の失敗をそのまま返す exit では出力しない
 param([string]$Branch)
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
@@ -151,7 +154,24 @@ try {
     $prUrl = "$($pr.url)"
 
     if ($prState -ceq 'OPEN') {
+        # 未 push のコミットがあれば既存 PR の更新を促す(fetch はせず、リモート追跡ブランチと比べる)
+        $remoteRef = "refs/remotes/origin/$stateBranch"
+        & git rev-parse --verify --quiet $remoteRef *> $null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Output "OPEN $prUrl"
+            [Console]::Error.WriteLine("'origin/$stateBranch' not found (the branch is not pushed from this clone; push it and update the PR)")
+            Write-Output 'Next: update-pr'
+            exit 10
+        }
+        $unpushed = (@(& git rev-list --count "$remoteRef..refs/heads/$stateBranch" 2>&1 | ForEach-Object { "$_" }) -join "`n").Trim()
+        $gitCode = $LASTEXITCODE
+        if ($gitCode -ne 0) { Fail "git rev-list failed (exit $gitCode): $unpushed" $gitCode }
         Write-Output "OPEN $prUrl"
+        if ([int]$unpushed -gt 0) {
+            [Console]::Error.WriteLine("$unpushed commit(s) on '$stateBranch' are not pushed to 'origin/$stateBranch' (push them and update the PR)")
+            Write-Output 'Next: update-pr'
+            exit 10
+        }
         Write-Output 'Next: wait-merge'
         exit 8
     }

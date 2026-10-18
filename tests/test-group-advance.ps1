@@ -50,6 +50,7 @@ function Initialize-AdvanceProject {
         git push -q -u origin main 2>$null
         git checkout -q -b develop/g1 2>$null
         Set-Content b.txt 'b'; git add b.txt; git commit -q -m "feat: g1"
+        git push -q -u origin develop/g1 2>$null
     } finally {
         Pop-Location
     }
@@ -99,6 +100,38 @@ Invoke-TestCase "advance: OPEN は exit 8" {
     Assert-Eq "OPEN https://example.com/pr/1" (($script:Out -split "`n")[0]) "stdout has the PR URL"
     Assert-Eq "Next: wait-merge" (($script:Out -split "`n")[-1]) "stdout last line"
     Assert-Eq "P" (Get-StateGroup) "group unchanged"
+}
+
+Invoke-TestCase "advance: OPEN で未 push のコミットがあれば exit 10" {
+    Initialize-AdvanceProject
+    Push-Location $script:Proj
+    try {
+        Set-Content c.txt 'c'; git add c.txt; git commit -q -m "fix: review"
+    } finally {
+        Pop-Location
+    }
+    Set-GhStub OPEN 'https://example.com/pr/1'
+    Invoke-Script group-advance.ps1
+    Assert-Eq 10 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "OPEN https://example.com/pr/1" (($script:Out -split "`n")[0]) "stdout has the PR URL"
+    Assert-Eq "Next: update-pr" (($script:Out -split "`n")[-1]) "stdout last line"
+    Assert-Contains $script:Err "1 commit(s)" "stderr reports the unpushed commits"
+    Assert-Eq "P" (Get-StateGroup) "group unchanged"
+}
+
+Invoke-TestCase "advance: OPEN でリモートのブランチが無ければ exit 10" {
+    Initialize-AdvanceProject
+    Push-Location $script:Proj
+    try {
+        git update-ref -d refs/remotes/origin/develop/g1
+    } finally {
+        Pop-Location
+    }
+    Set-GhStub OPEN 'https://example.com/pr/1'
+    Invoke-Script group-advance.ps1
+    Assert-Eq 10 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "Next: update-pr" (($script:Out -split "`n")[-1]) "stdout last line"
+    Assert-Contains $script:Err "not found" "stderr says the remote branch is missing"
 }
 
 Invoke-TestCase "advance: CLOSED は exit 9" {
