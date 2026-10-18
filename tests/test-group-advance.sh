@@ -52,6 +52,7 @@ setup_advance() {
         git push -q -u origin main
         git checkout -q -b develop/g1
         printf 'b\n' > b.txt; git add b.txt; git commit -q -m "feat: g1"
+        git push -q -u origin develop/g1
     )
     p_a_tasks
     write_state "T1:done" "T2:pending" "T3:pending"
@@ -100,6 +101,28 @@ t_advance_open() {
     assert_eq "OPEN https://example.com/pr/1" "${OUT%%$'\n'*}" "stdout has the PR URL"
     assert_eq "Next: wait-merge" "${OUT##*$'\n'}" "stdout last line"
     assert_eq "P" "$(state_group)" "group unchanged"
+}
+
+t_advance_open_unpushed() {
+    setup_advance
+    (cd "$PROJ" && printf 'c\n' > c.txt && git add c.txt && git commit -q -m "fix: review")
+    gh_stub OPEN "https://example.com/pr/1"
+    run_script group-advance.sh
+    assert_eq 10 "$CODE" "exit code: $ERR"
+    assert_eq "OPEN https://example.com/pr/1" "${OUT%%$'\n'*}" "stdout has the PR URL"
+    assert_eq "Next: update-pr" "${OUT##*$'\n'}" "stdout last line"
+    assert_contains "$ERR" "1 commit(s)" "stderr reports the unpushed commits"
+    assert_eq "P" "$(state_group)" "group unchanged"
+}
+
+t_advance_open_no_remote_branch() {
+    setup_advance
+    (cd "$PROJ" && git update-ref -d refs/remotes/origin/develop/g1)
+    gh_stub OPEN "https://example.com/pr/1"
+    run_script group-advance.sh
+    assert_eq 10 "$CODE" "exit code: $ERR"
+    assert_eq "Next: update-pr" "${OUT##*$'\n'}" "stdout last line"
+    assert_contains "$ERR" "not found" "stderr says the remote branch is missing"
 }
 
 t_advance_closed() {
@@ -257,6 +280,8 @@ t_advance_all_done_rejected() {
 echo "test-group-advance.sh"
 test_case "advance: PR なしは exit 7" t_advance_no_pr
 test_case "advance: OPEN は exit 8" t_advance_open
+test_case "advance: OPEN で未 push のコミットがあれば exit 10" t_advance_open_unpushed
+test_case "advance: OPEN でリモートのブランチが無ければ exit 10" t_advance_open_no_remote_branch
 test_case "advance: CLOSED は exit 9" t_advance_closed
 test_case "advance: MERGED はブランチ作成と state 更新" t_advance_merged
 test_case "advance: 状態ファイルを追跡するリポジトリでは切替後に state.json をコミットする" t_advance_merged_commits_state

@@ -9,16 +9,19 @@ set -uo pipefail
 #   - git status --porcelain が空であること
 # gh pr view <state.json の branch> --json state,url の結果で分岐する:
 #   - PR なし(gh が「no pull requests found」で失敗)→ stdout "NO_PR"、exit 7(親は PR 作成へ)
-#   - OPEN   → stdout "OPEN <PR URL>"、exit 8(マージ待ち。親は報告して停止)
+#   - OPEN   → stdout "OPEN <PR URL>"、exit 8(マージ待ち。親は報告して停止)。
+#              ただしローカルのブランチに origin/<branch> へ未 push のコミットがある、または
+#              origin/<branch> が無い場合は exit 10(PR の更新へ。fetch はしない)
 #   - CLOSED → PR がマージされずに閉じている。stderr に説明、exit 9(エスカレーション)
 #   - MERGED → main を最新化(git switch main + git pull --ff-only)し、--branch で指定した
 #              名前(develop/ 始まり。必須)のブランチを作成・切替。state.json の branch を
 #              新ブランチ名、group を次のグループ(未完了タスクを含む最初のグループ)に更新
 #              して exit 0。stdout に "ADVANCED <新ブランチ名> <新グループ名>"
-# exit: 0=切替完了 / 1=使い方・前提不備 / 7=PR 未作成 / 8=マージ待ち / 9=PR 閉鎖(未マージ)
+# exit: 0=切替完了 / 1=使い方・前提不備 / 7=PR 未作成 / 8=マージ待ち / 9=PR 閉鎖(未マージ) /
+#       10=PR 更新が必要(OPEN で未 push のコミットがある、または origin/<branch> が無い)
 #       git / gh の失敗時は何も書き換えず、その exit code を返す
 # stdout の最後の行は次アクションを示す "Next:" 行(0=continue / 7=create-pr / 8=wait-merge /
-# 9=escalate reason=pr-closed)。1 と git / gh の失敗をそのまま返す exit では出力しない
+# 9=escalate reason=pr-closed / 10=update-pr)。1 と git / gh の失敗をそのまま返す exit では出力しない
 
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
@@ -196,7 +199,26 @@ PR_URL="${PR_INFO#* }"
 
 case "$PR_STATE" in
     OPEN)
+        # 未 push のコミットがあれば既存 PR の更新を促す(fetch はせず、リモート追跡ブランチと比べる)
+        REMOTE_REF="refs/remotes/origin/$STATE_BRANCH"
+        if ! git rev-parse --verify --quiet "$REMOTE_REF" > /dev/null; then
+            echo "OPEN $PR_URL"
+            echo "'origin/$STATE_BRANCH' not found (the branch is not pushed from this clone; push it and update the PR)" >&2
+            echo "Next: update-pr"
+            exit 10
+        fi
+        UNPUSHED="$(git rev-list --count "$REMOTE_REF..refs/heads/$STATE_BRANCH" 2>&1)"
+        GIT_CODE=$?
+        if [ "$GIT_CODE" -ne 0 ]; then
+            echo "git rev-list failed (exit $GIT_CODE): $UNPUSHED" >&2
+            exit "$GIT_CODE"
+        fi
         echo "OPEN $PR_URL"
+        if [ "$UNPUSHED" -gt 0 ]; then
+            echo "$UNPUSHED commit(s) on '$STATE_BRANCH' are not pushed to 'origin/$STATE_BRANCH' (push them and update the PR)" >&2
+            echo "Next: update-pr"
+            exit 10
+        fi
         echo "Next: wait-merge"
         exit 8
         ;;
