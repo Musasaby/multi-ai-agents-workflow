@@ -92,8 +92,18 @@ $(tail -n +2 "$UPSTREAM_DIR/_templates/AGENTS.md")"
     assert_eq "Next: escalate reason=conflict" "$(printf '%s\n' "$OUT" | tail -n 1)" "last line"
 }
 
+t_sync_failed() {
+    setup_project_with_upstream
+    upstream_commit "_templates/workflow/scripts/workflow-sync-scripts.sh" "exit 1"
+    run_update
+    assert_eq 22 "$CODE" "exit 22: $OUT $ERR"
+    assert_eq "Next: escalate reason=sync-failed" "$(printf '%s\n' "$OUT" | tail -n 1)" "last line"
+    assert_contains "$ERR" "workflow-sync-scripts.sh failed" "stderr"
+}
+
 echo "test-workflow-update.sh"
 test_case "update: upstream の更新を取り込む" t_update
 test_case "update: 作業ツリーが汚れていれば exit 20" t_dirty
 test_case "update: コンフリクトは CONFLICT 行と exit 2" t_conflict
+test_case "update: 差分の確認に失敗したら exit 22" t_sync_failed
 summary

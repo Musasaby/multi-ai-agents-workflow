@@ -6,10 +6,11 @@ set -uo pipefail
 #
 # Usage:
 #   workflow-update.sh
-# 最後の行: Next: continue / confirm / escalate reason=<dirty-tree|conflict|subtree-failed>
+# 最後の行: Next: continue / confirm / escalate reason=<dirty-tree|conflict|subtree-failed|sync-failed>
 # exit: 0=更新済みで配置済みスクリプトとの差分なし / 1=使い方不備・git の外 /
 #       2=コンフリクト(CONFLICT <パス> を出力) / 3=更新済みで配置済みスクリプトに差分あり /
-#       20=作業ツリーが汚れている / 21=subtree pull の失敗(コンフリクト以外)
+#       20=作業ツリーが汚れている / 21=subtree pull の失敗(コンフリクト以外) /
+#       22=配置済みスクリプトとの差分確認(workflow-sync-scripts)の失敗
 
 if [ $# -gt 0 ]; then
     echo "Unknown argument: $1" >&2
@@ -68,9 +69,12 @@ fi
 
 bash "$TEMPLATE_SCRIPTS/workflow-sync-scripts.sh"
 SYNC_CODE=$?
-if [ "$SYNC_CODE" -eq 3 ]; then
-    echo "Next: confirm"
-    exit 3
-fi
-echo "Next: continue"
-exit 0
+case "$SYNC_CODE" in
+    0) echo "Next: continue"; exit 0 ;;
+    3) echo "Next: confirm"; exit 3 ;;
+    *)
+        echo "workflow-sync-scripts.sh failed (exit $SYNC_CODE)" >&2
+        echo "Next: escalate reason=sync-failed"
+        exit 22
+        ;;
+esac
