@@ -317,6 +317,54 @@ t_run_idle_timeout_not_triggered() {
     assert_file_absent "$PROJ/.agents/workflow/runs/T1-1/idle-timeout" "no idle-timeout file"
 }
 
+# command_template を差し替える($1 = テンプレート)
+set_template() {
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" "$1" <<'PY'
+import json, sys
+p, v = sys.argv[1:3]
+with open(p, encoding='utf-8') as f:
+    cfg = json.load(f)
+cfg['child_agent']['command_template'] = v
+with open(p, 'w', encoding='utf-8') as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+PY
+}
+
+t_run_prompt_file_placeholder_passes_long_prompt() {
+    set_py_child "import sys
+print('LEN=' + str(len(open(sys.argv[1], encoding='utf-8').read())))"
+    set_template 'python3 ./child.py "{prompt_file}"'
+    python3 -c "open(r'$(py_path "$PROJ/.agents/workflow/runs/T1-1/prompt.md")', 'w', encoding='utf-8', newline='').write('a' * 40000)"
+    run_script dispatch-run.sh T1 1
+    assert_eq "EXIT:0" "$(done_exit)" "done marker"
+    assert_contains "$(cat "$PROJ/.agents/workflow/runs/T1-1/output.log")" "LEN=40000" "prompt_file length"
+}
+
+t_run_no_placeholder_passes_prompt_via_stdin() {
+    set_py_child "import sys
+sys.stdout.write(sys.stdin.read())"
+    set_template 'python3 ./child.py'
+    printf 'hello-stdin\n' > "$PROJ/.agents/workflow/runs/T1-1/prompt.md"
+    run_script dispatch-run.sh T1 1
+    assert_eq "EXIT:0" "$(done_exit)" "done marker"
+    assert_contains "$(cat "$PROJ/.agents/workflow/runs/T1-1/output.log")" "hello-stdin" "stdin prompt"
+}
+
+t_run_profile_stream_json_writes_jsonl_without_template_keyword() {
+    set_py_child "print('{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"ok\"}')"
+    set_profile claude-stream-json
+    run_script dispatch-run.sh T1 1
+    assert_file_exists "$PROJ/.agents/workflow/runs/T1-1/output.jsonl" "output.jsonl"
+    assert_contains "$(cat "$PROJ/.agents/workflow/runs/T1-1/output.log")" "[result] exit_subtype=success" "result line"
+}
+
+t_run_guard_records_child_profiles() {
+    set_child 'echo hello'
+    printf '{}\n' > "$PROJ/.agents/workflow/child-profiles.json"
+    run_script dispatch-run.sh T1 1
+    assert_contains "$(cat "$PROJ/.agents/workflow/runs/T1-1/guard.sha256")" ".agents/workflow/child-profiles.json" "guard has child-profiles.json"
+}
+
 # ---------- dispatch-check ----------
 
 # dispatch-run と同じ形式で guard.sha256 を書き(runs/<run>/prompt.md と管理ファイル)、
@@ -932,6 +980,10 @@ test_case "run: 子が TMPDIR 直下で実行した git は本物のリポジト
 test_case "run: 呼び出し元の TMPDIR/TEMP/TMP を書き換えない" t_run_caller_tmp_unchanged
 test_case "run: ログが idle_timeout_seconds 更新されなければ子を止めて EXIT:idle-timeout" t_run_idle_timeout_kills_child
 test_case "run: ログが更新され続ければ idle_timeout_seconds で止めない" t_run_idle_timeout_not_triggered
+test_case "run: {prompt_file} で 40000 文字のプロンプトをファイルパスで渡す" t_run_prompt_file_placeholder_passes_long_prompt
+test_case "run: プレースホルダが無いテンプレートは stdin でプロンプトを渡す" t_run_no_placeholder_passes_prompt_via_stdin
+test_case "run: profile claude-stream-json は command_template に stream-json が無くても output.jsonl を書く" t_run_profile_stream_json_writes_jsonl_without_template_keyword
+test_case "run: 利用先の child-profiles.json を guard.sha256 に記録する" t_run_guard_records_child_profiles
 test_case "check: 正常" t_check_ok
 test_case "check: signalはexit 4" t_check_signal
 test_case "check: EXIT:idle-timeout は abnormal-exit(exit 4)" t_check_idle_timeout

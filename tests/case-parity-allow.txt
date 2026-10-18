@@ -21,3 +21,9 @@ test-tasks.sh: __pycache__ を作らない
 
 # test-exitcode.sh は存在しない(sh 側では各テストが直接 exit code を断言する)
 test-exitcode.ps1: *
+
+# T6 で ps1 側(dispatch-run.ps1)にも書くまでの一時的な許可
+test-dispatch.sh: run: {prompt_file} で 40000 文字のプロンプトをファイルパスで渡す
+test-dispatch.sh: run: プレースホルダが無いテンプレートは stdin でプロンプトを渡す
+test-dispatch.sh: run: profile claude-stream-json は command_template に stream-json が無くても output.jsonl を書く
+test-dispatch.sh: run: 利用先の child-profiles.json を guard.sha256 に記録する

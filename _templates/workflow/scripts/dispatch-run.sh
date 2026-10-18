@@ -49,7 +49,7 @@ PROMPT_PATH="$RUN_DIR/prompt.md"
 # SHA-256 を記録する(存在しないファイルは "-")。形式は sha256sum と同じ "<hash>  <path>"
 GUARD_PATH="$RUN_DIR/guard.sha256"
 : > "$GUARD_PATH"
-for f in "$PROMPT_PATH" .agents/workflow/state.json .agents/workflow/tasks.md .agents/workflow/config.json; do
+for f in "$PROMPT_PATH" .agents/workflow/state.json .agents/workflow/tasks.md .agents/workflow/config.json .agents/workflow/child-profiles.json; do
   if [ ! -f "$f" ]; then
     h=-
   elif command -v sha256sum > /dev/null 2>&1; then
@@ -69,9 +69,17 @@ CMD_TEMPLATE=$(jq -r '.child_agent.command_template' .agents/workflow/config.jso
   python3 -c "import json; print(json.load(open('.agents/workflow/config.json'))['child_agent']['command_template'])" 2>/dev/null || \
   sed -n 's/.*"command_template"[[:space:]]*:[[:space:]]*"\(.*\)"[[:space:]]*,\{0,1\}[[:space:]]*$/\1/p' .agents/workflow/config.json | sed 's/\\"/"/g')
 
+SCRIPT_DIR_PY="$SCRIPT_DIR"
+if command -v cygpath > /dev/null 2>&1; then
+  SCRIPT_DIR_PY="$(cygpath -m "$SCRIPT_DIR")"
+fi
+
 if command -v python3 > /dev/null 2>&1; then
   python3 -c "
 import json, subprocess, sys, shlex, os, threading, time, signal
+sys.dont_write_bytecode = True
+sys.path.insert(0, '$SCRIPT_DIR_PY')
+import childprofile
 
 with open('.agents/workflow/config.json', encoding='utf-8') as f:
     cfg = json.load(f)['child_agent']
@@ -80,8 +88,11 @@ tmpl = cfg['command_template']
 idle_timeout = float(cfg.get('idle_timeout_seconds') or 0)
 with open('$PROMPT_PATH', encoding='utf-8') as f:
     prompt = f.read()
+prompt_file = os.path.abspath('$PROMPT_PATH').replace(os.sep, '/')
 tokens = shlex.split(tmpl)
-tokens = [t.replace('{prompt}', prompt) if '{prompt}' in t else t for t in tokens]
+tokens = [t.replace('{prompt_file}', prompt_file).replace('{prompt}', prompt) for t in tokens]
+# {prompt_file}・{prompt} のどちらも無いテンプレートは、プロンプトを stdin で渡す
+use_stdin = '{prompt_file}' not in tmpl and '{prompt}' not in tmpl
 
 log_path = '$LOG_PATH'
 signal_path = '$SIGNAL_PATH'
@@ -119,7 +130,32 @@ def start_watchdog(proc):
                 return
     threading.Thread(target=watch, daemon=True).start()
 
-is_stream = 'stream-json' in tmpl
+try:
+    prof = childprofile.load_profile('.')
+except childprofile.ProfileError as e:
+    with open(log_path, 'w', encoding='utf-8') as lf:
+        lf.write('Child profile error: ' + str(e) + '\n')
+    finish(1)
+
+is_stream = prof['output_format'] == 'claude-stream-json'
+
+def feed_stdin(proc):
+    # プロンプトを UTF-8 のバイト列で stdin に書いて閉じる(text モードでも buffer 経由で改行変換を避ける)
+    def write():
+        try:
+            stream = getattr(proc.stdin, 'buffer', proc.stdin)
+            stream.write(prompt.encode('utf-8'))
+            stream.flush()
+        except (OSError, ValueError):
+            pass
+        finally:
+            try:
+                proc.stdin.close()
+            except (OSError, ValueError):
+                pass
+    threading.Thread(target=write, daemon=True).start()
+
+stdin_mode = subprocess.PIPE if use_stdin else subprocess.DEVNULL
 
 if is_stream:
     jsonl_path = '$JSONL_PATH'
@@ -161,7 +197,9 @@ if is_stream:
         return '[' + str(t) + '] ' + compact
 
     with open(jsonl_path, 'w', encoding='utf-8') as jf, open(log_path, 'w', encoding='utf-8') as lf:
-        proc = subprocess.Popen(tokens, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', bufsize=1, start_new_session=(os.name != 'nt'))
+        proc = subprocess.Popen(tokens, stdin=stdin_mode, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', bufsize=1, start_new_session=(os.name != 'nt'))
+        if use_stdin:
+            feed_stdin(proc)
         start_watchdog(proc)
         for line in proc.stdout:
             line = line.rstrip('\n')
@@ -179,7 +217,9 @@ if is_stream:
         finish(proc.returncode)
 else:
     with open(log_path, 'w', encoding='utf-8') as lf:
-        proc = subprocess.Popen(tokens, stdin=subprocess.DEVNULL, stdout=lf, stderr=subprocess.STDOUT, start_new_session=(os.name != 'nt'))
+        proc = subprocess.Popen(tokens, stdin=stdin_mode, stdout=lf, stderr=subprocess.STDOUT, start_new_session=(os.name != 'nt'))
+        if use_stdin:
+            feed_stdin(proc)
         start_watchdog(proc)
         proc.wait()
         finish(proc.returncode)
