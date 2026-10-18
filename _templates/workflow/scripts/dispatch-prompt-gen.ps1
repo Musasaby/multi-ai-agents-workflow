@@ -217,11 +217,22 @@ if ($changedRefCount -gt 3) {
     [Console]::Error.WriteLine("WARN: ${TaskId}: $changedRefCount reference files marked 変更対象 (more than 3; consider splitting the task)")
 }
 
-# AGENTS.md が @ 参照だけのファイルなら警告する(opencode 等は @ を展開しないため、子にルールが届かない)
+# AGENTS.md が @ 参照だけのファイルなら警告する(プロファイルの agents_md_imports が false の子CLIは @ を展開しないため、子にルールが届かない)
 if (Test-Path AGENTS.md -PathType Leaf) {
     $agentsLines = @(Get-Content AGENTS.md -Encoding UTF8 | Where-Object { $_.Trim() })
     if (-not ($agentsLines | Where-Object { $_.Trim() -notmatch '^@' })) {
-        [Console]::Error.WriteLine("WARN: AGENTS.md only contains '@' references; child CLIs such as opencode do not expand them, so the child cannot read the rules")
+        # 解決に失敗しても prompt-gen は止めず、展開しない(false)とみなす
+        . "$PSScriptRoot/childprofile.ps1"
+        $profileName = 'unknown'
+        $profileImports = $false
+        try {
+            $childProfile = Get-ChildProfile -Root (Get-Location).Path
+            if ($childProfile.Name) { $profileName = $childProfile.Name }
+            $profileImports = ($childProfile.AgentsMdImports -eq $true)
+        } catch { }
+        if (-not $profileImports) {
+            [Console]::Error.WriteLine("WARN: AGENTS.md only contains '@' references; the child CLI (profile: $profileName) does not expand them, so the child cannot read the rules")
+        }
     }
 }
 

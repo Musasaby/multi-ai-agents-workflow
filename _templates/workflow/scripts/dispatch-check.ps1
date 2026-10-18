@@ -4,7 +4,7 @@
 #     変わった/消えた、guard.sha256・output.log・git-state.txt が無い、output.log が実行中に
 #     切り詰められた、本物のリポジトリの git 状態(HEAD・ブランチ・参照・設定)が変わった)
 #   4=異常終了(非0・signal・crashed・idle-timeout)
-#   6=権限拒否で中断(output.log に子CLIの権限拒否の記録がある)、または、ツール実行の記録に
+#   6=権限拒否で中断(output.log にプロファイルの権限拒否の記録がある)、または、ツール実行の記録に
 #     プロジェクト外(/tmp・ホームディレクトリ等)へのアクセスがある
 #   5=完了報告が無い・無効(最後の `## 完了報告` の後にツール実行の記録が続く、必須項目が無い・テンプレートのまま)。
 #     最後のツール実行の後に出力が無い場合は、その旨を理由に書く
@@ -38,6 +38,21 @@ if (-not (Test-Path $donePath)) {
     Write-Output "Next: wait"
     exit 2
 }
+
+# --- 子CLIプロファイルの解決(config.json の child_agent.profile。検知のパターンを決める) ---
+# 解決できない(未定義の profile・定義ファイルが読めない)場合は、Next: 行を出さずに exit 1 で終わる
+. "$PSScriptRoot/childprofile.ps1"
+try {
+    $childProfile = Get-ChildProfile -Root (Get-Location).Path
+} catch {
+    [Console]::Error.WriteLine($_.Exception.Message)
+    exit 1
+}
+$disabledChecks = @()
+if (-not $childProfile.PermissionDeniedPattern) { $disabledChecks += 'permission-denied' }
+if (-not $childProfile.ToolCallPattern) { $disabledChecks += 'outside-access' }
+if (-not $childProfile.ToolActivityPattern) { $disabledChecks += 'tool-activity' }
+if (-not $childProfile.ProviderErrorPattern) { $disabledChecks += 'provider-error' }
 
 # ReadAllText は BOM を除去する(Windows PowerShell 5.1 の Out-File は BOM を付ける)
 $doneLines = [System.IO.File]::ReadAllText((Resolve-Path $donePath), [System.Text.Encoding]::UTF8) -split "`r?`n"
@@ -135,39 +150,44 @@ if ($null -ne $logText) {
 }
 
 # --- 権限拒否の検出 ---
-# opencode が拒否を記録する行(行頭の `! permission requested: ...; auto-rejecting`)だけに一致させる
-# (子がスクリプトやテストを表示した出力の中の同じ文字列には反応しない)
-$deniedLines = @($cleanLines | Where-Object { $_ -match '^! permission requested: .*auto-rejecting' })
+# プロファイルの permission_denied_pattern に一致する行だけを対象にする(auto / opencode では
+# 行頭の `! permission requested: ...; auto-rejecting`。子がスクリプトやテストを表示した出力の中の
+# 同じ文字列には反応しない)。空なら検査しない
+$deniedLines = @()
+if ($childProfile.PermissionDeniedPattern) {
+    $deniedLines = @($cleanLines | Where-Object { $_ -cmatch $childProfile.PermissionDeniedPattern })
+}
 
-# ツール実行の記録: opencode が色付きで出すマーカー行(`ESC[0m$ ESC[0m...` 等)と
-# stream-json の `[tool_use]` / `[tool_result]` 行に限る(報告本文の `→ 要確認` や `$ npm test` は対象外)
-$toolRe = '^' + [regex]::Escape($esc) + '\[[0-9;]*m(\$|→|←|✱|✗|⚙|!) ' + [regex]::Escape($esc) + '\[[0-9;]*m'
-$toolFlags = @($rawLines | ForEach-Object { ($_ -match $toolRe) -or ($_ -match '^\[tool_(use|result)\]') })
+# ツール実行の記録: プロファイルの tool_activity_pattern に一致する行に限る(auto / opencode では
+# 色付きのマーカー行(`ESC[0m$ ESC[0m...` 等)と stream-json の `[tool_use]` / `[tool_result]` 行。
+# 報告本文の `→ 要確認` や `$ npm test` は対象外。空なら記録は無いものとして扱う)
+$toolFlags = @($rawLines | ForEach-Object { [bool]($childProfile.ToolActivityPattern -and ($_ -cmatch $childProfile.ToolActivityPattern)) })
 
 # --- プロジェクト外(/tmp・ホームディレクトリ等)へのアクセスの検出 ---
 # 権限を拒否されずに成功したプロジェクト外アクセス(例: bash -c "... > /tmp/x.log"、cat ~/x.log)を検出する。
-# 対象はツール実行の記録行だけ: opencode の色付きマーカー行($ / → / ← / ✱ / ✗ / ⚙ で始まるもの。
-# ! は権限拒否の行なので除く)と stream-json の [tool_use] 行。ツールの出力(色なしの行・
-# [tool_result] 行)や完了報告の本文には反応しない。判定は ANSI エスケープを除いた行に対して行う。
+# 対象はツール実行の記録行だけ(プロファイルの tool_call_pattern。auto / opencode では色付きマーカー行
+# ($ / → / ← / ✱ / ✗ / ⚙ で始まるもの。! は権限拒否の行なので除く)と stream-json の [tool_use] 行)。
+# ツールの出力(色なしの行・[tool_result] 行)や完了報告の本文には反応しない。パターンが空なら検査しない。
+# 判定は ANSI エスケープを除いた行に対して行う。
 # 条件の正規表現は $outsidePattern と $homePattern にまとめる(条件を足したくなったらここへ追記する)。
 # $homePattern はホームディレクトリ(~/・$HOME・${HOME}・$env:USERPROFILE・%USERPROFILE% 等)と
 # Windows のユーザー一時ディレクトリ(AppData の Temp)への参照(大文字小文字を区別しない)。
 # $env:TEMP・%TEMP%・$TMPDIR は dispatch-run によりプロジェクト内を指すため検出しない
 $outsidePattern = '(^|[ \t"''=(<>])/(var/)?tmp([/ \t"'');]|$)'
 $homePattern = '(?i)(^|[ \t"''=(<>])~/|\$(\{home\}|home(?![a-z0-9_])|env:(home|userprofile)(?![a-z0-9_]))|%userprofile%|appdata[\\/]local[\\/]temp'
-$outsideExecRe = '^' + [regex]::Escape($esc) + '\[[0-9;]*m(\$|→|←|✱|✗|⚙) ' + [regex]::Escape($esc) + '\[[0-9;]*m'
 $outsideLines = @()
 for ($i = 0; $i -lt $rawLines.Count; $i++) {
-    $isToolExec = ($rawLines[$i] -match $outsideExecRe) -or ($rawLines[$i] -match '^\[tool_use\]')
+    $isToolExec = $childProfile.ToolCallPattern -and ($rawLines[$i] -cmatch $childProfile.ToolCallPattern)
     if ($isToolExec -and (($cleanLines[$i] -cmatch $outsidePattern) -or ($cleanLines[$i] -match $homePattern))) { $outsideLines += $cleanLines[$i] }
 }
 
 # --- 子CLI自身のログのエラー検出(利用上限・エンドポイント障害などの切り分け用) ---
 # config.json の child_agent.cli_log(子CLI自身のログファイルのパス。先頭の ~/ はホームディレクトリ)
 # を読む(ConvertFrom-Json が読めない・cli_log が無い場合は未設定扱い)。末尾 200 行のうち ERROR を
-# 含む行の最後の 5 行と、プロバイダー起因かどうか(利用上限・レート制限・エンドポイント障害・429。
-# 429 の前後に英数字を許さないのは .429Z のようなタイムスタンプや16進の ID に一致させないため)を
-# 出力に表示するだけなので、判定(Verdict・exit code)には影響しない
+# 含む行の最後の 5 行と、プロバイダー起因かどうか(プロファイルの provider_error_pattern を小文字にした
+# 行に当てる。auto / opencode では利用上限・レート制限・エンドポイント障害・429。
+# 429 の前後に英数字を許さないのは .429Z のようなタイムスタンプや16進の ID に一致させないため。
+# パターンが空のプロファイルでは判定しない)を出力に表示するだけなので、判定(Verdict・exit code)には影響しない
 $cliLog = ''
 try {
     $cfg = Get-Content '.agents/workflow/config.json' -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json
@@ -184,9 +204,11 @@ if ($cliLog -ne '') {
     } else {
         $providerError = 'no'
         $cliLogLines = @(Get-Content -LiteralPath $cliLogPath -Tail 200 -Encoding utf8 | Where-Object { $_ -cmatch 'ERROR' } | Select-Object -Last 5)
-        foreach ($line in $cliLogLines) {
-            if ($line.ToLowerInvariant() -match 'usage limit|rate limit|endpoint is unavailable|(^|[^0-9a-z])429([^0-9a-z]|$)') {
-                $providerError = 'yes'; break
+        if ($childProfile.ProviderErrorPattern) {
+            foreach ($line in $cliLogLines) {
+                if ($line.ToLowerInvariant() -cmatch $childProfile.ProviderErrorPattern) {
+                    $providerError = 'yes'; break
+                }
             }
         }
     }
@@ -282,19 +304,25 @@ if ($code -eq 0 -or $code -eq 7) {
 Write-Output "Run: $TaskId-$Attempt"
 Write-Output "Exit: $exitValue (kind: $kind)"
 Write-Output "End: $endValue"
+Write-Output "Profile: $($childProfile.Name)"
+Write-Output "Disabled checks: $(if ($disabledChecks.Count -gt 0) { $disabledChecks -join ', ' } else { 'none' })"
 if ($guardIssues.Count -gt 0) {
     Write-Output "Guard: NG"
     $guardIssues | ForEach-Object { Write-Output "  $_" }
 } else {
     Write-Output "Guard: ok"
 }
-if ($deniedLines.Count -gt 0) {
+if (-not $childProfile.PermissionDeniedPattern) {
+    Write-Output "Permission denied: disabled (profile: $($childProfile.Name))"
+} elseif ($deniedLines.Count -gt 0) {
     Write-Output "Permission denied: yes"
     $deniedLines | ForEach-Object { Write-Output "  $_" }
 } else {
     Write-Output "Permission denied: no"
 }
-if ($outsideLines.Count -gt 0) {
+if (-not $childProfile.ToolCallPattern) {
+    Write-Output "Outside access: disabled (profile: $($childProfile.Name))"
+} elseif ($outsideLines.Count -gt 0) {
     Write-Output "Outside access: yes"
     $outsideLines | ForEach-Object { Write-Output "  $_" }
 } else {
@@ -304,7 +332,11 @@ Write-Output "CLI log: $(if ($cliLog) { $cliLog } else { '(not configured)' })"
 if ($cliLogLines.Count -gt 0) {
     $cliLogLines | ForEach-Object { Write-Output "  $_" }
 }
-Write-Output "Provider error: $providerError"
+if (-not $childProfile.ProviderErrorPattern) {
+    Write-Output "Provider error: disabled (profile: $($childProfile.Name))"
+} else {
+    Write-Output "Provider error: $providerError"
+}
 Write-Output "Completion report: $reportResult"
 if ($reportSaved) {
     Write-Output "Report: $reportPath"

@@ -158,6 +158,20 @@ with open(p, 'w', encoding='utf-8') as f:
 PY
 }
 
+# 子CLIプロファイル(config.json の child_agent.profile)を設定する($1 = プロファイル名)。
+# profile は guard.sha256 の対象なので make_run の前に呼ぶ
+set_profile() {
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" "$1" <<'PY'
+import json, sys
+p, v = sys.argv[1:3]
+with open(p, encoding='utf-8') as f:
+    cfg = json.load(f)
+cfg['child_agent']['profile'] = v
+with open(p, 'w', encoding='utf-8') as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+PY
+}
+
 # 子を python にする(Windows ネイティブ python から呼ぶ bash は WSL の bash になることがあり、
 # その場合は Windows 側の環境変数を引き継がないため)。$1 = child.py の本文(省略時は XDG_DATA_HOME の表示)
 set_py_child() {
@@ -301,6 +315,69 @@ t_run_idle_timeout_not_triggered() {
     assert_eq "EXIT:0" "$(done_exit)" "done marker"
     assert_contains "$(cat "$PROJ/.agents/workflow/runs/T1-1/output.log")" "tick 5" "output.log"
     assert_file_absent "$PROJ/.agents/workflow/runs/T1-1/idle-timeout" "no idle-timeout file"
+}
+
+# command_template を差し替える($1 = テンプレート)
+set_template() {
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" "$1" <<'PY'
+import json, sys
+p, v = sys.argv[1:3]
+with open(p, encoding='utf-8') as f:
+    cfg = json.load(f)
+cfg['child_agent']['command_template'] = v
+with open(p, 'w', encoding='utf-8') as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+PY
+}
+
+t_run_prompt_file_placeholder_passes_long_prompt() {
+    set_py_child "import sys
+print('LEN=' + str(len(open(sys.argv[1], encoding='utf-8').read())))"
+    set_template 'python3 ./child.py "{prompt_file}"'
+    python3 -c "open(r'$(py_path "$PROJ/.agents/workflow/runs/T1-1/prompt.md")', 'w', encoding='utf-8', newline='').write('a' * 40000)"
+    run_script dispatch-run.sh T1 1
+    assert_eq "EXIT:0" "$(done_exit)" "done marker"
+    assert_contains "$(cat "$PROJ/.agents/workflow/runs/T1-1/output.log")" "LEN=40000" "prompt_file length"
+}
+
+t_run_no_placeholder_passes_prompt_via_stdin() {
+    set_py_child "import sys
+sys.stdout.write(sys.stdin.read())"
+    set_template 'python3 ./child.py'
+    printf 'hello-stdin\n' > "$PROJ/.agents/workflow/runs/T1-1/prompt.md"
+    run_script dispatch-run.sh T1 1
+    assert_eq "EXIT:0" "$(done_exit)" "done marker"
+    assert_contains "$(cat "$PROJ/.agents/workflow/runs/T1-1/output.log")" "hello-stdin" "stdin prompt"
+}
+
+t_run_profile_stream_json_writes_jsonl_without_template_keyword() {
+    set_py_child "print('{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"ok\"}')"
+    set_profile claude-stream-json
+    run_script dispatch-run.sh T1 1
+    assert_file_exists "$PROJ/.agents/workflow/runs/T1-1/output.jsonl" "output.jsonl"
+    assert_contains "$(cat "$PROJ/.agents/workflow/runs/T1-1/output.log")" "[result] exit_subtype=success" "result line"
+}
+
+t_run_stream_json_large_stdin_does_not_deadlock() {
+    set_py_child "import sys
+sys.stderr.write('e' * 200000)
+sys.stderr.flush()
+data = sys.stdin.read()
+print('{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"LEN=' + str(len(data)) + '\"}')"
+    set_template 'python3 ./child.py'
+    set_profile claude-stream-json
+    set_idle_timeout 10
+    python3 -c "open(r'$(py_path "$PROJ/.agents/workflow/runs/T1-1/prompt.md")', 'w', encoding='utf-8', newline='').write('a' * 200000)"
+    run_script dispatch-run.sh T1 1
+    assert_eq "EXIT:0" "$(done_exit)" "done marker"
+    assert_contains "$(cat "$PROJ/.agents/workflow/runs/T1-1/output.jsonl")" "LEN=200000" "stdin length"
+}
+
+t_run_guard_records_child_profiles() {
+    set_child 'echo hello'
+    printf '{}\n' > "$PROJ/.agents/workflow/child-profiles.json"
+    run_script dispatch-run.sh T1 1
+    assert_contains "$(cat "$PROJ/.agents/workflow/runs/T1-1/guard.sha256")" ".agents/workflow/child-profiles.json" "guard has child-profiles.json"
 }
 
 # ---------- dispatch-check ----------
@@ -516,6 +593,62 @@ Error: The user rejected permission to use this specific tool call."
     assert_contains "$OUT" "Permission denied: yes" "flag"
     assert_contains "$OUT" "auto-rejecting" "denied line shown"
     assert_eq "Next: escalate reason=permission-denied" "${OUT##*$'\n'}" "next line"
+}
+
+t_check_profile_default() {
+    make_run 0 "$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Profile: auto" "profile"
+    assert_contains "$OUT" "Disabled checks: none" "disabled checks"
+}
+
+t_check_profile_plain() {
+    set_profile plain
+    make_run 0 "! permission requested: x; auto-rejecting
+$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Disabled checks: permission-denied, outside-access, tool-activity, provider-error" "disabled checks"
+    assert_contains "$OUT" "Permission denied: disabled (profile: plain)" "permission denied"
+    assert_contains "$OUT" "Outside access: disabled (profile: plain)" "outside access"
+    assert_contains "$OUT" "Provider error: disabled (profile: plain)" "provider error"
+}
+
+t_check_profile_stream_json() {
+    set_profile claude-stream-json
+    make_run 0 "$REPORT
+${ESC}[0m\$ ${ESC}[0mcat /tmp/x"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "opencode marker line is ignored: $OUT"
+    make_run 0 "$REPORT
+[tool_use] bash: {\"command\": \"cat /tmp/x\"}"
+    run_script dispatch-check.sh T1 1
+    assert_eq 6 "$CODE" "tool_use line detected: $OUT"
+    assert_eq "Next: escalate reason=outside-access" "${OUT##*$'\n'}" "next line"
+}
+
+t_check_profile_custom() {
+    printf '%s\n' '{"mycli": {"output_format": "text", "permission_denied_pattern": "^DENIED: "}}' \
+        > "$PROJ/.agents/workflow/child-profiles.json"
+    set_profile mycli
+    make_run 0 "DENIED: rm -rf x
+$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 6 "$CODE" "exit code: $OUT"
+    assert_eq "Next: escalate reason=permission-denied" "${OUT##*$'\n'}" "next line"
+}
+
+t_check_profile_unknown() {
+    set_profile nope
+    make_run 0 "$REPORT"
+    run_script dispatch-check.sh T1 1
+    assert_eq 1 "$CODE" "exit code: $OUT"
+    assert_not_contains "$OUT" "Next:" "no Next line"
 }
 
 t_check_no_changes() {
@@ -862,6 +995,11 @@ test_case "run: 子が TMPDIR 直下で実行した git は本物のリポジト
 test_case "run: 呼び出し元の TMPDIR/TEMP/TMP を書き換えない" t_run_caller_tmp_unchanged
 test_case "run: ログが idle_timeout_seconds 更新されなければ子を止めて EXIT:idle-timeout" t_run_idle_timeout_kills_child
 test_case "run: ログが更新され続ければ idle_timeout_seconds で止めない" t_run_idle_timeout_not_triggered
+test_case "run: {prompt_file} で 40000 文字のプロンプトをファイルパスで渡す" t_run_prompt_file_placeholder_passes_long_prompt
+test_case "run: プレースホルダが無いテンプレートは stdin でプロンプトを渡す" t_run_no_placeholder_passes_prompt_via_stdin
+test_case "run: profile claude-stream-json は command_template に stream-json が無くても output.jsonl を書く" t_run_profile_stream_json_writes_jsonl_without_template_keyword
+test_case "run: stream-json で stdin に大きいプロンプトを渡しても、子が先に stderr に大量に書くと止まらない" t_run_stream_json_large_stdin_does_not_deadlock
+test_case "run: 利用先の child-profiles.json を guard.sha256 に記録する" t_run_guard_records_child_profiles
 test_case "check: 正常" t_check_ok
 test_case "check: signalはexit 4" t_check_signal
 test_case "check: EXIT:idle-timeout は abnormal-exit(exit 4)" t_check_idle_timeout
@@ -882,6 +1020,11 @@ test_case "check: report.md が既にあれば上書きしない" t_check_report
 test_case "check: 完了報告が無効なら report.md を作らない" t_check_report_invalid_not_saved
 test_case "check: 箇条書きの値・CRLF・ANSIを含む完了報告は有効" t_check_report_list_value_and_ansi
 test_case "check: 権限拒否はexit 6" t_check_permission_denied
+test_case "check: profile 未指定は Profile: auto と Disabled checks: none を出す" t_check_profile_default
+test_case "check: plain は検知できない検査を disabled と出し、権限拒否の行があっても ok" t_check_profile_plain
+test_case "check: claude-stream-json は opencode のマーカー行を見ず [tool_use] 行でプロジェクト外アクセスを検出する" t_check_profile_stream_json
+test_case "check: 利用先の child-profiles.json の権限拒否パターンで exit 6" t_check_profile_custom
+test_case "check: 未定義の profile は exit 1" t_check_profile_unknown
 test_case "check: 変更0件はexit 7" t_check_no_changes
 test_case "check: PR作成のrunは変更0件でも正常" t_check_pr_run_without_changes
 test_case "check: state.jsonの変更はexit 8" t_check_state_changed

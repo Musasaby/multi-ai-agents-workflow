@@ -67,6 +67,17 @@ function Set-CliLog {
     Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
 }
 
+# 子CLIプロファイル(config.json の child_agent.profile)を設定する($Value = プロファイル名)。
+# profile は guard.sha256 の対象なので New-Run の前に呼ぶ
+function Set-Profile {
+    param([string]$Value)
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg.child_agent.PSObject.Properties.Remove('profile')
+    $cfg.child_agent | Add-Member -NotePropertyName profile -NotePropertyValue $Value
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+}
+
 function Get-ChildXdg {
     $env:XDG_DATA_HOME = 'C:/caller/xdg-data'
     try { Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1 } finally { Remove-Item Env:XDG_DATA_HOME -ErrorAction SilentlyContinue }
@@ -234,6 +245,59 @@ Invoke-TestCase "run: ログが更新され続ければ idle_timeout_seconds で
     Assert-Eq "EXIT:0" (Get-DoneExit) "done marker"
     Assert-Contains ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.log")) "tick 5" "output.log"
     Assert-FileAbsent "$script:Proj/.agents/workflow/runs/T1-1/idle-timeout" "no idle-timeout file"
+}
+
+# command_template を差し替える($Value = テンプレート)
+function Set-Template {
+    param([string]$Value)
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg.child_agent.command_template = $Value
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+}
+
+Invoke-TestCase "run: {prompt_file} で 40000 文字のプロンプトをファイルパスで渡す" {
+    Set-PyChild "import sys`nprint('LEN=' + str(len(open(sys.argv[1], encoding='utf-8').read())))"
+    Set-Template 'python3 ./child.py "{prompt_file}"'
+    [System.IO.File]::WriteAllText("$script:Proj/.agents/workflow/runs/T1-1/prompt.md", ('a' * 40000), [System.Text.UTF8Encoding]::new($false))
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq "EXIT:0" (Get-DoneExit) "done marker"
+    Assert-Contains ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.log")) "LEN=40000" "prompt_file length"
+}
+
+Invoke-TestCase "run: プレースホルダが無いテンプレートは stdin でプロンプトを渡す" {
+    Set-PyChild "import sys`nsys.stdout.write(sys.stdin.read())"
+    Set-Template 'python3 ./child.py'
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/T1-1/prompt.md" "hello-stdin`n"
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq "EXIT:0" (Get-DoneExit) "done marker"
+    Assert-Contains ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.log")) "hello-stdin" "stdin prompt"
+}
+
+Invoke-TestCase "run: profile claude-stream-json は command_template に stream-json が無くても output.jsonl を書く" {
+    Set-PyChild "print('{\`"type\`":\`"result\`",\`"subtype\`":\`"success\`",\`"result\`":\`"ok\`"}')"
+    Set-Profile claude-stream-json
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    Assert-FileExists "$script:Proj/.agents/workflow/runs/T1-1/output.jsonl" "output.jsonl"
+    Assert-Contains ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.log")) "[result] exit_subtype=success" "result line"
+}
+
+Invoke-TestCase "run: stream-json で stdin に大きいプロンプトを渡しても、子が先に stderr に大量に書くと止まらない" {
+    Set-PyChild "import sys`nsys.stderr.write('e' * 200000)`nsys.stderr.flush()`ndata = sys.stdin.read()`nprint('{\`"type\`":\`"result\`",\`"subtype\`":\`"success\`",\`"result\`":\`"LEN=' + str(len(data)) + '\`"}')"
+    Set-Template 'python3 ./child.py'
+    Set-Profile claude-stream-json
+    Set-IdleTimeout 10
+    [System.IO.File]::WriteAllText("$script:Proj/.agents/workflow/runs/T1-1/prompt.md", ('a' * 200000), [System.Text.UTF8Encoding]::new($false))
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq "EXIT:0" (Get-DoneExit) "done marker"
+    Assert-Contains ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.jsonl")) "LEN=200000" "stdin length"
+}
+
+Invoke-TestCase "run: 利用先の child-profiles.json を guard.sha256 に記録する" {
+    Set-Child 'Write-Output hello'
+    Write-Utf8File "$script:Proj/.agents/workflow/child-profiles.json" "{}`n"
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    Assert-Contains ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/guard.sha256")) ".agents/workflow/child-profiles.json" "guard has child-profiles.json"
 }
 
 Invoke-TestCase "run: 呼び出し元の TMPDIR/TEMP/TMP を書き換えない" {
@@ -423,6 +487,58 @@ Invoke-TestCase "check: 権限拒否はexit 6" {
     Assert-Contains $script:Out "Permission denied: yes" "flag"
     Assert-Contains $script:Out "auto-rejecting" "denied line shown"
     Assert-Eq "Next: escalate reason=permission-denied" (($script:Out -split "`n")[-1]) "next line"
+}
+
+Invoke-TestCase "check: profile 未指定は Profile: auto と Disabled checks: none を出す" {
+    New-Run 0 $report
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Profile: auto" "profile"
+    Assert-Contains $script:Out "Disabled checks: none" "disabled checks"
+}
+
+Invoke-TestCase "check: plain は検知できない検査を disabled と出し、権限拒否の行があっても ok" {
+    Set-Profile plain
+    New-Run 0 "! permission requested: x; auto-rejecting`n$report"
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Disabled checks: permission-denied, outside-access, tool-activity, provider-error" "disabled checks"
+    Assert-Contains $script:Out "Permission denied: disabled (profile: plain)" "permission denied"
+    Assert-Contains $script:Out "Outside access: disabled (profile: plain)" "outside access"
+    Assert-Contains $script:Out "Provider error: disabled (profile: plain)" "provider error"
+}
+
+Invoke-TestCase "check: claude-stream-json は opencode のマーカー行を見ず [tool_use] 行でプロジェクト外アクセスを検出する" {
+    $e = [char]27
+    Set-Profile claude-stream-json
+    New-Run 0 "$report`n$e[0m`$ $e[0mcat /tmp/x"
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "opencode marker line is ignored: $($script:Out)"
+    New-Run 0 "$report`n[tool_use] bash: {`"command`": `"cat /tmp/x`"}"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 6 $script:Code "tool_use line detected: $($script:Out)"
+    Assert-Eq "Next: escalate reason=outside-access" (($script:Out -split "`n")[-1]) "next line"
+}
+
+Invoke-TestCase "check: 利用先の child-profiles.json の権限拒否パターンで exit 6" {
+    Write-Utf8File "$script:Proj/.agents/workflow/child-profiles.json" "{`"mycli`": {`"output_format`": `"text`", `"permission_denied_pattern`": `"^DENIED: `"}}`n"
+    Set-Profile mycli
+    New-Run 0 "DENIED: rm -rf x`n$report"
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 6 $script:Code "exit code: $($script:Out)"
+    Assert-Eq "Next: escalate reason=permission-denied" (($script:Out -split "`n")[-1]) "next line"
+}
+
+Invoke-TestCase "check: 未定義の profile は exit 1" {
+    Set-Profile nope
+    New-Run 0 $report
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 1 $script:Code "exit code: $($script:Out)"
+    Assert-NotContains $script:Out "Next:" "no Next line"
 }
 
 Invoke-TestCase "check: 変更0件はexit 7" {

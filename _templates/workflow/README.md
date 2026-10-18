@@ -56,11 +56,12 @@
 
 | キー | 説明 | デフォルト |
 |------|------|-----------|
-| `child_agent.command_template` | 子エージェントCLIのコマンドテンプレート。`{prompt}` がタスクプロンプトに展開される | `opencode run "{prompt}"` |
+| `child_agent.command_template` | 子エージェントCLIのコマンドテンプレート。`{prompt}` はプロンプト本文、`{prompt_file}` は prompt.md の絶対パス(`/` 区切り)に展開される。どちらも無ければプロンプトを stdin で渡す | `opencode run "{prompt}"` |
+| `child_agent.profile` | 子CLIのプロファイル名。出力の変換方法とログからの検知パターンを決める。未指定・空は `auto`(「子CLIのプロファイル」を参照) | `""` |
 | `child_agent.timeout_seconds` | 子エージェント実行のタイムアウト(秒)。`dispatch-wait` が判定する | `1800` |
 | `child_agent.isolate_xdg` | `true` なら `dispatch-run` が子CLIの `XDG_CONFIG_HOME` / `XDG_DATA_HOME` を `.agents/workflow/.config` に切り替える(sandbox で `~/.config` 等に書けない環境向け)。切り替えると `~/.local/share/<CLI>/auth.json` 等の認証情報が見えなくなる。未指定は `false` | `false` |
 | `child_agent.healthcheck_command` | `dispatch-start` が起動前に実行する疎通確認のコマンド。空なら省略 | `""` |
-| `child_agent.warmup_command` | サイクルの最初の dispatch の前に1回だけ実行するコマンド(例: `./gradlew compileDebugKotlin`)。空なら省略 | `""` |
+| `child_agent.warmup_command` | サイクルの最初の dispatch の前に1回だけ実行するコマンド(例: ビルドツールのデーモン起動・依存の取得など)。空なら省略 | `""` |
 | `child_agent.idle_timeout_seconds` | 子のログ(`output.log`)が更新されない時間の上限(秒)。超えると `dispatch-run` が子を止め、`done` に `EXIT:idle-timeout` を記録する(`dispatch-check` は exit 4)。未指定・0 以下は無効。POSIX 版は python3 経路のみ対応 | `600` |
 | `child_agent.cli_log` | 子CLI自身のログファイルのパス(先頭の `~/` はホームディレクトリ。例: opencode は `~/.local/share/opencode/log/opencode.log`)。`dispatch-check` がエラー行を出す | 未指定 |
 | `test_command` | 子エージェントに実行させるテストコマンド。空ならタスクごとに親が指定。`quality_gate.steps` の test ステップと同じコマンドに揃える | `""` |
@@ -74,25 +75,84 @@
 | `upstream.url` | upstream リポジトリの URL。`workflow-update` skill で使用 | `https://github.com/Musasaby/multi-ai-agents-workflow.git` |
 | `upstream.branch` | upstream 追従ブランチ名 | `main` |
 
-Claude Code を子エージェントとして使う場合は `stream-json` 出力を指定する:
+### 子CLIのプロファイル
+
+`child_agent.profile` は子CLIの種類を表すプロファイル名で、(1) `dispatch-run` が子の出力をどう扱うか
+(`output_format`)と、(2) ログから何を検知するか(各 `*_pattern`)を決める。未指定・空は `auto`。
+
+| プロファイル | 説明 |
+|--------------|------|
+| `auto` | 既定。`command_template` に `stream-json` を含めば `claude-stream-json` と同じ出力変換を行い、含まなければ `text`。検知は `opencode` と `claude-stream-json` の両方のパターンを使う(従来の挙動) |
+| `opencode` | `opencode run`。テキスト出力のまま `output.log` に書く。ツール実行の ANSI 色付きマーカー行・`permission requested ... auto-rejecting` 等を検知する |
+| `claude-stream-json` | Claude Code(`claude -p ... --output-format stream-json --verbose`)。JSON 行を `[tool_use]` / `[tool_result]` 等の行に変換する。`AGENTS.md` の `@` 参照(import)を子が解決できる |
+| `plain` | 出力形式が不明な CLI。出力をそのまま書き、ログに依存する検知はすべて無効 |
+
+**定義ファイル**: 組み込みは `.agents/workflow/scripts/child-profiles.json`。利用先で追加・上書きするときは
+`.agents/workflow/child-profiles.json` を置く(組み込みと同じ形式のオブジェクト)。同名のプロファイルは
+組み込みを項目単位でなく**丸ごと置き換える**(書かなかったキーは空・`false` になる)。未定義の名前を
+`profile` に指定すると `dispatch-run` はエラー(`Unknown child profile`)で終了する。
+
+**キー**:
+
+| キー | 意味 |
+|------|------|
+| `output_format` | `text`(出力をそのまま `output.log` へ)・`claude-stream-json`(JSON 行を変換し、生の行を `output.jsonl` に残す)・`auto`(`command_template` に `stream-json` を含めば `claude-stream-json`、含まなければ `text`) |
+| `tool_activity_pattern` | ツール実行の記録の行。**ANSI を除く前の生の行**に当てる。`dispatch-check` の完了報告の判定に使い、最後の `## 完了報告` の後にツール実行の記録が続けば報告を無効とし、最後のツール実行の後に出力が無ければその旨を理由に書く。空にすると「ツール実行の記録は無いもの」として扱う(`Disabled checks:` では `tool-activity`) |
+| `tool_call_pattern` | ツール呼び出しの記録行。**生の行**に当てる。プロジェクト外アクセスの検出(`/tmp`・ホームディレクトリ等への参照)の対象行を、この記録行に絞るために使う(`Disabled checks:` では `outside-access`) |
+| `permission_denied_pattern` | 権限拒否の行。**ANSI を除いた行**に当てる(`Disabled checks:` では `permission-denied`) |
+| `provider_error_pattern` | プロバイダ側のエラー(利用上限・429 等)。`cli_log` の ERROR 行を**小文字にした行**に当てる(`Disabled checks:` では `provider-error`) |
+| `agents_md_imports` | `true` なら、子が `AGENTS.md` の `@` 参照を解決できるとみなす(`false` では `AGENTS.md` が `@` 参照だけの場合に `dispatch-prompt-gen` が警告する)。`true`(真偽値)のみ有効 |
+
+各 `*_pattern` に空文字列を指定するとその検査を無効にする。無効になった検査は `dispatch-check` が
+`Disabled checks:` に列挙する。パターンは POSIX ERE と .NET の両方で同じ意味になる書き方
+(`|`・`[...]`・`^`・`$`・`.`・`*`・`+`・`?`・`(...)` 程度。`\d` や先読みは避ける)にし、大文字小文字は区別する。
+1行に収める(改行を含むとエラー)。
+
+**利用先で新しい CLI を足す例**: `.agents/workflow/child-profiles.json` に定義し、`config.json` で指定する。
 
 ```json
-"child_agent": {
-  "command_template": "claude -p \"{prompt}\" --output-format stream-json --verbose"
+{
+  "mycli": {
+    "description": "mycli(テキスト出力)",
+    "output_format": "text",
+    "tool_activity_pattern": "^\\[tool\\]",
+    "tool_call_pattern": "^\\[tool\\]",
+    "permission_denied_pattern": "",
+    "provider_error_pattern": "rate limit|quota",
+    "agents_md_imports": false
+  }
 }
 ```
 
-`command_template` に `stream-json` という文字列が含まれる場合、`dispatch-run` は機械的に
-整形モードへ分岐する。子CLIのstdoutを1行ずつ読み、生のJSON行はそのまま
-`runs/<タスクID>-<試行回数>/output.jsonl` に追記し、パースできた行は人が読めるテキスト
-(assistantのテキスト・使用ツール名と入力要約・`result` の要旨等)に変換して
-`output.log` へ逐次書き出す(パース不能行はそのまま `output.log` に通す)。
-`output.log` は実行中に随時更新されるため `tail -f` / `Get-Content -Wait` で閲覧できる。
+```json
+"child_agent": {
+  "command_template": "mycli run \"{prompt}\"",
+  "profile": "mycli"
+}
+```
+
+**プロンプトの渡し方**: `command_template` の `{prompt}` はプロンプト本文に、`{prompt_file}` は
+`prompt.md` の絶対パス(`/` 区切り)に展開される。どちらも無ければプロンプトを stdin で渡す
+(それ以外は stdin を閉じる)。
+
+**CLI ごとの `command_template` の例**:
+
+- opencode: `opencode run "{prompt}"`(`profile` は `opencode` または未指定)
+- Claude Code: `claude -p "{prompt}" --output-format stream-json --verbose` と `"profile": "claude-stream-json"`
+- プロンプトが長い場合: `{prompt}` の代わりに `{prompt_file}` を使い、本文ではなくファイルの読み込みを指示する
+  (例: `mycli run "Read {prompt_file} and follow it"`)。Windows ではコマンドライン長の上限(約32K文字)を
+  超えうるため
+
+**stream-json の逐次変換**: 出力形式が `claude-stream-json` のとき、`dispatch-run` は子CLIのstdoutを1行ずつ読み、
+生のJSON行はそのまま `runs/<タスクID>-<試行回数>/output.jsonl` に追記し、パースできた行は人が読めるテキスト
+(assistantのテキスト・使用ツール名と入力要約・`result` の要旨等)に変換して `output.log` へ逐次書き出す
+(パース不能行はそのまま `output.log` に通す)。`output.log` は実行中に随時更新されるため
+`tail -f` / `Get-Content -Wait` で閲覧できる。
 
 **注意**: `--output-format text`(デフォルト)は子CLI側の出力がバッファリングされ、
 プロセス終了までの実行中の逐次閲覧ができない。実行中の途中経過を見たい場合は
-`stream-json` 形式を指定すること。`stream-json` を含まないテンプレート(OpenCode等)は
-従来どおり `output.log` への直接リダイレクトのみで、`output.jsonl` は生成されない。
+`stream-json` 形式を指定すること。出力形式が `text` の場合は従来どおり `output.log` への
+直接リダイレクトのみで、`output.jsonl` は生成されない。
 
 ## tasks.md(/agent-task-plan が生成)
 
@@ -274,8 +334,10 @@ tasks.md や AGENTS.md を直してから dispatch する:
 - 受け入れ基準のチェックボックス(`- [ ]`)が6件以上ある(子の1応答の処理量を超えて、推論だけで
   出力トークン上限に達する原因になる)
 - 参照ファイル欄で `(変更対象` と書いた項目が4件以上ある(同上)
-- ルートの `AGENTS.md` が `@` 参照の行だけでできている(opencode 等の子CLIは `@` を展開しないため、
-  子にルールが届かない。`AGENTS.md` に実体を書き、`CLAUDE.md` 側を `@AGENTS.md` にする)
+- ルートの `AGENTS.md` が `@` 参照の行だけでできている(プロファイルの `agents_md_imports` が `false` の
+  子CLI(opencode 等)は `@` を展開しないため、子にルールが届かない。`AGENTS.md` に実体を書き、
+  `CLAUDE.md` 側を `@AGENTS.md` にする)。プロファイルの `agents_md_imports` が `true`
+  (`claude-stream-json` 等)なら警告しない。警告文にはプロファイル名(`profile: <name>`)を含む
 
 **PR モード**(`-Pr` / `--pr`): PR 作成を子に単発で依頼するプロンプトを
 `dispatch-pr-prompt-template.md` から生成し、`runs/pr-<N>-1/prompt.md` に書き出す
@@ -350,9 +412,18 @@ ps1 版は `Get-Content <パス> -Wait -Tail 20`)・`Next: wait` を出す。失
 ### dispatch-run — 子エージェントCLIのデタッチ実行
 
 `runs/<タスクID>-<試行回数>/prompt.md` を読み込み、子エージェントCLI(config.json の
-`child_agent.command_template`)を stdin を閉じて実行する。stdout/stderr を
+`child_agent.command_template`)を実行する。stdout/stderr を
 `runs/<タスクID>-<試行回数>/output.log` に、終了後に exit code と終了時刻を
 `runs/<タスクID>-<試行回数>/done`(`EXIT:` / `END:` の2行)に書き出す。
+
+**プロンプトの渡し方**: テンプレートに `{prompt}` があれば prompt.md の本文に、`{prompt_file}` があれば
+prompt.md の絶対パス(`/` 区切り)に置き換える。どちらも無いときだけ、プロンプトを stdin で
+渡す(UTF-8 のバイト列。改行は変換しない)。どちらかがあるときは stdin を閉じて実行する。
+
+**出力の変換**: 子CLIの出力形式は、プロファイル(`child_agent.profile`、`.agents/workflow/child-profiles.json`
+での上書きを含む)の `output_format` で決まる。`claude-stream-json` なら JSON 行を変換し、`text` なら
+そのまま `output.log` に書く。プロファイルを解決できない(未知の名前・`child-profiles.json` の不正等)ときは、
+子を起動せず `output.log` に `Child profile error: <メッセージ>` を書き、`done` の `EXIT:` を `1` にして終える。
 
 `EXIT:` の値は、数値(子CLIの exit code)・`signal:<番号>`(子がシグナルで強制終了された。
 POSIX 版のみ)・`crashed:<メッセージ>`(ラッパー自体の異常終了。PowerShell 版)のいずれか。
@@ -391,12 +462,14 @@ nohup .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1 &
 ### dispatch-check — 完了検知後の終了状態・成果物の判定
 
 `done` マーカーを検知したら毎回実行する。終了状態の区分(`ok` / `nonzero` / `idle-timeout` /
-`signal` / `crashed`)、管理ファイルの改ざん検知(`Guard:`)、権限拒否の有無(`Permission denied:`)、
+`signal` / `crashed`)、使ったプロファイル名(`Profile:`)、パターンが空で無効な検査(`Disabled checks:`。
+無ければ `none`)、管理ファイルの改ざん検知(`Guard:`)、権限拒否の有無(`Permission denied:`)、
 プロジェクト外アクセスの検出(`Outside access:`)、子CLI自身のログのエラー(`CLI log:` と
 `Provider error:`)、完了報告の判定(`Completion report:`)、変更件数(`Changes:`)、
 `git status --porcelain`、`git diff --stat`、`output.log` の末尾30行をまとめて出力する。
 
-- **改ざん検知**: `dispatch-run` は起動時に `prompt.md`・`state.json`・`tasks.md`・`config.json` の
+- **改ざん検知**: `dispatch-run` は起動時に `prompt.md`・`state.json`・`tasks.md`・`config.json`・
+  `.agents/workflow/child-profiles.json` の
   SHA-256 を `runs/<タスクID>-<試行回数>/guard.sha256` に記録する。`dispatch-check` はこれと
   現在の内容を比べ、変更・削除を検知する。`guard.sha256`・`output.log`・`git-state.txt` が無い場合や、
   `output.log` に NUL バイトがある(実行中に空にされた)場合も改ざんとみなす。
@@ -408,10 +481,21 @@ nohup .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1 &
   `git changed: <名前>` を改ざん検知の問題に加える(例: 子が `git commit` や `git config` で
   リポジトリの git 状態を変えた場合)。PR 作成の run(`pr-*`)だけは `config` を比べない
   (子が `git push -u` で `.git/config` を正当に変えるため)
+- **プロファイルのパターンによる判定**: 検知はプロファイル(`Profile:` に出る名前)のパターンで行う。
+  プロジェクト外アクセスは `tool_call_pattern`、完了報告の無効判定(ツール実行の記録)は
+  `tool_activity_pattern`、権限拒否は `permission_denied_pattern`、プロバイダーエラーは
+  `provider_error_pattern`。パターンが空の検査は行わず、出力は `disabled (profile: <name>)` になる
+  (`Permission denied:`・`Outside access:`・`Provider error:`)。無効な検査は検出なしとして扱い、
+  Verdict・exit code は変わらない(`Disabled checks:` に検査名 `permission-denied`・`outside-access`・
+  `tool-activity`・`provider-error` を出す)。プロファイルを解決できない(未知の名前・
+  `child-profiles.json` の不正等)ときは、原因を stderr に出して exit 1 で終わる(`Next:` 行は出さない)。
+  以下の opencode のマーカー行や stream-json の行は、`auto` / `opencode` / `claude-stream-json` の
+  組み込みパターンの例である
 - **プロジェクト外アクセス**: `Outside access: yes` と一致した行を出す。対象はツール実行の記録行
-  だけ(opencode の色付きマーカー行 `$` / `→` / `←` / `✱` / `✗` / `⚙` で始まるものと stream-json の
-  `[tool_use]` 行。`!` で始まる権限拒否の行は除く。ツールの出力(色なしの行・`[tool_result]` 行)や
-  完了報告の本文には反応しない。ANSI エスケープを除いた行に対して判定する)。検出条件は次の3つ:
+  (`tool_call_pattern` に一致する行。組み込みの例: opencode の色付きマーカー行 `$` / `→` / `←` / `✱` / `✗` / `⚙`
+  で始まるものと stream-json の `[tool_use]` 行。`!` で始まる権限拒否の行は除く)
+  だけで、ツールの出力(色なしの行・`[tool_result]` 行)や完了報告の本文には反応しない。
+  ANSI エスケープを除いた行に対して判定する。検出条件は次の3つ:
   1) `/tmp`・`/var/tmp` の参照、2) ホームディレクトリの参照(`~/`・`$HOME`・`${HOME}`・
   `$env:HOME`・`$env:USERPROFILE`・`%USERPROFILE%`)、3) Windows のユーザー一時ディレクトリの参照
   (`AppData\Local\Temp`・`AppData/Local/Temp`)。2 と 3 は大文字小文字を区別しない。`$env:TEMP`・`%TEMP%`・
@@ -419,8 +503,9 @@ nohup .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1 &
 - **完了報告の保存**: ok(exit 0)と no-changes(exit 7)のとき、最後の完了報告のブロックを
   `runs/<ID>-<N>/report.md` に保存する(既存は上書きしない)。出力の `Report:` 行にパスを出す
 - **完了報告**: `output.log` で**最後に出現する** `## 完了報告` 行だけを対象にする。
-  その後にツール実行の記録(opencode が色付きで出すマーカー行 = ANSI エスケープに挟まれた
-  `$ ` / `→ ` / `← ` / `✱ ` / `✗ ` / `⚙ ` / `! `、stream-json の `[tool_use]` / `[tool_result]` 行)が
+  その後にツール実行の記録(`tool_activity_pattern` に一致する行。組み込みの例: opencode が色付きで出す
+  マーカー行 = ANSI エスケープに挟まれた `$ ` / `→ ` / `← ` / `✱ ` / `✗ ` / `⚙ ` / `! `、stream-json の
+  `[tool_use]` / `[tool_result]` 行)が
   続く場合は無効(報告本文の色なしの `→ 要確認` や `$ npm test` はツール実行とみなさない)。必須項目は通常のタスクが
   `- 変更ファイル:` と `- テスト結果:`、PR 作成の run(`pr-*`)が `- PR URL:`。項目名の後の区切りは
   半角 `:` と全角 `：` のどちらでもよい(#55)。値が空・
@@ -433,12 +518,15 @@ nohup .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1 &
   先頭の `~/` はホームディレクトリで展開する)を読む。`CLI log:` には設定したパスを出し、
   未設定なら `(not configured)`、パスのファイルが無ければ `<パス> (not found)`。次にそのログの
   末尾200行のうち `ERROR` を含む行の最後の5行を字下げして出す。`Provider error:` はプロバイダー起因の
-  失敗かどうか(`yes` / `no` / `unknown`)で、5行のいずれかが `usage limit`・`rate limit`・
+  失敗かどうか(`yes` / `no` / `unknown`)で、5行のいずれかが `provider_error_pattern` に一致すれば `yes`、
+  一致しなければ `no`、`cli_log` が未設定・ファイルが無ければ `unknown`。`provider_error_pattern` が空なら
+  `cli_log` の有無にかかわらず `disabled (profile: <name>)`(組み込みの例: `usage limit`・`rate limit`・
   `endpoint is unavailable`・429(前後に英数字を続けない。`.429Z` のようなタイムスタンプ等に
-  一致させないため)を含めば `yes`、含まなければ `no`、`cli_log` が未設定・ファイルが無ければ `unknown`。
+  一致させないため))。
   利用上限・レート制限・エンドポイント障害の切り分け用の参考情報で、Verdict・exit code には影響しない
-- **権限拒否**: 行頭が `! permission requested:` で `auto-rejecting` を含む行(opencode の拒否の記録)が
-  あれば権限拒否とみなす(子が表示したソース中の同じ文字列には反応しない)
+- **権限拒否**: `permission_denied_pattern` に一致する行があれば権限拒否とみなす
+  (組み込みの例: opencode の拒否の記録 = 行頭が `! permission requested:` で `auto-rejecting` を含む行。
+  子が表示したソース中の同じ文字列には反応しない)
 - Windows PowerShell 5.1 が UTF-16LE で書いた `output.log` も BOM を見て読む(PowerShell 版)
 
 ```powershell
@@ -459,7 +547,7 @@ exit code(複数に当たる場合は上の行を優先する):
 | `7` | `no-changes` | 完了報告はあるが作業ツリーに変更が無い(`pr-*` の run では判定しない) |
 | `0` | `ok` | 正常終了かつ完了報告あり |
 | `2` | — | done マーカーが無い(まだ実行中) |
-| `1` | — | 使い方不備 |
+| `1` | — | 使い方不備、またはプロファイルを解決できない(stderr に原因を出す) |
 
 この版から、done マーカーが無いときは exit 1 ではなく exit 2 を返す(#69)。
 
@@ -800,7 +888,7 @@ bash .agents/skills/_templates/workflow/scripts/workflow-setup.sh --check
 
 行う処理:
 
-1. `.agents/workflow/runs/`・`.agents/workflow/.config/opencode/log/` を作る
+1. `.agents/workflow/runs/` を作る。`child_agent.isolate_xdg` が `true` のときだけ `.agents/workflow/.config/` も作る
 2. `config.json`・`README.md` を `.agents/workflow/` にコピーする(無ければ)
 3. `scripts/` の未配置分を `workflow-sync-scripts --copy-missing` でコピーする(`.sh` に実行権限を付ける)
 4. `AGENTS.md` をテンプレートからコピーする(無ければ)

@@ -72,8 +72,14 @@ function Confirm-Line { # ファイル, 行(完全一致で判定し、無けれ
 }
 
 Confirm-Dir '.agents/workflow/runs'
-Confirm-Dir '.agents/workflow/.config/opencode/log'
 Confirm-Copy (Join-Path $templateRoot 'config.json') '.agents/workflow/config.json'
+# child_agent.isolate_xdg が true のときだけ XDG 隔離用ディレクトリを作る(読めない場合は false)
+$isolateXdg = $false
+try {
+    $cfg = [System.IO.File]::ReadAllText((Join-Path $root '.agents/workflow/config.json'), $utf8) | ConvertFrom-Json
+    if ($cfg.child_agent.isolate_xdg -eq $true) { $isolateXdg = $true }
+} catch { $isolateXdg = $false }
+if ($isolateXdg) { Confirm-Dir '.agents/workflow/.config' }
 Confirm-Copy (Join-Path $templateRoot 'README.md') '.agents/workflow/README.md'
 
 # スクリプト

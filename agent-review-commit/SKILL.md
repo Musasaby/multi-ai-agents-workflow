@@ -127,7 +127,7 @@ POSIX: `.agents/workflow/scripts/task-commit.sh <ID> <type> "<説明>"`)。
 
 出力の最後の行が `Next: continue` 以外なら、コミットが済んだと見なさず中断し、
 `Next:` 行の reason と stderr の内容をユーザーに報告する。
-`Next: continue` の場合は、Claude Code Task(表示用)も completed に更新する。
+`Next: continue` の場合、進捗表示用のタスクを登録していれば(`agent-task-plan` §4。任意)完了に更新する。
 
 ## ユーザーへの報告
 

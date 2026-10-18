@@ -27,6 +27,22 @@ AIエージェント(Claude Code、OpenCode 等)による複数エージェン�
 - `main` ブランチへの直接コミットは禁止。`develop/<作業名>` ブランチで作業
 - 子エージェントCLIは `.agents/workflow/config.json` の `child_agent.command_template` で設定
 
+## 親エージェント・子CLIの対応
+
+### 親エージェント
+
+- Claude Code: `CLAUDE.md`(`@AGENTS.md` の1行)と `.claude` リンクで、AGENTS.md と skill を読み込む
+- AGENTS.md を直接読む親(Codex 等): 追加の設定は不要
+- 別の名前の設定ファイルを読む親: その設定ファイルから AGENTS.md を読み込む(import できなければ内容を写す)
+- skill の仕組みが無い親: `.agents/skills/<名前>/SKILL.md` を読ませて手順に従わせる
+- 親固有の機能(進捗表示のタスク登録等)は任意手順であり、対応していなくてもワークフローは進められる
+
+### 子CLI
+
+- `.agents/workflow/config.json` の `child_agent.profile` で、子CLIの出力形式と検知パターンを選ぶ
+- 組み込みのプロファイルに無い CLI は、`.agents/workflow/child-profiles.json` で定義する
+- 検知できない検査は、`dispatch-check` が `Disabled checks:` に出す
+
 ## 導入手順
 
 1. 利用先プロジェクトのルートで以下を実行:
@@ -222,11 +238,11 @@ cp _templates/workflow/config.json .agents/workflow/config.json
 
 ## サンドボックス環境での実行注意点
 
-Codex 等のサンドボックス環境で子エージェント CLI(opencode 等)を実行する際、CLI がホームディレクトリ(`~/.config` 等)への書込を必要とする場合があります。
+Codex 等のサンドボックス環境で子エージェント CLI を実行する際、CLI がホームディレクトリ(`~/.config` 等)への書込を必要とする場合があります(以下は opencode を例にした記述です)。
 
-制限環境では `EEXIST: file already exists, mkdir '~/.config/opencode'` 等のエラーで CLI が起動失敗する場合があります。対処の詳細は `agent-dispatch/SKILL.md` の「トラブルシューティング」節を参照してください。
+制限環境では、例えば opencode で `EEXIST: file already exists, mkdir '~/.config/opencode'` 等のエラーが出て CLI が起動失敗する場合があります。対処の詳細は `agent-dispatch/SKILL.md` の「トラブルシューティング」節を参照してください。
 
-簡易対処として、`.agents/workflow/config.json` の `child_agent.isolate_xdg` を `true` にすると、`dispatch-run` が子エージェント CLI の `XDG_CONFIG_HOME` と `XDG_DATA_HOME` をプロジェクト内の書き込み可能なディレクトリ(`.agents/workflow/.config`)に向けます。`/agents-md-setup` は `.agents/workflow/.config/opencode/log` を事前作成します。この設定では `~/.local/share/<CLI>/auth.json` 等の認証情報が見えなくなるため、sandbox 環境以外では既定の `false` のまま使ってください。
+簡易対処として、`.agents/workflow/config.json` の `child_agent.isolate_xdg` を `true` にすると、`dispatch-run` が子エージェント CLI の `XDG_CONFIG_HOME` と `XDG_DATA_HOME` をプロジェクト内の書き込み可能なディレクトリ(`.agents/workflow/.config`)に向けます。`isolate_xdg` を `true` にした後で `/agents-md-setup`(`workflow-setup`)を再実行すると `.agents/workflow/.config/` が作られます(その下に CLI が使うディレクトリ(例: opencode の `log`)は、CLI が作るか、作れない環境では事前に作成します。詳細は `agent-dispatch/references/opencode.md`)。この設定では `~/.local/share/<CLI>/auth.json` 等の認証情報が見えなくなるため、sandbox 環境以外では既定の `false` のまま使ってください。
 
 ```powershell
 # PowerShell の例

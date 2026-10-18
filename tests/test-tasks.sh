@@ -888,6 +888,26 @@ t_gen_agents_md_at_only_warns() {
     assert_not_contains "$ERR" "AGENTS.md only contains" "no warning when AGENTS.md has content"
 }
 
+t_gen_agents_md_at_only_profile_expands() {
+    basic_tasks
+    write_state "T1:pending"
+    printf '@.agents/skills/_templates/AGENTS.md\n' > "$PROJ/AGENTS.md"
+    run_script dispatch-prompt-gen.sh T1
+    assert_contains "$ERR" "the child CLI (profile: auto) does not expand them" "profile name in warning"
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" <<'PY'
+import json, sys
+p = sys.argv[1]
+with open(p, encoding='utf-8') as f:
+    cfg = json.load(f)
+cfg['child_agent']['profile'] = 'claude-stream-json'
+with open(p, 'w', encoding='utf-8') as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+PY
+    run_script dispatch-prompt-gen.sh T1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_not_contains "$ERR" "AGENTS.md only contains" "no warning for profile that expands @"
+}
+
 t_gen_ref_files_inline() {
     printf 'x\n' > "$PROJ/a.txt"
     ref_tasks '- **参照ファイル**: `a.txt:1-5`(全体)'
@@ -986,6 +1006,7 @@ test_case "gen: 存在しない参照ファイルはexit 1" t_gen_ref_files_miss
 test_case "gen: 参照ファイル欄が無ければ警告" t_gen_ref_files_absent_warns
 test_case "gen: 参照ファイル なし は検証しない" t_gen_ref_files_none
 test_case "gen: @参照だけのAGENTS.mdは警告" t_gen_agents_md_at_only_warns
+test_case "gen: AGENTS.md の @ 参照を展開する profile では警告しない" t_gen_agents_md_at_only_profile_expands
 test_case "gen: 同じ行の参照ファイルも検証する" t_gen_ref_files_inline
 test_case "gen: 受け入れ基準が6件以上なら警告" t_gen_ac_too_many_warns
 test_case "gen: 変更対象の参照ファイルが4件以上なら警告" t_gen_changed_ref_files_warns

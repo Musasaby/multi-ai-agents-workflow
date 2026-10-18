@@ -64,8 +64,11 @@ ensure_line() { # $1 = ファイル, $2 = 行(完全一致で判定し、無け�
 }
 
 ensure_dir .agents/workflow/runs
-ensure_dir .agents/workflow/.config/opencode/log
 ensure_copy "$TEMPLATE_ROOT/config.json" .agents/workflow/config.json
+# child_agent.isolate_xdg が true のときだけ XDG 隔離用ディレクトリを作る(読めない場合は false)
+if python3 -c "import json,sys; sys.exit(0 if json.load(open('.agents/workflow/config.json', encoding='utf-8'))['child_agent'].get('isolate_xdg', False) is True else 1)" 2>/dev/null; then
+    ensure_dir .agents/workflow/.config
+fi
 ensure_copy "$TEMPLATE_ROOT/README.md" .agents/workflow/README.md
 
 # スクリプト

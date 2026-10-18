@@ -1,6 +1,6 @@
 ﻿# PowerShell セッション内で `& script.ps1` と直接呼んだときにも、成功時に $LASTEXITCODE が 0 になること。
 # (exit を呼ばずに終わるスクリプトは $LASTEXITCODE を更新しないため、直前の値や空のまま残る)
-# 動的検査は _templates/workflow/scripts/ の直接実行する .ps1(tasklib.ps1 以外)の全 12 本に
+# 動的検査は _templates/workflow/scripts/ の直接実行する .ps1(tasklib.ps1・childprofile.ps1 以外)の全 12 本に
 # 1 件ずつある。静的検査(最後の行が exit で始まるか)は補助として残す。
 . "$PSScriptRoot/lib.ps1"
 
@@ -21,7 +21,7 @@ Write-Host "test-exitcode.ps1"
 
 Invoke-TestCase "静的検査: 直接実行するスクリプトは exit で終わる" {
     foreach ($f in Get-ChildItem "$script:TemplateScripts/*.ps1") {
-        if ($f.Name -eq 'tasklib.ps1') { continue }   # dot-source される部品
+        if ($f.Name -in @('tasklib.ps1', 'childprofile.ps1')) { continue }   # dot-source される部品
         $last = (Get-Content $f.FullName | Where-Object { $_.Trim() -ne '' } | Select-Object -Last 1).Trim()
         Add-Result ($last -match '^exit\b') "$($f.Name) ends with '$last' (expected an exit statement)"
     }

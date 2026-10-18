@@ -2,6 +2,7 @@
     [Parameter(Mandatory = $true)][string]$TaskId,
     [int]$Attempt = 1
 )
+. "$PSScriptRoot/childprofile.ps1"
 # パスや埋め込みに使うため、タスクIDと試行回数の形式を検証する
 if ($TaskId -cnotmatch '^[A-Za-z0-9_-]+$' -or $Attempt -lt 1) {
     [Console]::Error.WriteLine("Invalid TaskId/Attempt: '$TaskId' '$Attempt'")
@@ -21,7 +22,7 @@ Remove-Item -Force -ErrorAction SilentlyContinue $donePath, $idlePath
 $promptPath = "$runDir/prompt.md"
 # 子が管理ファイルを変更・削除していないかを dispatch-check が確かめられるよう、起動時の
 # SHA-256 を記録する(存在しないファイルは "-")。形式は sha256sum と同じ "<hash>  <path>"
-$guardLines = foreach ($f in @($promptPath, '.agents/workflow/state.json', '.agents/workflow/tasks.md', '.agents/workflow/config.json')) {
+$guardLines = foreach ($f in @($promptPath, '.agents/workflow/state.json', '.agents/workflow/tasks.md', '.agents/workflow/config.json', '.agents/workflow/child-profiles.json')) {
     $h = if (Test-Path -LiteralPath $f -PathType Leaf) { (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash.ToLowerInvariant() } else { '-' }
     "$h  $f"
 }
@@ -144,19 +145,31 @@ try {
             }
         }
     }
-    $tokens = Split-CommandLine $config.child_agent.command_template
-    $isStreamJson = $config.child_agent.command_template -match 'stream-json'
+    try {
+        $childProfile = Get-ChildProfile -Root (Get-Location).Path
+    } catch {
+        [System.IO.File]::WriteAllText((Join-Path (Get-Location) $logPath), "Child profile error: $($_.Exception.Message)`n", [System.Text.UTF8Encoding]::new($false))
+        $endTime = (Get-Date).ToString("o")
+        "EXIT:1`nEND:$endTime" | Out-File -Encoding utf8 $donePath
+        exit 0
+    }
+    $template = [string]$config.child_agent.command_template
+    $tokens = Split-CommandLine $template
+    $isStreamJson = $childProfile.OutputFormat -eq 'claude-stream-json'
+    $promptFile = [System.IO.Path]::GetFullPath((Join-Path (Get-Location).Path $promptPath)).Replace('\', '/')
+    # {prompt_file}・{prompt} のどちらも無いテンプレートは、プロンプトを stdin で渡す
+    $useStdin = -not ($template.Contains('{prompt_file}') -or $template.Contains('{prompt}'))
     $argList = @()
     foreach ($token in $tokens) {
         $arg = $token
         if ($arg.Length -ge 2 -and $arg[0] -eq '"' -and $arg[-1] -eq '"') {
             $arg = $arg.Substring(1, $arg.Length - 2)
         }
-        $arg = $arg.Replace("{prompt}", $prompt)
+        $arg = $arg.Replace("{prompt_file}", $promptFile).Replace("{prompt}", $prompt)
         $argList += $arg
     }
     $exe = $argList[0]
-    $rest = if ($argList.Count -gt 1) { $argList[1..($argList.Count - 1)] } else { @() }
+    $rest = @(if ($argList.Count -gt 1) { $argList[1..($argList.Count - 1)] })
 
     if ($isStreamJson) {
         Remove-Item -Force -ErrorAction SilentlyContinue $jsonlPath, $logPath
@@ -170,6 +183,7 @@ try {
         $psi.UseShellExecute = $false
         $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
         $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+        if ($useStdin) { $psi.StandardInputEncoding = [System.Text.UTF8Encoding]::new($false) }
 
         $proc = New-Object System.Diagnostics.Process
         $proc.StartInfo = $psi
@@ -182,10 +196,19 @@ try {
         }
         $errJob = Register-ObjectEvent -InputObject $proc -EventName ErrorDataReceived -Action $errAction -MessageData $logPath
 
+        $stdinJob = $null
         try {
             $proc.Start() | Out-Null
-            $proc.StandardInput.Close()
             $proc.BeginErrorReadLine()
+            if ($useStdin) {
+                # 子が stdin を読み切る前に stderr / stdout へ大量に書いても止まらないよう、別スレッドで書き込む
+                $stdinJob = Start-ThreadJob -ArgumentList $proc.StandardInput, $prompt -ScriptBlock {
+                    param($Writer, $Text)
+                    try { $Writer.Write($Text) } catch { } finally { try { $Writer.Close() } catch { } }
+                }
+            } else {
+                $proc.StandardInput.Close()
+            }
 
             while ($null -ne ($line = $proc.StandardOutput.ReadLine())) {
                 Add-Content -Path $jsonlPath -Value $line -Encoding utf8
@@ -201,14 +224,19 @@ try {
             $proc.WaitForExit()
             $exitCode = $proc.ExitCode
         } finally {
+            if ($stdinJob) {
+                Wait-Job $stdinJob | Out-Null
+                Remove-Job $stdinJob -Force -ErrorAction SilentlyContinue
+            }
             Unregister-Event -SourceIdentifier $errJob.Name -ErrorAction SilentlyContinue
             Remove-Job -Id $errJob.Id -Force -ErrorAction SilentlyContinue
         }
     } else {
+        $stdinText = if ($useStdin) { $prompt } else { $null }
         if ($rest.Count -gt 0) {
-            $null | & $exe @rest *> $logPath
+            $stdinText | & $exe @rest *> $logPath
         } else {
-            $null | & $exe *> $logPath
+            $stdinText | & $exe *> $logPath
         }
         $exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
     }
