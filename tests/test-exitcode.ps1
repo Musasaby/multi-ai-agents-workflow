@@ -212,6 +212,25 @@ Invoke-TestCase "workflow-sync-scripts: 成功時に LASTEXITCODE=0" {
     Assert-Eq 0 (Invoke-InProcess '../../skills/_templates/workflow/scripts/workflow-sync-scripts.ps1') "LASTEXITCODE"
 }
 
+Invoke-TestCase "workflow-setup: 成功時に LASTEXITCODE=0" {
+    # workflow-sync-scripts と同様にテンプレート側のコピーから実行する。空の利用先に近い構成
+    # (.agents/workflow/ と .gitignore を消す)にして、セットアップが全部成功する状態で呼ぶ
+    Remove-Item -Recurse -Force "$script:Proj/.agents/workflow", "$script:Proj/.gitignore" -ErrorAction SilentlyContinue
+    $null = New-Item -ItemType Directory -Force "$script:Proj/.agents/skills"
+    Copy-Item -Recurse "$script:RepoRoot/_templates" "$script:Proj/.agents/skills/_templates"
+    Push-Location $script:Proj
+    try {
+        $global:LASTEXITCODE = 99
+        & "$script:Proj/.agents/skills/_templates/workflow/scripts/workflow-setup.ps1" *> $null
+        $code = $global:LASTEXITCODE
+    } finally {
+        Pop-Location
+        $link = Get-Item "$script:Proj/.claude" -Force -ErrorAction SilentlyContinue
+        if ($link -and $link.LinkType) { $link.Delete() }
+    }
+    Assert-Eq 0 $code "LASTEXITCODE"
+}
+
 Invoke-TestCase "quality-gate: 成功時に LASTEXITCODE=0" {
     $path = "$script:Proj/.agents/workflow/config.json"
     $cfg = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
