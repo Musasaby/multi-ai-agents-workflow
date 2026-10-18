@@ -64,4 +64,39 @@ Invoke-TestCase "gate: ステップが stdin を読んでも後続のステッ�
     Assert-Contains $script:Out "PASS b" "b still ran"
 }
 
+Invoke-TestCase "gate: command が空なら package.json の同名スクリプトを使う" {
+    Write-Utf8File "$script:Proj/package.json" ('{"scripts":{"test":"echo pkg"}}' + "`n")
+    Set-Steps @(, @('test', '', $true))
+    Invoke-Script quality-gate.ps1 -OutDir out
+    Assert-Contains $script:Out "npm run test" "npm run test is used"
+}
+
+Invoke-TestCase "gate: quality_gate が無ければ package.json から検出する" {
+    Write-Utf8File "$script:Proj/package.json" ('{"scripts":{"lint":"echo lint"}}' + "`n")
+    $path = "$script:Proj/.agents/workflow/config.json"
+    $cfg = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $cfg.PSObject.Properties.Remove('quality_gate')
+    Write-Utf8File $path (($cfg | ConvertTo-Json -Depth 10) + "`n")
+    Invoke-Script quality-gate.ps1 -OutDir out
+    Assert-Contains $script:Out "lint (non-blocking): npm run lint" "lint detected"
+}
+
+Invoke-TestCase "gate: -Steps で絞り込む" {
+    Set-Steps @(@('a', 'echo a', $true), @('b', 'echo b', $true))
+    Invoke-Script quality-gate.ps1 -OutDir out -Steps b
+    Assert-Eq 0 $script:Code "exit code: $script:Err"
+    Assert-Contains $script:Out "PASS b" "b ran"
+    Assert-NotContains $script:Out "PASS a" "a not run"
+}
+
+Invoke-TestCase "gate: -Fix は fix_command を先に実行する" {
+    Set-Steps @(, @('a', 'if (Test-Path .agents/fixed.txt) { exit 0 } else { exit 1 }', $true))
+    $path = "$script:Proj/.agents/workflow/config.json"
+    $cfg = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $cfg.quality_gate.steps[0] | Add-Member -NotePropertyName fix_command -NotePropertyValue 'Set-Content .agents/fixed.txt fixed'
+    Write-Utf8File $path (($cfg | ConvertTo-Json -Depth 10) + "`n")
+    Invoke-Script quality-gate.ps1 -OutDir out -Fix
+    Assert-Eq 0 $script:Code "exit code: $script:Out $script:Err"
+}
+
 Show-Summary
