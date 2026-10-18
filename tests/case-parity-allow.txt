@@ -21,7 +21,3 @@ test-tasks.sh: __pycache__ を作らない
 
 # test-exitcode.sh は存在しない(sh 側では各テストが直接 exit code を断言する)
 test-exitcode.ps1: *
-
-# #58: ps1 版のケースは T30 で足す(T30 でこの3行を消す)
-test-group-advance.sh: advance: 状態ファイルを追跡するリポジトリでは切替後に state.json をコミットする
-test-group-advance.sh: advance: .agents を追跡しないリポジトリでは state.json をコミットしない
