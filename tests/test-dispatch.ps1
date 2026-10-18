@@ -67,6 +67,17 @@ function Set-CliLog {
     Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
 }
 
+# 子CLIプロファイル(config.json の child_agent.profile)を設定する($Value = プロファイル名)。
+# profile は guard.sha256 の対象なので New-Run の前に呼ぶ
+function Set-Profile {
+    param([string]$Value)
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg.child_agent.PSObject.Properties.Remove('profile')
+    $cfg.child_agent | Add-Member -NotePropertyName profile -NotePropertyValue $Value
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+}
+
 function Get-ChildXdg {
     $env:XDG_DATA_HOME = 'C:/caller/xdg-data'
     try { Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1 } finally { Remove-Item Env:XDG_DATA_HOME -ErrorAction SilentlyContinue }
@@ -423,6 +434,58 @@ Invoke-TestCase "check: 権限拒否はexit 6" {
     Assert-Contains $script:Out "Permission denied: yes" "flag"
     Assert-Contains $script:Out "auto-rejecting" "denied line shown"
     Assert-Eq "Next: escalate reason=permission-denied" (($script:Out -split "`n")[-1]) "next line"
+}
+
+Invoke-TestCase "check: profile 未指定は Profile: auto と Disabled checks: none を出す" {
+    New-Run 0 $report
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Profile: auto" "profile"
+    Assert-Contains $script:Out "Disabled checks: none" "disabled checks"
+}
+
+Invoke-TestCase "check: plain は検知できない検査を disabled と出し、権限拒否の行があっても ok" {
+    Set-Profile plain
+    New-Run 0 "! permission requested: x; auto-rejecting`n$report"
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Disabled checks: permission-denied, outside-access, tool-activity, provider-error" "disabled checks"
+    Assert-Contains $script:Out "Permission denied: disabled (profile: plain)" "permission denied"
+    Assert-Contains $script:Out "Outside access: disabled (profile: plain)" "outside access"
+    Assert-Contains $script:Out "Provider error: disabled (profile: plain)" "provider error"
+}
+
+Invoke-TestCase "check: claude-stream-json は opencode のマーカー行を見ず [tool_use] 行でプロジェクト外アクセスを検出する" {
+    $e = [char]27
+    Set-Profile claude-stream-json
+    New-Run 0 "$report`n$e[0m`$ $e[0mcat /tmp/x"
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "opencode marker line is ignored: $($script:Out)"
+    New-Run 0 "$report`n[tool_use] bash: {`"command`": `"cat /tmp/x`"}"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 6 $script:Code "tool_use line detected: $($script:Out)"
+    Assert-Eq "Next: escalate reason=outside-access" (($script:Out -split "`n")[-1]) "next line"
+}
+
+Invoke-TestCase "check: 利用先の child-profiles.json の権限拒否パターンで exit 6" {
+    Write-Utf8File "$script:Proj/.agents/workflow/child-profiles.json" "{`"mycli`": {`"output_format`": `"text`", `"permission_denied_pattern`": `"^DENIED: `"}}`n"
+    Set-Profile mycli
+    New-Run 0 "DENIED: rm -rf x`n$report"
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 6 $script:Code "exit code: $($script:Out)"
+    Assert-Eq "Next: escalate reason=permission-denied" (($script:Out -split "`n")[-1]) "next line"
+}
+
+Invoke-TestCase "check: 未定義の profile は exit 1" {
+    Set-Profile nope
+    New-Run 0 $report
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 1 $script:Code "exit code: $($script:Out)"
+    Assert-NotContains $script:Out "Next:" "no Next line"
 }
 
 Invoke-TestCase "check: 変更0件はexit 7" {

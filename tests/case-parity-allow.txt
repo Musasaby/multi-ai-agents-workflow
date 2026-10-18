@@ -19,12 +19,5 @@ test-dispatch.sh: run: プロジェクトルート以外から相対パスで起
 # ps1 版は tasklib.ps1 を使い Python を実行しないため、この確認は ps1 に該当しない
 test-tasks.sh: __pycache__ を作らない
 
-# T3: dispatch-check.sh のプロファイル対応(ps1 側は T4 で書く。T4 で削除する)
-test-dispatch.sh: check: profile 未指定は Profile: auto と Disabled checks: none を出す
-test-dispatch.sh: check: plain は検知できない検査を disabled と出し、権限拒否の行があっても ok
-test-dispatch.sh: check: claude-stream-json は opencode のマーカー行を見ず [tool_use] 行でプロジェクト外アクセスを検出する
-test-dispatch.sh: check: 利用先の child-profiles.json の権限拒否パターンで exit 6
-test-dispatch.sh: check: 未定義の profile は exit 1
-
 # test-exitcode.sh は存在しない(sh 側では各テストが直接 exit code を断言する)
 test-exitcode.ps1: *
