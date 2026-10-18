@@ -283,9 +283,15 @@ if count > 3:
     print('WARN: ' + task_id + ': ' + str(count) + ' reference files marked 変更対象 (more than 3; consider splitting the task)', file=sys.stderr)
 PY
 
-# --- AGENTS.md が @ 参照だけのファイルなら警告する(opencode 等は @ を展開しないため、子にルールが届かない) ---
+# --- AGENTS.md が @ 参照だけのファイルなら警告する(プロファイルの agents_md_imports が false の子CLIは @ を展開しないため、子にルールが届かない) ---
 if [ -f AGENTS.md ] && ! awk '/[^[:space:]]/ && !/^[[:space:]]*@/ { found = 1; exit } END { exit !found }' AGENTS.md; then
-    echo "WARN: AGENTS.md only contains '@' references; child CLIs such as opencode do not expand them, so the child cannot read the rules" >&2
+    # 解決に失敗しても prompt-gen は止めず、展開しない(false)とみなす
+    PROFILE_OUT=$(python3 "$(to_py_path "$SCRIPT_DIR/childprofile.py")" . 2>/dev/null | tr -d '\r') || PROFILE_OUT=""
+    PROFILE_NAME=$(printf '%s\n' "$PROFILE_OUT" | sed -n '1p')
+    PROFILE_IMPORTS=$(printf '%s\n' "$PROFILE_OUT" | sed -n '7p')
+    if [ "$PROFILE_IMPORTS" != "true" ]; then
+        echo "WARN: AGENTS.md only contains '@' references; the child CLI (profile: ${PROFILE_NAME:-unknown}) does not expand them, so the child cannot read the rules" >&2
+    fi
 fi
 
 # --- Handoff guard ---
