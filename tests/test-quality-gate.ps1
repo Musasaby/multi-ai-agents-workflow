@@ -89,6 +89,15 @@ Invoke-TestCase "gate: -Steps で絞り込む" {
     Assert-NotContains $script:Out "PASS a" "a not run"
 }
 
+Invoke-TestCase "gate: -Steps の名前の前後の空白を無視する" {
+    Set-Steps @(@('a', 'echo a', $true), @('b', 'echo b', $true), @('c', 'echo c', $true))
+    Invoke-Script quality-gate.ps1 -OutDir out -Steps 'a, b'
+    Assert-Eq 0 $script:Code "exit code: $script:Err"
+    Assert-Contains $script:Out "PASS a" "a ran"
+    Assert-Contains $script:Out "PASS b" "b ran"
+    Assert-NotContains $script:Out "PASS c" "c not run"
+}
+
 Invoke-TestCase "gate: -Fix は fix_command を先に実行する" {
     Set-Steps @(, @('a', 'if (Test-Path .agents/fixed.txt) { exit 0 } else { exit 1 }', $true))
     $path = "$script:Proj/.agents/workflow/config.json"

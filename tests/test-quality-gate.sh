@@ -102,6 +102,15 @@ t_steps_filter() {
     assert_not_contains "$OUT" "PASS a" "a not run"
 }
 
+t_steps_spaces() {
+    set_steps 'a|echo a|true' 'b|echo b|true' 'c|echo c|true'
+    run_script quality-gate.sh --out-dir out --steps 'a, b'
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "PASS a" "a ran"
+    assert_contains "$OUT" "PASS b" "b ran"
+    assert_not_contains "$OUT" "PASS c" "c not run"
+}
+
 t_fix() {
     set_steps 'a|test -f .agents/fixed.txt|true'
     python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" <<'PY'
@@ -128,5 +137,6 @@ test_case "gate: ステップが stdin を読んでも後続のステップを�
 test_case "gate: command が空なら package.json の同名スクリプトを使う" t_pkg_command
 test_case "gate: quality_gate が無ければ package.json から検出する" t_pkg_detect
 test_case "gate: --steps で絞り込む" t_steps_filter
+test_case "gate: --steps の名前の前後の空白を無視する" t_steps_spaces
 test_case "gate: --fix は fix_command を先に実行する" t_fix
 summary

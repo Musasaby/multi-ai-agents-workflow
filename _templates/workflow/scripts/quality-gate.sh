@@ -43,7 +43,7 @@ if [ ! -f "$CONFIG_PATH" ]; then
 fi
 
 STEPS="$(python3 - "$CONFIG_PATH" "$ONLY_STEPS" <<'PY'
-import json, os, sys
+import json, os, re, sys
 
 sys.stdout.reconfigure(newline=chr(10))  # Windows の python は改行を CRLF にするため LF に固定する
 
@@ -53,7 +53,7 @@ def one_line(v):
 try:
     with open(sys.argv[1], encoding='utf-8') as f:
         config = json.load(f)
-    only = [n for n in sys.argv[2].split(',') if n]
+    only = [n for n in re.split(r'[,\s]+', sys.argv[2]) if n]
     pkg_scripts = {}
     if os.path.isfile('package.json'):
         try:
