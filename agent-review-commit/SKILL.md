@@ -88,8 +88,9 @@ state.json を直接編集しない):
 
 1. `config.json` の `verify_before_commit` が `true` の場合のみ、最終ゲートとして
    親が品質ゲートを1回実行する:
-   - `quality_gate` が定義されていれば `/agent-quality-gate` を実行する
-     (typecheck/lint/test をまとめて検証。`blocking` ステップの失敗のみ不合格)
+   - `quality_gate` が定義されていれば `/agent-quality-gate`(`quality-gate` スクリプト)を実行する。
+     typecheck/lint/test をまとめて検証し、`blocking` ステップの失敗のみ不合格
+     (`Next: escalate reason=quality-gate` が FAIL(blocking))
    - non-blocking ステップの失敗が formatter/linter の自動修正で解消できる見込みが
      ある場合は、コミット前に `--fix` 付きで再実行してもよい(自動修正で生じた
      差分もコミット対象に含め、報告に明記する)
