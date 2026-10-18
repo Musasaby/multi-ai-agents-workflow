@@ -226,7 +226,7 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 - `no-changes` — dispatch-check の exit 7(変更が無いのが正しいタスクなら review に進んでよい)・task-commit の exit 20(コミットする変更が無い)
 - `quality-gate` — quality-gate の exit 2(blocking のステップが失敗)
 - `no-steps` — quality-gate の exit 3(実行するステップが0件)
-- `conflict` / `subtree-failed` / `dirty-tree` — workflow-update の exit 2 / 21 / 20(コンフリクト / コンフリクト以外の subtree pull の失敗 / 作業ツリーが汚れている)
+- `conflict` / `subtree-failed` / `dirty-tree` / `sync-failed` — workflow-update の exit 2 / 21 / 20 / 22(コンフリクト / コンフリクト以外の subtree pull の失敗 / 作業ツリーが汚れている / 配置済みスクリプトとの差分確認の失敗)
 
 ### dispatch-prompt-gen — dispatchプロンプトの機械生成
 
@@ -835,13 +835,14 @@ bash .agents/skills/_templates/workflow/scripts/workflow-update.sh
 2. `config.json` の `upstream.url`・`upstream.branch` を読む(読めなければ配布元の URL と `main`)
 3. `git subtree pull --prefix=.agents/skills <url> <branch> --squash` を実行する
    (失敗時、未解決のファイルがあれば `CONFLICT <パス>` を1行ずつ出して exit 2、それ以外は exit 21)
-4. `workflow-sync-scripts` で配置済みスクリプトとの差分を調べる(差分があれば exit 3)
+4. `workflow-sync-scripts` で配置済みスクリプトとの差分を調べる(差分があれば exit 3。`workflow-sync-scripts` が失敗したら exit 22)
 
 最後の行は `Next: continue`(exit 0)/ `Next: confirm`(exit 3。差分を確認し、承認を得て `workflow-sync-scripts --overwrite`)/
-`Next: escalate reason=<dirty-tree|conflict|subtree-failed>`。
+`Next: escalate reason=<dirty-tree|conflict|subtree-failed|sync-failed>`。
 
 exit code: `0`=更新済みで差分なし、`1`=使い方不備・git の外・テンプレート側以外からの実行、`2`=コンフリクト、
-`3`=更新済みで配置済みスクリプトに差分あり、`20`=作業ツリーが汚れている、`21`=subtree pull の失敗(コンフリクト以外)。
+`3`=更新済みで配置済みスクリプトに差分あり、`20`=作業ツリーが汚れている、`21`=subtree pull の失敗(コンフリクト以外)、
+`22`=差分確認(workflow-sync-scripts)の失敗。
 
 ### workflow-sync-scripts — 配布テンプレートの更新を配置先に反映
 
