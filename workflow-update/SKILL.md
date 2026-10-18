@@ -33,7 +33,7 @@ bash .agents/skills/_templates/workflow/scripts/workflow-update.sh
 - `escalate reason=conflict` — `CONFLICT` 行の衝突ファイル一覧をユーザーに提示し、対処を仰ぐ。
   **勝手に解決しない**。解決はユーザーまたは別途依頼されたエージェントが行い、解決後はユーザーに `git commit` を指示する
 - `escalate reason=dirty-tree` — 未コミットの変更がある。ユーザーにコミットまたは退避を依頼する
-- その他の `escalate`(`subtree-failed` 等) — 出力をユーザーに提示して判断を仰ぐ
+- `escalate reason=subtree-failed` / `reason=sync-failed` — 出力(stderr を含む)をユーザーに提示して判断を仰ぐ
 
 ### 2. 配置済みスクリプト・README の更新(`confirm` の場合)
 
@@ -41,17 +41,9 @@ bash .agents/skills/_templates/workflow/scripts/workflow-update.sh
 `_templates/workflow/` からコピーされた**複製**のため、`.agents/skills/` の更新だけでは
 自動では更新されない。`workflow-sync-scripts` を**テンプレート側のコピー**
 (`.agents/skills/_templates/workflow/scripts/`)から実行し、差分を反映する。
+手順1の `workflow-update` の出力にある `missing` / `differs` の行を使う(改行コードだけの違いは差分とみなされない)。
 
-1. **差分の一覧**:
-   ```powershell
-   .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.ps1
-   ```
-   ```bash
-   bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh
-   ```
-   exit 0 なら差分なし(この手順は終了)。exit 3 なら `missing`(未配置)/ `differs`
-   (内容が異なる)のファイルが一覧表示される。改行コードだけの違いは差分とみなさない
-2. **未配置ファイルのコピー**(`missing` がある場合。新しく追加されたスクリプト等なので、
+1. **未配置ファイルのコピー**(`missing` がある場合。新しく追加されたスクリプト等なので、
    確認なしでコピーしてよい):
    ```powershell
    .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.ps1 -CopyMissing
@@ -59,7 +51,7 @@ bash .agents/skills/_templates/workflow/scripts/workflow-update.sh
    ```bash
    bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --copy-missing
    ```
-3. **差分のあるファイルの上書き**(`differs` がある場合): 利用先でカスタマイズされている
+2. **差分のあるファイルの上書き**(`differs` がある場合): 利用先でカスタマイズされている
    可能性があるため、**ユーザーの承認なしに上書きしない**。`-Diff <名前>` / `--diff <名前>` で
    差分(配置先 → テンプレート)を確認し、ファイルごとの差分の要約(カスタマイズの痕跡が
    あるか等)をユーザーに提示する。承認されたファイルだけを上書きする
