@@ -212,6 +212,60 @@ Invoke-TestCase "workflow-sync-scripts: 成功時に LASTEXITCODE=0" {
     Assert-Eq 0 (Invoke-InProcess '../../skills/_templates/workflow/scripts/workflow-sync-scripts.ps1') "LASTEXITCODE"
 }
 
+Invoke-TestCase "workflow-setup: 成功時に LASTEXITCODE=0" {
+    # workflow-sync-scripts と同様にテンプレート側のコピーから実行する。空の利用先に近い構成
+    # (.agents/workflow/ と .gitignore を消す)にして、セットアップが全部成功する状態で呼ぶ
+    Remove-Item -Recurse -Force "$script:Proj/.agents/workflow", "$script:Proj/.gitignore" -ErrorAction SilentlyContinue
+    $null = New-Item -ItemType Directory -Force "$script:Proj/.agents/skills"
+    Copy-Item -Recurse "$script:RepoRoot/_templates" "$script:Proj/.agents/skills/_templates"
+    Push-Location $script:Proj
+    try {
+        $global:LASTEXITCODE = 99
+        & "$script:Proj/.agents/skills/_templates/workflow/scripts/workflow-setup.ps1" *> $null
+        $code = $global:LASTEXITCODE
+    } finally {
+        Pop-Location
+        $link = Get-Item "$script:Proj/.claude" -Force -ErrorAction SilentlyContinue
+        if ($link -and $link.LinkType) { $link.Delete() }
+    }
+    Assert-Eq 0 $code "LASTEXITCODE"
+}
+
+Invoke-TestCase "workflow-update: 成功時に LASTEXITCODE=0" {
+    # upstream(.agents/upstream)から .agents/skills を subtree add し、upstream に更新が無い状態で呼ぶ。
+    # 配置済みスクリプトと README をテンプレートと同じにしておき、差分なし(exit 0)にする
+    $up = "$script:Proj/.agents/upstream"
+    $null = New-Item -ItemType Directory -Force $up
+    Copy-Item -Recurse "$script:RepoRoot/_templates" "$up/_templates"
+    git -C $up init -q -b main 2>$null
+    Assert-OwnRepo $up
+    Push-Location $up
+    try {
+        git config user.email "test@example.com"
+        git config user.name "test"
+        git config core.autocrlf false
+        git add -A
+        git commit -q -m "upstream init"
+    } finally {
+        Pop-Location
+    }
+    Push-Location $script:Proj
+    try {
+        Write-Utf8File "$script:Proj/.gitignore" ".agents/upstream/`n.agents/workflow/`n"
+        git add .gitignore
+        git commit -q -m "gitignore"
+        git subtree add -q --prefix=.agents/skills .agents/upstream main --squash 2>$null
+    } finally {
+        Pop-Location
+    }
+    Copy-Item "$script:RepoRoot/_templates/workflow/README.md" "$script:Proj/.agents/workflow/README.md"
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = [System.IO.File]::ReadAllText($cfgPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $cfg | Add-Member -NotePropertyName upstream -NotePropertyValue ([ordered]@{ url = '.agents/upstream'; branch = 'main' }) -Force
+    Write-Utf8File $cfgPath (($cfg | ConvertTo-Json -Depth 10) + "`n")
+    Assert-Eq 0 (Invoke-InProcess '../../skills/_templates/workflow/scripts/workflow-update.ps1') "LASTEXITCODE"
+}
+
 Invoke-TestCase "quality-gate: 成功時に LASTEXITCODE=0" {
     $path = "$script:Proj/.agents/workflow/config.json"
     $cfg = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json

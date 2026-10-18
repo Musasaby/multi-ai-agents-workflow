@@ -1,114 +1,42 @@
 ---
 name: agents-md-setup
-description: AGENTS.md / .agents を正本としたエージェント共通設定のセットアップと検証。テンプレートからのスキャフォールド、CLAUDE.mdのimportラッパー作成、.claudeリンクの作成、動作検証を行う。clone直後やリンク破損時に実行する。
+description: AGENTS.md / .agents を正本としたエージェント共通設定のセットアップと検証。workflow-setup スクリプトによるスキャフォールド、CLAUDE.mdのimportラッパー作成、.claudeリンクの作成、動作検証を行う。clone直後やリンク破損時に実行する。
 ---
 
 # AGENTS.md 正本化セットアップ
 
 single source of truth として `AGENTS.md`(リポジトリルート)と `.agents/` を正本にし、
 Claude Code 固有のパス(`CLAUDE.md`, `.claude/`)からはリンク経由で参照させる。
+ファイル・ディレクトリの作成や `.gitignore` / `.gitattributes` の整備は `workflow-setup` スクリプトが行う
+(処理の詳細と出力の仕様は `_templates/workflow/README.md` の「workflow-setup」の節を参照)。
 
 ## 手順
 
-### 1. 正本の確認・スキャフォールド
+### 1. workflow-setup の実行
 
-- `AGENTS.md` がルートに存在するか確認。なければ `_templates/AGENTS.md` から作成する(skill ディレクトリから見たパスは `../_templates/AGENTS.md`、利用先では `.agents/skills/_templates/AGENTS.md`)。このとき実体のある `CLAUDE.md`(import 1行でないもの)が存在すれば、その内容を `AGENTS.md` に移行する
-- `AGENTS.md` が既存の場合は、テンプレートの「テスト・検証の注意(子エージェント向け)」節と「マルチエージェントワークフロー」節を追記するかユーザーに提案する。**既存の内容を上書きしない**
-- `.agents/skills/`, `.agents/workflow/` ディレクトリの存在を確認
-- `.agents/workflow/.config/opencode/log` ディレクトリを事前作成する(子エージェント CLI が sandbox 内から設定・ログディレクトリを作成できない環境への備え。`agent-dispatch` の `XDG_CONFIG_HOME` / `XDG_DATA_HOME` プリフライトが参照する):
-  ```powershell
-  New-Item -ItemType Directory -Force .agents/workflow/.config/opencode/log
-  ```
-- `.agents/workflow/runs/` ディレクトリを事前作成する(`agent-dispatch` が子エージェントの生成物(プロンプト・ログ・完了マーカー・報告)をタスク×試行単位で書き出す先):
-  ```powershell
-  New-Item -ItemType Directory -Force .agents/workflow/runs
-  ```
-- `.agents/workflow/config.json` または `.agents/workflow/README.md` が無い場合、それぞれ `_templates/workflow/config.json` / `_templates/workflow/README.md` からコピーする(skill ディレクトリから見たパスは `../_templates/workflow/config.json` / `../_templates/workflow/README.md`、利用先では `.agents/skills/_templates/workflow/config.json` / `.agents/skills/_templates/workflow/README.md`)。**既存のファイルは上書きしない**
-- `.agents/workflow/scripts/` が無い、または配下のスクリプトが欠けている場合、`_templates/workflow/scripts/` 配下の全ファイル(`dispatch-run` / `dispatch-prompt-gen` / `state-sync` / `next-task` / `workflow-archive` 等の `.ps1/.sh`、共通部品 `tasklib.ps1/.py`、テンプレート `*.md`)をコピーする(パス解決は上記と同様、利用先では `.agents/skills/_templates/workflow/scripts/`)。**個別ファイル単位で既存のものは上書きしない**(利用先でカスタマイズ済みの可能性があるため。配布元の更新を既存の配置先に反映するのは `workflow-update` skill の「配置済みスクリプト・README の更新」(`workflow-sync-scripts`)で行う)。POSIX 環境ではコピー後に `chmod +x .agents/workflow/scripts/*.sh` を実行する
+`workflow-setup` を**テンプレート側のコピーから**実行する(配置先の `.agents/workflow/scripts/` にはまだ無い場合があるため):
 
-#### 旧レイアウトの検出
+- PowerShell: `.agents/skills/_templates/workflow/scripts/workflow-setup.ps1`
+- POSIX: `bash .agents/skills/_templates/workflow/scripts/workflow-setup.sh`
+- 配布元リポジトリでは `_templates/workflow/scripts/` 配下のものを使う
 
-利用先に本計画(dispatchプロンプトの機械生成)以前のレイアウトが残っている場合がある。
-以下のいずれかを検出したら、新レイアウトへの更新(上記のコピー手順の実行)を
-**ユーザーに提案する**(勝手に削除・上書きはしない):
+変更せずに検証だけ行う場合は、`-Check`(PowerShell)/ `--check`(POSIX)を付ける。
 
-- `.agents/workflow/.dispatch-run.ps1` または `.agents/workflow/.dispatch-run.sh`(ルート直下に残る旧スクリプト。新レイアウトでは `scripts/dispatch-run.ps1/.sh`)
-- `.agents/workflow/logs/` または `.agents/workflow/reports/`(新レイアウトでは `runs/<タスクID>-<試行回数>/` に統合)
-- `.agents/workflow/.dispatch-prompt-*.md`(旧・タスク単位のプロンプトファイル。新レイアウトでは `runs/<タスクID>-<試行回数>/prompt.md`)
+出力末尾の `Next:` 行で次の動作を決める:
 
-提案時は、新レイアウトのスクリプトをコピーした上で、旧ファイル・ディレクトリの削除可否を
-ユーザーに確認する(過去の実行履歴が必要な場合もあるため自動削除はしない)。
+- `Next: continue` — 手順2へ進む
+- `Next: confirm` — `DECIDE` 行ごとにユーザーに確認する。承認された作業だけを親が行い、
+  `workflow-setup` を再実行して `Next: continue` になることを確かめる
+  - `claude-md`: 実体のある `CLAUDE.md` の内容を `AGENTS.md` へ移してよいか
+  - `claude-dir` / `claude-link`: `.claude` の中身を `.agents` に移し、リンクに置き換えてよいか
+  - `old-layout`: 旧レイアウトのファイル・ディレクトリを削除してよいか(過去の実行履歴が必要な場合もあるため自動削除しない)
 
-### 2. CLAUDE.md ラッパーの作成
+`AGENTS.md` が既存の場合は、テンプレート(`_templates/AGENTS.md`)の「テスト・検証の注意(子エージェント向け)」節と
+「マルチエージェントワークフロー」節を追記するかユーザーに提案する。**既存の内容を上書きしない**。
 
-`CLAUDE.md` を以下の1行だけのファイルにする(Claude Code の `@path` import機能で AGENTS.md を読み込む):
+`.gitignore` / `.gitattributes` が変更されたらコミットする(未コミットだと `agent-dispatch` の事前チェック(作業ツリーがクリーン)で止まる)。
 
-```
-@AGENTS.md
-```
-
-シンボリックリンクではなく import 方式を使う理由: Windows のファイルシンボリックリンクは
-管理者権限または開発者モードが必要であり、Git でのclone時にプレーンファイル化する問題もあるため。
-
-### 3. .claude リンクの作成
-
-`.claude` が存在しない、またはリンク切れの場合、OSに応じて作成する:
-
-- **Windows**: まずシンボリックリンクを試し、権限エラーならジャンクションにフォールバック
-
-```powershell
-try { New-Item -ItemType SymbolicLink -Path .claude -Target .agents -ErrorAction Stop }
-catch { New-Item -ItemType Junction -Path .claude -Target (Resolve-Path .agents).Path }
-```
-
-- **macOS/Linux**: `ln -s .agents .claude`
-
-既に実体ディレクトリとして `.claude` が存在する場合は、中身を `.agents` にマージしてから
-置き換える(**ユーザーに確認してから**削除すること)。
-
-### 4. .gitignore / .gitattributes の整備
-
-以下が `.gitignore` に含まれていることを確認し、なければ追記する:
-
-```
-# Agent link (agents-md-setup skillで再作成する)
-.claude
-# 個人設定
-.agents/settings.local.json
-# CLI 設定・キャッシュ (コミットしない)
-.agents/workflow/.config/
-# 実行単位の生成物(プロンプト・ログ・完了マーカー・報告。コミットしない)
-.agents/workflow/runs/
-# 一巡した過去サイクルの退避先(コミットしない)
-.agents/workflow/archive/
-# Claude Code 本体のランタイムファイル(コミット対象外)
-.agents/scheduled_tasks.lock
-```
-
-`.claude` はリンクのためコミットしない。clone後はこのskillを再実行して再作成する。
-
-あわせて、`.gitattributes`(無ければ作成する)に以下が含まれていることを確認し、なければ追記する:
-
-```
-# ワークフローのスクリプトは CRLF だと bash / python で実行できないため LF に固定する
-.agents/workflow/scripts/*.sh text eol=lf
-.agents/workflow/scripts/*.py text eol=lf
-```
-
-配布元の `.gitattributes` は subtree で取り込むと `.agents/skills/` 配下にしか効かず、
-`.agents/workflow/scripts/` にコピーしたスクリプトは対象外になる。Windows で `core.autocrlf=true`
-の場合、追記しないと CRLF でチェックアウトされ、WSL・Linux で実行できなくなる。
-スクリプト自体はリポジトリ内に LF で保存されているため、再コミットは不要(`.gitignore` と
-`.gitattributes` の追加・変更はコミットする。未コミットのままだと `agent-dispatch` の
-事前チェック(作業ツリーがクリーン)で止まる)。追記前にチェックアウト済みで
-作業ツリーが CRLF になっているファイルは、削除してから `git checkout -- .agents/workflow/scripts`
-で取り出し直すと LF になる(未コミットの変更が無いことを確認してから行う)。
-
-`.agents/scheduled_tasks.lock` は Claude Code 本体が生成するランタイムファイル(スケジュール実行のロック)であり、このリポジトリの成果物ではないためコミット対象外とする。
-
-**既存利用先(このskillを既に実行済みの利用先)向け**: 上記の `.gitignore` 整備は再実行時にも毎回確認する。特に `.agents/workflow/runs/`・`.agents/workflow/.config/`・`.agents/scheduled_tasks.lock` が未記載のまま放置されているケースがあるため、`workflow-update` 実行後の案内でもこの3項目の記載有無を確認するようユーザーに促すこと。
-
-### 5. ファイルベース検証(必須)
+### 2. ファイルベース検証(必須)
 
 以下をすべて確認し、結果を報告する:
 
@@ -124,7 +52,7 @@ catch { New-Item -ItemType Junction -Path .claude -Target (Resolve-Path .agents)
 
 ファイルベース検証がすべて通っていれば、セットアップ自体は成功とみなす。
 
-### 6. CLI検証(任意・時間がある場合)
+### 3. CLI検証(任意・時間がある場合)
 
 ファイルベース検証が通っていればセットアップは成功であるが、時間に余裕がある場合は以下のCLI検証を行う。
 

@@ -1,76 +1,49 @@
 ---
 name: workflow-update
-description: 利用先で .agents/skills/ の upstream 更新を1コマンドで取り込む。作業ツリーのクリーン確認、config.json の upstream 設定読み取り、git subtree pull の実行、コンフリクト時の対応を行う。
+description: 利用先で .agents/skills/ の upstream 更新を1コマンドで取り込む。workflow-update スクリプトで subtree pull とコンフリクト検出を行い、未配置ファイルのコピー・差分のあるファイルの上書きと、workflow-setup --check による配置状態の確認を行う。
 ---
 
 # ワークフロー skill の upstream 更新
 
 利用先リポジトリの `.agents/skills/` ディレクトリを `git subtree` で upstream から更新する。
+クリーン確認・upstream 設定の読み取り・subtree pull・コンフリクト検出は `workflow-update` スクリプトが行う。
 
 ## 前提
 
-- `agents-md-setup` 済みであること(`.agents/skills/` が subtree として取り込まれている)
+- `workflow-setup`(`agents-md-setup` 経由)済みであること(`.agents/skills/` が subtree として取り込まれている)
 - `git subtree` が利用可能であること
 
 ## 手順
 
-### 1. 作業ツリーのクリーン確認
+### 1. workflow-update の実行
 
-未コミットの変更がないことを確認する:
-
-```powershell
-git status --porcelain
-```
-
-出力が空でない場合は中断し、ユーザーにコミットまたは退避を指示する。
-
-### 2. upstream 設定の読み取り
-
-`.agents/workflow/config.json` の `upstream` セクションを読む:
-
-- `upstream.url` — upstream リポジトリの URL
-- `upstream.branch` — 追従するブランチ名
-
-未設定または空の場合は以下のデフォルトを使用する:
-
-- URL: `https://github.com/Musasaby/multi-ai-agents-workflow.git`
-- branch: `main`
-
-### 3. git subtree pull の実行
-
-取得した URL と branch を使って subtree pull を実行する:
+**テンプレート側のコピー**から実行する(配置先側の古いスクリプトを実行しないこと):
 
 ```powershell
-git subtree pull --prefix=.agents/skills <URL> <branch> --squash
+.agents/skills/_templates/workflow/scripts/workflow-update.ps1
+```
+```bash
+bash .agents/skills/_templates/workflow/scripts/workflow-update.sh
 ```
 
-### 4. コンフリクト対応
+出力の `Next:` 行に従う:
 
-`git subtree pull` の結果にコンフリクトが発生した場合:
+- `continue` — 更新完了(差分なし)。手順3へ
+- `confirm` — `.agents/workflow/` への配置物に差分がある。手順2へ
+- `escalate reason=conflict` — `CONFLICT` 行の衝突ファイル一覧をユーザーに提示し、対処を仰ぐ。
+  **勝手に解決しない**。解決はユーザーまたは別途依頼されたエージェントが行い、解決後はユーザーに `git commit` を指示する
+- `escalate reason=dirty-tree` — 未コミットの変更がある。ユーザーにコミットまたは退避を依頼する
+- `escalate reason=subtree-failed` / `reason=sync-failed` — 出力(stderr を含む)をユーザーに提示して判断を仰ぐ
 
-- 衝突ファイル一覧を `git status --porcelain` または `git diff --name-only --diff-filter=U` で取得する
-- 取得した一覧をユーザーに提示し、対処を仰ぐ
-- **勝手に解決しない**。解決はユーザーまたは別途依頼されたエージェントが行う
-- コンフリクト解決後、ユーザーに `git commit` を指示する
-
-### 5. 配置済みスクリプト・README の更新
+### 2. 配置済みスクリプト・README の更新(`confirm` の場合)
 
 `.agents/workflow/scripts/` と `.agents/workflow/README.md` は、セットアップ時に
-`_templates/workflow/` からコピーされた**複製**のため、手順3で `.agents/skills/` を更新しても
+`_templates/workflow/` からコピーされた**複製**のため、`.agents/skills/` の更新だけでは
 自動では更新されない。`workflow-sync-scripts` を**テンプレート側のコピー**
-(`.agents/skills/_templates/workflow/scripts/`)から実行し、差分を反映する
-(配置先側の古いスクリプトを実行しないこと)。
+(`.agents/skills/_templates/workflow/scripts/`)から実行し、差分を反映する。
+手順1の `workflow-update` の出力にある `missing` / `differs` の行を使う(改行コードだけの違いは差分とみなされない)。
 
-1. **差分の一覧**:
-   ```powershell
-   .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.ps1
-   ```
-   ```bash
-   bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh
-   ```
-   exit 0 なら差分なし(この手順は終了)。exit 3 なら `missing`(未配置)/ `differs`
-   (内容が異なる)のファイルが一覧表示される。改行コードだけの違いは差分とみなさない
-2. **未配置ファイルのコピー**(`missing` がある場合。新しく追加されたスクリプト等なので、
+1. **未配置ファイルのコピー**(`missing` がある場合。新しく追加されたスクリプト等なので、
    確認なしでコピーしてよい):
    ```powershell
    .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.ps1 -CopyMissing
@@ -78,7 +51,7 @@ git subtree pull --prefix=.agents/skills <URL> <branch> --squash
    ```bash
    bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --copy-missing
    ```
-3. **差分のあるファイルの上書き**(`differs` がある場合): 利用先でカスタマイズされている
+2. **差分のあるファイルの上書き**(`differs` がある場合): 利用先でカスタマイズされている
    可能性があるため、**ユーザーの承認なしに上書きしない**。`-Diff <名前>` / `--diff <名前>` で
    差分(配置先 → テンプレート)を確認し、ファイルごとの差分の要約(カスタマイズの痕跡が
    あるか等)をユーザーに提示する。承認されたファイルだけを上書きする
@@ -111,44 +84,30 @@ tasks.md が旧形式(例: `- **依存**: T30(完了済み)`、依存行の無�
 exit 1 になった場合は stderr に列挙されたタスクの依存欄を `なし` / `T1, T2` 形式に直す
 (注記は目的欄へ移す)ようユーザーに提案する
 
-### 6. 旧レイアウトの検出
+### 3. 配置状態の確認(旧レイアウト・.gitignore・.gitattributes)
 
-`.agents/skills/` の更新後、`.agents/workflow/` に本計画(dispatchプロンプトの機械生成)
-以前のレイアウトが残っていないか確認する。以下のいずれかを検出したら、
-`agents-md-setup` skillの再実行(新レイアウトの `scripts/` 配下一式のコピー)を
-**ユーザーに提案する**(勝手に削除・上書きはしない):
+`workflow-setup --check` を**テンプレート側のコピー**から実行する(何も変更しない):
 
-- `.agents/workflow/.dispatch-run.ps1` または `.agents/workflow/.dispatch-run.sh`(ルート直下に残る旧スクリプト。新レイアウトでは `scripts/dispatch-run.ps1/.sh`)
-- `.agents/workflow/logs/` または `.agents/workflow/reports/`(新レイアウトでは `runs/<タスクID>-<試行回数>/` に統合)
-- `.agents/workflow/.dispatch-prompt-*.md`(旧・タスク単位のプロンプトファイル。新レイアウトでは `runs/<タスクID>-<試行回数>/prompt.md`)
+```powershell
+.agents/skills/_templates/workflow/scripts/workflow-setup.ps1 -Check
+```
+```bash
+bash .agents/skills/_templates/workflow/scripts/workflow-setup.sh --check
+```
 
-`.agents/workflow/` 配下の実運用ファイル(tasks.md / state.json / config.json 等)は
-この skill では変更しない。
+`MISSING` / `DECIDE` 行があれば、`agents-md-setup` skill の再実行を**ユーザーに提案する**
+(旧レイアウトの残骸、`.gitignore` / `.gitattributes` の欠落などが対象。この skill 自身では
+勝手に削除・上書き・編集しない)。`.agents/workflow/` 配下の実運用ファイル
+(tasks.md / state.json / config.json 等)もこの skill では変更しない。
 
-### 7. .gitignore の確認
-
-`.gitignore` に以下3項目が記載されているか確認する。欠けている場合は `agents-md-setup`
-skillの再実行(手順4の `.gitignore` 整備)を**ユーザーに提案する**(この skill 自身では
-`.gitignore` を編集しない):
-
-- `.agents/workflow/runs/`
-- `.agents/workflow/.config/`
-- `.agents/scheduled_tasks.lock`(Claude Code 本体のランタイムファイルでありコミット対象外)
-
-あわせて `.gitattributes` に `.agents/workflow/scripts/*.sh text eol=lf` と
-`.agents/workflow/scripts/*.py text eol=lf` が記載されているか確認する。欠けている場合は
-`agents-md-setup` skillの再実行(手順4の `.gitattributes` 整備)を**ユーザーに提案する**
-(Windows で CRLF になったスクリプトは WSL・Linux で実行できないため)。
-
-### 8. 完了報告
+### 4. 完了報告
 
 正常終了時またはコンフリクト発生時に以下を報告する:
 
-- 実行したコマンド
-- 更新結果(成功/コンフリクト/エラー)
-- コンフリクト時は衝突ファイル一覧
+- 実行したコマンドと `Next:` 行の内容
+- 更新結果(成功/コンフリクト/dirty-tree/エラー)
+- コンフリクト時は `CONFLICT` 行の衝突ファイル一覧
 - スクリプト・README の同期結果(コピーした未配置ファイル、上書きしたファイル、
   ユーザー判断で上書きしなかった差分のあるファイル)
-- 旧レイアウト検出の有無、検出した場合はユーザーへの提案内容
-- `.gitignore` の3項目と `.gitattributes` の2項目の記載有無、欠けている場合は `agents-md-setup` 再実行の提案
+- `workflow-setup --check` の結果(`MISSING` / `DECIDE` の有無)、あれば `agents-md-setup` 再実行の提案
 - 次のアクション(コミット確認、テスト実行など)
