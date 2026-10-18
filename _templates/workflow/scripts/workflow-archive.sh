@@ -1,7 +1,36 @@
 #!/bin/bash
 set -euo pipefail
 
-SLUG="${1:?使い方: workflow-archive.sh <スラッグ>}"
+# workflow 状態(tasks.md / state.json / runs/ / comprehension/)を archive/ へ移動する。
+# Usage: workflow-archive.sh <スラッグ> [--force]   (--force はスラッグの前後どちらでも可)
+# 判定順:
+#   1. 引数の解析(スラッグ未指定・余分な引数は exit 1)
+#   2. スラッグのパス区切り・'..' の検査、移動対象の有無(無ければ exit 1)
+#   3. --force が無ければ PR の状態を確かめる(state.json の branch が空・main・config.json の
+#      upstream.branch と同じなら gh を呼ばずに通す)。gh pr view の結果で分岐する:
+#      - PR なし(gh が「no pull request」で失敗)・MERGED → アーカイブする
+#      - OPEN   → stdout "OPEN <PR URL>"、exit 2
+#      - CLOSED → stdout "CLOSED <PR URL>"、exit 3
+#      - gh が無い・失敗・出力を解析できない → exit 4
+#      - それ以外の state → exit 1
+# exit: 0=アーカイブした / 1=使い方不備 / 2=PR OPEN / 3=PR CLOSED / 4=gh で判定不能
+# 止めるとき(2 / 3 / 4)は何も移動せず、archive/ も作らない。stdout の最後の行は次アクションを示す
+# "Next:" 行(2=escalate reason=pr-open / 3=escalate reason=pr-closed / 4=escalate reason=gh-unavailable)。
+# exit 0 の出力は "Archived: ..." の1行だけ("Next:" 行は出さない)
+
+FORCE=0
+SLUG=""
+for arg in "$@"; do
+    case "$arg" in
+        --force) FORCE=1 ;;
+        *)
+            if [ -z "$SLUG" ]; then SLUG="$arg"; else echo "Unknown argument: $arg" >&2; exit 1; fi ;;
+    esac
+done
+if [ -z "$SLUG" ]; then
+    echo "使い方: workflow-archive.sh <スラッグ> [--force]" >&2
+    exit 1
+fi
 
 case "$SLUG" in
     */*|*\\*|*..*)
@@ -15,11 +44,104 @@ cd "$SCRIPT_DIR/../../.."
 ROOT="$(pwd)"
 
 WORKFLOW_DIR="$ROOT/.agents/workflow"
+STATE_PATH="$WORKFLOW_DIR/state.json"
+CONFIG_PATH="$WORKFLOW_DIR/config.json"
 
 if [ ! -d "$WORKFLOW_DIR" ]; then
     echo "workflow ディレクトリが見つかりません: $WORKFLOW_DIR" >&2
     exit 1
 fi
+
+# python3 on Git Bash for Windows is typically a native Windows build that
+# cannot resolve MSYS-style absolute paths (e.g. /c/...). Convert to a
+# Windows-native path (forward slashes) for paths passed into python3.
+to_py_path() {
+    if command -v cygpath > /dev/null 2>&1; then
+        cygpath -m "$1"
+    else
+        echo "$1"
+    fi
+}
+
+# json_field <path> <dotted.key> → 値(無い・読めない場合は空文字列)
+json_field() {
+    [ -f "$1" ] || return 0
+    python3 - "$(to_py_path "$1")" "$2" <<'PY' 2> /dev/null || true
+import json, sys
+path, key = sys.argv[1:3]
+with open(path, encoding='utf-8-sig') as f:
+    value = json.load(f)
+for part in key.split('.'):
+    value = value.get(part) if isinstance(value, dict) else None
+print(value if isinstance(value, str) else '')
+PY
+}
+
+# PR の状態を確かめる。止めるときは exit し、アーカイブしてよいときは return 0
+check_pr() {
+    local BRANCH UPSTREAM
+    BRANCH="$(json_field "$STATE_PATH" branch)"
+    UPSTREAM="$(json_field "$CONFIG_PATH" upstream.branch)"
+    if [ -z "$BRANCH" ] || [ "$BRANCH" = "main" ] || { [ -n "$UPSTREAM" ] && [ "$BRANCH" = "$UPSTREAM" ]; }; then
+        return 0
+    fi
+
+    if ! command -v gh > /dev/null 2>&1; then
+        echo "gh not found: cannot check the PR state of '$BRANCH' (use --force to archive anyway)" >&2
+        echo "Next: escalate reason=gh-unavailable"
+        exit 4
+    fi
+
+    GH_CODE=0
+    GH_OUT_FILE="$(mktemp)"
+    GH_ERR_FILE="$(mktemp)"
+    trap 'rm -f "$GH_OUT_FILE" "$GH_ERR_FILE"' EXIT
+    gh pr view "$BRANCH" --json state,url > "$GH_OUT_FILE" 2> "$GH_ERR_FILE" || GH_CODE=$?
+    if [ "$GH_CODE" -ne 0 ]; then
+        if grep -qi 'no pull request' "$GH_ERR_FILE"; then
+            return 0
+        fi
+        echo "gh pr view failed (exit $GH_CODE): $(cat "$GH_ERR_FILE")" >&2
+        echo "Next: escalate reason=gh-unavailable"
+        exit 4
+    fi
+
+    local PR_INFO PR_STATE PR_URL
+    PR_INFO="$(python3 -c "
+import json, sys
+with open(sys.argv[1], encoding='utf-8') as f:
+    data = json.load(f)
+print(str(data.get('state', '')), str(data.get('url', '')))
+" "$(to_py_path "$GH_OUT_FILE")")" || {
+        echo "Failed to parse gh pr view output (expected JSON with 'state')" >&2
+        echo "Next: escalate reason=gh-unavailable"
+        exit 4
+    }
+    PR_STATE="${PR_INFO%% *}"
+    PR_URL="${PR_INFO#* }"
+
+    case "$PR_STATE" in
+        OPEN)
+            echo "OPEN $PR_URL"
+            echo "PR for '$BRANCH' is not merged yet (add tasks to the current cycle instead, or use --force to archive anyway)" >&2
+            echo "Next: escalate reason=pr-open"
+            exit 2
+            ;;
+        CLOSED)
+            echo "CLOSED $PR_URL"
+            echo "PR for '$BRANCH' is CLOSED without merging (use --force to archive anyway)" >&2
+            echo "Next: escalate reason=pr-closed"
+            exit 3
+            ;;
+        MERGED)
+            return 0
+            ;;
+        *)
+            echo "Unexpected PR state: '$PR_STATE'" >&2
+            exit 1
+            ;;
+    esac
+}
 
 TIMESTAMP="$(date '+%Y%m%d-%H%M')"
 ARCHIVE_DIR="$WORKFLOW_DIR/archive/${TIMESTAMP}-${SLUG}"
@@ -36,6 +158,8 @@ if [ -z "$EXISTING" ]; then
     echo "移動対象がありません(tasks.md / state.json / runs/ / comprehension/ のいずれも存在しません)" >&2
     exit 1
 fi
+
+[ "$FORCE" -eq 1 ] || check_pr
 
 mkdir -p "$ARCHIVE_DIR"
 
