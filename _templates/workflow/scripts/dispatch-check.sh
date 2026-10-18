@@ -8,7 +8,7 @@ set -uo pipefail
 #     変わった/消えた、guard.sha256・output.log・git-state.txt が無い、output.log が実行中に
 #     切り詰められた、本物のリポジトリの git 状態(HEAD・ブランチ・参照・設定)が変わった)
 #   4=異常終了(非0・signal・crashed・idle-timeout)
-#   6=権限拒否で中断(output.log に子CLIの権限拒否の記録がある)、または、ツール実行の記録に
+#   6=権限拒否で中断(output.log にプロファイルの権限拒否の記録がある)、または、ツール実行の記録に
 #     プロジェクト外(/tmp・ホームディレクトリ等)へのアクセスがある
 #   5=完了報告が無い・無効(最後の `## 完了報告` の後にツール実行の記録が続く、必須項目が無い・テンプレートのまま)。
 #     最後のツール実行の後に出力が無い場合は、その旨を理由に書く
@@ -38,6 +38,35 @@ if [ ! -f "$DONE_PATH" ]; then
     echo "Next: wait"
     exit 2
 fi
+
+# --- 子CLIプロファイルの解決(config.json の child_agent.profile。検知のパターンを決める) ---
+# childprofile.py は7行を返す: 名前・出力形式・tool_activity・tool_call・permission_denied・
+# provider_error・agents_md_imports(パターンが空の行もあるため、行は位置で取り出す)
+to_py_path() {
+    if command -v cygpath > /dev/null 2>&1; then
+        cygpath -m "$1"
+    else
+        echo "$1"
+    fi
+}
+if ! PROFILE_OUT="$(python3 "$(to_py_path "$SCRIPT_DIR")/childprofile.py" . | tr -d '\r')"; then
+    exit 1
+fi
+PROFILE_NAME="$(printf '%s\n' "$PROFILE_OUT" | sed -n '1p')"
+TOOL_ACTIVITY_RE="$(printf '%s\n' "$PROFILE_OUT" | sed -n '3p')"
+TOOL_CALL_RE="$(printf '%s\n' "$PROFILE_OUT" | sed -n '4p')"
+DENIED_RE="$(printf '%s\n' "$PROFILE_OUT" | sed -n '5p')"
+PROVIDER_RE="$(printf '%s\n' "$PROFILE_OUT" | sed -n '6p')"
+DISABLED_CHECKS=""
+add_disabled() { # $1 = パターン, $2 = 検査名
+    if [ -z "$1" ]; then
+        DISABLED_CHECKS="${DISABLED_CHECKS:+$DISABLED_CHECKS, }$2"
+    fi
+}
+add_disabled "$DENIED_RE" permission-denied
+add_disabled "$TOOL_CALL_RE" outside-access
+add_disabled "$TOOL_ACTIVITY_RE" tool-activity
+add_disabled "$PROVIDER_RE" provider-error
 
 # Windows PowerShell 5.1 の Out-File は BOM を付けるため除去してから読む
 # (BSD sed は \xEF 等のエスケープを解釈しないため、BOM のバイト列は printf で作る)
@@ -128,31 +157,36 @@ if [ -f "$LOG_PATH" ]; then
 fi
 
 # --- 権限拒否の検出 ---
-# opencode が拒否を記録する行(行頭の `! permission requested: ...; auto-rejecting`)だけに一致させる
-# (子がスクリプトやテストを表示した出力の中の同じ文字列には反応しない)
-DENIED_LINES="$(printf '%s\n' "$RAW_LOG" | LC_ALL=C awk -v esc="$ESC" '
+# プロファイルの permission_denied_pattern に一致する行だけを対象にする(auto / opencode では
+# 行頭の `! permission requested: ...; auto-rejecting`。子がスクリプトやテストを表示した出力の中の
+# 同じ文字列には反応しない)。パターンは awk の -v だと \[ 等を解釈されるため環境変数で渡す。
+# 空なら検査しない
+DENIED_LINES="$(printf '%s\n' "$RAW_LOG" | DENIED_RE="$DENIED_RE" LC_ALL=C awk -v esc="$ESC" '
+    BEGIN { pat = ENVIRON["DENIED_RE"] }
+    pat == "" { next }
     { line = $0; gsub(esc "\\[[0-9;]*[A-Za-z]", "", line) }
-    line ~ /^! permission requested: .*auto-rejecting/ { print line }')"
+    line ~ pat { print line }')"
 
 # --- プロジェクト外(/tmp・ホームディレクトリ等)へのアクセスの検出 ---
 # 権限を拒否されずに成功したプロジェクト外アクセス(例: bash -c "... > /tmp/x.log"、cat ~/x.log)を検出する。
-# 対象はツール実行の記録行だけ: opencode の色付きマーカー行($ / → / ← / ✱ / ✗ / ⚙ で始まるもの。
-# ! は権限拒否の行なので除く)と stream-json の [tool_use] 行。ツールの出力(色なしの行・
-# [tool_result] 行)や完了報告の本文には反応しない。判定は ANSI エスケープを除いた行に対して行う。
+# 対象はツール実行の記録行だけ(プロファイルの tool_call_pattern。auto / opencode では色付きマーカー行
+# ($ / → / ← / ✱ / ✗ / ⚙ で始まるもの。! は権限拒否の行なので除く)と stream-json の [tool_use] 行)。
+# ツールの出力(色なしの行・[tool_result] 行)や完了報告の本文には反応しない。パターンが空なら検査しない。
+# 判定は ANSI エスケープを除いた行に対して行う。
 # 条件の正規表現は outside_re と home_re にまとめる(条件を足したくなったらここへ追記する)。
 # home_re はホームディレクトリ(~/・$HOME・${HOME}・$env:USERPROFILE・%USERPROFILE% 等)と
 # Windows のユーザー一時ディレクトリ(AppData の Temp)への参照。大文字小文字を区別しないため、
 # ANSI エスケープを除いた行を tolower() してから当てる。$env:TEMP・%TEMP%・$TMPDIR は
 # dispatch-run によりプロジェクト内を指すため検出しない
-OUTSIDE_LINES="$(printf '%s\n' "$RAW_LOG" | LC_ALL=C awk -v esc="$ESC" '
+OUTSIDE_LINES="$(printf '%s\n' "$RAW_LOG" | TOOL_CALL_RE="$TOOL_CALL_RE" LC_ALL=C awk -v esc="$ESC" '
     BEGIN {
+        call_re = ENVIRON["TOOL_CALL_RE"]
         outside_re = "(^|[ \t\"'\''=(<>])\\/(var\\/)?tmp([\\/ \t\"'\'');]|$)"
         home_re = "(^|[ \t\"'\''=(<>])~\\/|\\$(\\{home\\}|home([^a-z0-9_]|$)|env:(home|userprofile)([^a-z0-9_]|$))|%userprofile%|appdata[\\\\/]local[\\\\/]temp"
     }
     {
         raw = $0
-        is_tool = (raw ~ ("^" esc "\\[[0-9;]*m(\\$|→|←|✱|✗|⚙) " esc "\\[[0-9;]*m")) || (raw ~ /^\[tool_use\]/)
-        if (!is_tool) next
+        if (call_re == "" || raw !~ call_re) next
         line = raw; gsub(esc "\\[[0-9;]*[A-Za-z]", "", line)
         if (line ~ outside_re || tolower(line) ~ home_re) print line
     }')"
@@ -166,6 +200,7 @@ OUTSIDE_LINES="$(printf '%s\n' "$RAW_LOG" | LC_ALL=C awk -v esc="$ESC" '
 CLI_LOG="$(python3 -c "import json; print(json.load(open('.agents/workflow/config.json', encoding='utf-8'))['child_agent'].get('cli_log', ''))" 2>/dev/null | tr -d '\r')"
 PROVIDER_ERROR=unknown
 CLI_LOG_LINES=""
+# provider_error_pattern が空のプロファイルでは、プロバイダー起因かどうかの判定をしない
 if [ -n "$CLI_LOG" ]; then
     CLI_LOG_PATH="$CLI_LOG"
     case "$CLI_LOG" in
@@ -177,7 +212,7 @@ if [ -n "$CLI_LOG" ]; then
         PROVIDER_ERROR=no
         # NUL を含むと grep がバイナリ扱いするため、output.log と同じく NUL・CR を除いてから読む
         CLI_LOG_LINES="$(LC_ALL=C tr -d '\000\r' < "$CLI_LOG_PATH" | tail -n 200 | grep ERROR | tail -n 5)"
-        if [ -n "$CLI_LOG_LINES" ] && printf '%s\n' "$CLI_LOG_LINES" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C grep -Eq 'usage limit|rate limit|endpoint is unavailable|(^|[^0-9a-z])429([^0-9a-z]|$)'; then
+        if [ -n "$PROVIDER_RE" ] && [ -n "$CLI_LOG_LINES" ] && printf '%s\n' "$CLI_LOG_LINES" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C grep -Eq -e "$PROVIDER_RE"; then
             PROVIDER_ERROR=yes
         fi
     fi
@@ -186,15 +221,17 @@ fi
 # --- 完了報告の判定 ---
 # 最後に出現する `## 完了報告` だけを対象にし、その後にツール実行の記録が続く場合は無効とする
 # (子がテンプレートやドキュメントを表示しただけの行に一致させないため)。ツール実行の記録は、
-# opencode が色付きで出すマーカー行(`ESC[0m$ ESC[0m...` 等)と stream-json の `[tool_use]` /
-# `[tool_result]` 行に限る(報告本文の `→ 要確認` や `$ npm test` は対象外)。必須項目は
+# プロファイルの tool_activity_pattern に一致する行に限る(auto / opencode では色付きのマーカー行
+# (`ESC[0m$ ESC[0m...` 等)と stream-json の `[tool_use]` / `[tool_result]` 行。報告本文の
+# `→ 要確認` や `$ npm test` は対象外。パターンが空なら記録は無いものとして扱う)。必須項目は
 # 通常のタスクが「変更ファイル」「テスト結果」、PR 作成の run(pr-*)が「PR URL」。
 # 区切りは半角 `:` と全角 `：` のどちらでもよい。
 # 値が同じ行に無い場合は、次の行からのインデントされた箇条書きを値とみなす。
-REPORT_RESULT="$(printf '%s\n' "$RAW_LOG" | LC_ALL=C awk -v esc="$ESC" -v required="$REQUIRED" '
+REPORT_RESULT="$(printf '%s\n' "$RAW_LOG" | TOOL_ACTIVITY_RE="$TOOL_ACTIVITY_RE" LC_ALL=C awk -v esc="$ESC" -v required="$REQUIRED" '
+    BEGIN { act_re = ENVIRON["TOOL_ACTIVITY_RE"] }
     {
         raw = $0
-        tool[NR] = (raw ~ ("^" esc "\\[[0-9;]*m(\\$|→|←|✱|✗|⚙|!) " esc "\\[[0-9;]*m")) || (raw ~ /^\[tool_(use|result)\]/)
+        tool[NR] = (act_re != "" && raw ~ act_re)
         gsub(esc "\\[[0-9;]*[A-Za-z]", "", raw)
         lines[NR] = raw
     }
@@ -287,19 +324,25 @@ fi
 echo "Run: ${TASK_ID}-${ATTEMPT}"
 echo "Exit: ${EXIT_VALUE} (kind: ${KIND})"
 echo "End: ${END_VALUE}"
+echo "Profile: ${PROFILE_NAME}"
+echo "Disabled checks: ${DISABLED_CHECKS:-none}"
 if [ -n "$GUARD_ISSUES" ]; then
     echo "Guard: NG"
     printf '%s' "$GUARD_ISSUES" | sed 's/^/  /'
 else
     echo "Guard: ok"
 fi
-if [ -n "$DENIED_LINES" ]; then
+if [ -z "$DENIED_RE" ]; then
+    echo "Permission denied: disabled (profile: ${PROFILE_NAME})"
+elif [ -n "$DENIED_LINES" ]; then
     echo "Permission denied: yes"
     printf '%s\n' "$DENIED_LINES" | sed 's/^/  /'
 else
     echo "Permission denied: no"
 fi
-if [ -n "$OUTSIDE_LINES" ]; then
+if [ -z "$TOOL_CALL_RE" ]; then
+    echo "Outside access: disabled (profile: ${PROFILE_NAME})"
+elif [ -n "$OUTSIDE_LINES" ]; then
     echo "Outside access: yes"
     printf '%s\n' "$OUTSIDE_LINES" | sed 's/^/  /'
 else
@@ -309,7 +352,11 @@ echo "CLI log: ${CLI_LOG:-(not configured)}"
 if [ -n "$CLI_LOG_LINES" ]; then
     printf '%s\n' "$CLI_LOG_LINES" | sed 's/^/  /'
 fi
-echo "Provider error: $PROVIDER_ERROR"
+if [ -z "$PROVIDER_RE" ]; then
+    echo "Provider error: disabled (profile: ${PROFILE_NAME})"
+else
+    echo "Provider error: $PROVIDER_ERROR"
+fi
 echo "Completion report: ${REPORT_RESULT}"
 if [ -n "$REPORT_SAVED" ]; then
     echo "Report: $REPORT_PATH"

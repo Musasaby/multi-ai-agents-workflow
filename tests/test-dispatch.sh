@@ -158,6 +158,20 @@ with open(p, 'w', encoding='utf-8') as f:
 PY
 }
 
+# 子CLIプロファイル(config.json の child_agent.profile)を設定する($1 = プロファイル名)。
+# profile は guard.sha256 の対象なので make_run の前に呼ぶ
+set_profile() {
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" "$1" <<'PY'
+import json, sys
+p, v = sys.argv[1:3]
+with open(p, encoding='utf-8') as f:
+    cfg = json.load(f)
+cfg['child_agent']['profile'] = v
+with open(p, 'w', encoding='utf-8') as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+PY
+}
+
 # 子を python にする(Windows ネイティブ python から呼ぶ bash は WSL の bash になることがあり、
 # その場合は Windows 側の環境変数を引き継がないため)。$1 = child.py の本文(省略時は XDG_DATA_HOME の表示)
 set_py_child() {
@@ -516,6 +530,62 @@ Error: The user rejected permission to use this specific tool call."
     assert_contains "$OUT" "Permission denied: yes" "flag"
     assert_contains "$OUT" "auto-rejecting" "denied line shown"
     assert_eq "Next: escalate reason=permission-denied" "${OUT##*$'\n'}" "next line"
+}
+
+t_check_profile_default() {
+    make_run 0 "$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Profile: auto" "profile"
+    assert_contains "$OUT" "Disabled checks: none" "disabled checks"
+}
+
+t_check_profile_plain() {
+    set_profile plain
+    make_run 0 "! permission requested: x; auto-rejecting
+$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Disabled checks: permission-denied, outside-access, tool-activity, provider-error" "disabled checks"
+    assert_contains "$OUT" "Permission denied: disabled (profile: plain)" "permission denied"
+    assert_contains "$OUT" "Outside access: disabled (profile: plain)" "outside access"
+    assert_contains "$OUT" "Provider error: disabled (profile: plain)" "provider error"
+}
+
+t_check_profile_stream_json() {
+    set_profile claude-stream-json
+    make_run 0 "$REPORT
+${ESC}[0m\$ ${ESC}[0mcat /tmp/x"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "opencode marker line is ignored: $OUT"
+    make_run 0 "$REPORT
+[tool_use] bash: {\"command\": \"cat /tmp/x\"}"
+    run_script dispatch-check.sh T1 1
+    assert_eq 6 "$CODE" "tool_use line detected: $OUT"
+    assert_eq "Next: escalate reason=outside-access" "${OUT##*$'\n'}" "next line"
+}
+
+t_check_profile_custom() {
+    printf '%s\n' '{"mycli": {"output_format": "text", "permission_denied_pattern": "^DENIED: "}}' \
+        > "$PROJ/.agents/workflow/child-profiles.json"
+    set_profile mycli
+    make_run 0 "DENIED: rm -rf x
+$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 6 "$CODE" "exit code: $OUT"
+    assert_eq "Next: escalate reason=permission-denied" "${OUT##*$'\n'}" "next line"
+}
+
+t_check_profile_unknown() {
+    set_profile nope
+    make_run 0 "$REPORT"
+    run_script dispatch-check.sh T1 1
+    assert_eq 1 "$CODE" "exit code: $OUT"
+    assert_not_contains "$OUT" "Next:" "no Next line"
 }
 
 t_check_no_changes() {
@@ -882,6 +952,11 @@ test_case "check: report.md が既にあれば上書きしない" t_check_report
 test_case "check: 完了報告が無効なら report.md を作らない" t_check_report_invalid_not_saved
 test_case "check: 箇条書きの値・CRLF・ANSIを含む完了報告は有効" t_check_report_list_value_and_ansi
 test_case "check: 権限拒否はexit 6" t_check_permission_denied
+test_case "check: profile 未指定は Profile: auto と Disabled checks: none を出す" t_check_profile_default
+test_case "check: plain は検知できない検査を disabled と出し、権限拒否の行があっても ok" t_check_profile_plain
+test_case "check: claude-stream-json は opencode のマーカー行を見ず [tool_use] 行でプロジェクト外アクセスを検出する" t_check_profile_stream_json
+test_case "check: 利用先の child-profiles.json の権限拒否パターンで exit 6" t_check_profile_custom
+test_case "check: 未定義の profile は exit 1" t_check_profile_unknown
 test_case "check: 変更0件はexit 7" t_check_no_changes
 test_case "check: PR作成のrunは変更0件でも正常" t_check_pr_run_without_changes
 test_case "check: state.jsonの変更はexit 8" t_check_state_changed
