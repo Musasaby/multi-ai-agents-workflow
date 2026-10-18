@@ -21,8 +21,3 @@ test-tasks.sh: __pycache__ を作らない
 
 # test-exitcode.sh は存在しない(sh 側では各テストが直接 exit code を断言する)
 test-exitcode.ps1: *
-
-# #60: ps1 版のケースは T26 で足す(T26 でこの4行を消す)
-test-tasks.sh: sync: -SetBranch は現在のブランチを state.json に書く
-test-tasks.sh: sync: -SetBranch に名前を渡せばその名前を書く
-test-tasks.sh: sync: -SetBranch は develop/ 以外を拒否する
