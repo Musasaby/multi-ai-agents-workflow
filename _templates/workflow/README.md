@@ -66,7 +66,7 @@
 | `max_fix_retries` | レビュー不合格時の子エージェントへの再依頼上限。超過で親のサブエージェントにフォールバック | `2` |
 | `comprehension_check.enabled` | タスク合格時に理解確認質問を生成するか | `false` |
 | `comprehension_check.questions_per_task` | タスクあたりの質問数 | `3` |
-| `quality_gate.steps` | 品質ゲートのステップ定義。各要素は `name`(表示名)・`command`(実行コマンド)・`blocking`(真なら不合格時に進行停止)を持つ | `[{name:typecheck,...},{name:test,...},{name:lint,...}]` |
+| `quality_gate.steps` | 品質ゲートのステップ定義。各要素は `name`(表示名)・`command`(実行コマンド)・`blocking`(真なら不合格時に進行停止)を持つ。`command` は bash と pwsh の両方で動く書き方にする(quality-gate の節を参照) | `[{name:typecheck,...},{name:test,...},{name:lint,...}]` |
 | `quality_gate.child_dispatch_command` | 子エージェントへの検証指示に使う統合コマンド。空文字列でなければ blocking ステップの個別列挙に代えてこの1コマンドを子に指示する。Gradle 等のデーモンの多重コールドスタート回避に有効。子にも同じ判定をさせる場合は `bash .agents/workflow/scripts/quality-gate.sh`(Windows の子は `pwsh -NoProfile -File .agents/workflow/scripts/quality-gate.ps1`)を指定できる | `""` |
 | `upstream.url` | upstream リポジトリの URL。`workflow-update` skill で使用 | `https://github.com/Musasaby/multi-ai-agents-workflow.git` |
 | `upstream.branch` | upstream 追従ブランチ名 | `main` |
@@ -713,7 +713,9 @@ exit 1 以外では stdout の最後の行に `Next:` 行を出す(「Next: 行�
 
 `config.json` の `quality_gate.steps` を定義順に実行し、合否を判定する。blocking のステップが
 失敗しても後続のステップは実行する(全ステップの結果を一度に報告するため)。各ステップは stdin を
-閉じて `bash -c`(ps1 版は `pwsh`)で実行する。
+閉じて、sh 版は `bash -c`、ps1 版は `pwsh -Command` で実行する。同じ config.json を両方の版が
+読むため、`command` / `fix_command` は両方のシェルで動く書き方にする(例: `npm run test`・`./gradlew test`。
+`CI=1 npm test` のような環境変数の前置きは pwsh で動かない)。
 
 ```powershell
 .agents/workflow/scripts/quality-gate.ps1 [-OutDir <ディレクトリ>] [-Steps typecheck,test] [-Fix]
