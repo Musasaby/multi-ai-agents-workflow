@@ -50,6 +50,11 @@ tasks.md にグループ区切りがあり、config の `branch_per_group` が�
 2. 出力の最後の `Next:` 行で分岐する:
    - **`Next: create-pr`**(exit 7。PR 未作成): 「PR作成(子への単発依頼)」を必ず実行し、
      PR URL をユーザーに報告して停止する(マージはユーザーが行う)
+   - **`Next: update-pr`**(exit 10。PR はオープンだが、PR を作ったあとに足したコミットが未 push。
+     stdout に `OPEN <PR URL>`): 「PR作成(子への単発依頼)」を実行する(子が push と PR 本文の
+     作り直しを行う)。完了後に PR URL をユーザーに報告して停止する。親は自分で `git push` や
+     PR 本文の更新をしない。レビュー指摘への対応タスクを追加モードで同じグループに足して
+     完了させたときに、この分岐になる
    - **`Next: wait-merge`**(exit 8。マージ待ち。stdout に `OPEN <PR URL>`): PR がオープンのため
      「マージ待ち」であることを PR URL とともに報告して停止する。マージ完了の連絡を
      受けて group-advance を再実行する
@@ -170,8 +175,8 @@ tasks.md / state.json / runs/ / comprehension/ は自動的に `archive/<日時-
 
 ## PR作成(子への単発依頼)
 
-グループ完了時(group-advance が `Next: create-pr`(PR 未作成)を出した場合。「グループ単位の
-PR とブランチ切替」を参照)とサイクル完了時に、PR 作成を子エージェントへ
+グループ完了時(group-advance が `Next: create-pr`(PR 未作成)または `Next: update-pr`
+(既存 PR の更新)を出した場合。「グループ単位の PR とブランチ切替」を参照)とサイクル完了時に、PR 作成を子エージェントへ
 単発で依頼する。PR 作成はタスクではないため、tasks.md / state.json には載せない
 (タスクIDは採番しない)。親は PR のタイトル・本文を自分で書かず、gh コマンドも直接実行しない。
 
@@ -189,7 +194,8 @@ PR とブランチ切替」を参照)とサイクル完了時に、PR 作成を�
    `Next: wait` なら stdout の `Run: pr-<N>-1` を控える。それ以外は reason と stderr を
    ユーザーに報告する(`main` 上で実行した、対象タスクが無い 等)。プロンプトには、
    push(`git push -u`)、`gh pr create --base main`、日本語のタイトル・本文、既存 PR の
-   確認、マージ禁止が含まれている
+   確認、既存 PR があれば push して本文を作り直し、`gh api -X PATCH` で更新すること、
+   マージ禁止が含まれている
 3. `dispatch-wait` で完了を待つ(`-TaskId pr-<N> -Attempt 1` / `pr-<N> 1`)。
    出力の `Next:` 行で分岐する。
    - `Next: wait-merge` → 手順4(PR の検証)に進む(レビュー・コミットは行わない)
