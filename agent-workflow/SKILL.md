@@ -57,9 +57,8 @@ tasks.md にグループ区切りがあり、config の `branch_per_group` が�
      エスカレーションする(PR が閉じられた理由と再作成の要否をユーザーに確認する)
    - **`Next: continue`**(exit 0。次グループへの切替完了): stdout の
      `ADVANCED <新ブランチ名> <新グループ名>` を確認する(state.json の `branch` / `group` は
-     group-advance が更新済み)。state.json がコミット対象のプロジェクトでは、この更新を
-     新ブランチで `chore: <新グループ名> グループの作業を開始` としてコミットしてから
-     (`git status --porcelain` が空になることを確認する)、新グループのタスクのループに進む
+     group-advance が更新済み)。state.json のコミットは group-advance が行う
+     (stdout の `State commit:` 行)。親がコミットする必要はない。新グループのタスクのループに進む
 
 ## フロー
 

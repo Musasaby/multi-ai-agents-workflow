@@ -51,17 +51,10 @@ skill 名の指定がなくても発動するように、AGENTS.md の「マル�
 
 3. 新ブランチに移った後の state.json の扱い:
 
-   - `agent-task-plan` の追加モードで tasks.md にタスクを追記した後 `state-sync`(追記同期、
-     `--init` なし)を実行すると、**state.json の `branch` は git から更新されない**
-     (既存の値を引き継ぐだけ。README の state-sync の記載とスクリプト実装の両方で確認済み)。
-     新ブランチに切替後も state.json の `branch` が古いブランチのままになる
-   - その結果、scripts の後続判定(`branch-check --state` → exit 5、`dispatch-prompt-gen` の
-     PR モード 等)が古い branch を参照して不整合が起きうる。**対処**: ブランチを切った後に
-     state.json を更新する手順がスクリプトに存在しない点(`group-advance` はグループ
-     切替専用)をこの skill の利用者に明示し、利用者の承認を得て state.json の `branch` を
-     新ブランチ名に直接編集するか、ワークフロー外の軽微な作業なら state.json を
-     更新しない方針を明示して続行する(後続のタスク実行前に `state.json` の `branch` と
-     実際のブランチを確認するのを推奨)
+   - 新ブランチに移った後(state.json があるとき)は、`state-sync --set-branch`
+     (PowerShell: `.agents/workflow/scripts/state-sync.ps1 -SetBranch` /
+     POSIX: `state-sync.sh --set-branch`)を実行して state.json の `branch` を現在の
+     ブランチにする。state.json が追跡されている場合は、この変更を作業のコミットに含める
 
 ## 備考
 

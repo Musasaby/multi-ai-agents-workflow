@@ -21,6 +21,7 @@
 │   ├── group-advance.ps1 / .sh  グループ完了後の PR 状態判定と次グループのブランチ切替
 │   ├── branch-check.ps1 / .sh  今のブランチが作業に使ってよいかの判定(main 上・PR マージ済み・state.json との不一致)
 │   ├── task-state.ps1 / .sh
+│   ├── task-commit.ps1 / .sh  レビュー合格後のコミットと状態更新
 │   ├── tasklib.ps1 / tasklib.py  tasks.md 解析・依存欄検証の共通部品
 │   ├── upstream-issue.ps1 / .sh
 │   ├── upstream-issue-template.md  upstream への Issue 本文テンプレート
@@ -153,6 +154,7 @@ Claude Code を子エージェントとして使う場合は `stream-json` 出�
 `group` は未完了タスクを含む最初のグループ)。
 グループ境界でのブランチ切替(`agent-workflow` skill の「グループ単位の PR とブランチ切替」)
 では `group-advance` がこの2つのフィールドを更新するため、親が手で書き換える必要はない。
+ワークフロー外の作業でブランチを手で切った場合は、`state-sync --set-branch` で `branch` を記録する。
 既存の state.json に `group` キーが無い場合、`state-sync` の追記同期は後方互換のため
 キーを追加せず、`next-task` は未完了タスクを含む最初のグループを作業グループとみなす。
 
@@ -201,7 +203,7 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 | `group-advance` | グループ境界。group-advance を実行する | next-task(exit 6) |
 | `create-pr` | PR を作成する | group-advance(exit 7) |
 | `wait-merge` | PR のマージを待つ(報告して停止) | group-advance(exit 8)・dispatch-check(exit 0、PR 作成の run `pr-*`。PR を検証してから報告する) |
-| `continue` | そのまま作業を続ける | branch-check(exit 0)・group-advance(exit 0) |
+| `continue` | そのまま作業を続ける | branch-check(exit 0)・group-advance(exit 0)・task-commit(exit 0) |
 | `switch-branch` | 専用ブランチを作る(`reason=main` / `merged`) | branch-check(exit 2 / 3) |
 | `escalate` | ユーザーに理由を説明し判断を仰ぐ | 下の reason 一覧 |
 
@@ -217,7 +219,7 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 - `provider-error` / `idle-timeout` / `abnormal-exit` — dispatch-check の exit 4(この順で判定)
 - `permission-denied` / `outside-access` — dispatch-check の exit 6
 - `token-limit` / `no-report` — dispatch-check の exit 5
-- `no-changes` — dispatch-check の exit 7(変更が無いのが正しいタスクなら review に進んでよい)
+- `no-changes` — dispatch-check の exit 7(変更が無いのが正しいタスクなら review に進んでよい)・task-commit の exit 20(コミットする変更が無い)
 
 ### dispatch-prompt-gen — dispatchプロンプトの機械生成
 
@@ -534,6 +536,16 @@ JSONを直接書くことはない。
   `--before` に指定したタスク(カンマ区切りで複数可)の依存欄に新タスクIDを追加し、
   state.json に新タスクを `pending` で追加する。`--before` のタスクが `pending` でない場合や、
   循環依存になる場合は拒否し、tasks.md / state.json を変更しない。
+- **ブランチの記録**(`--set-branch [<名前>]` / `-SetBranch [-Branch <名前>]`。ワークフロー外の作業で
+  新しいブランチに移ったときに使う。tasks.md は読まず、state.json の `branch` と `updated_at` だけを更新する):
+  ```powershell
+  .agents/workflow/scripts/state-sync.ps1 -SetBranch
+  ```
+  ```bash
+  .agents/workflow/scripts/state-sync.sh --set-branch
+  ```
+  名前を省略すると現在のブランチを記録する。`develop/` で始まらない名前と、名前を省略した detached HEAD は
+  拒否する(exit 1)。すでに同じ値なら `Branch unchanged: <名前>` を出して何もしない。
 
 どのモードでも、state.json を書く前に全タスクの依存欄を検証する(形式違反・存在しないID・
 自己依存・循環依存・依存行の欠落)。不正があれば何も書き込まずに exit 1 で終了する。
@@ -565,6 +577,33 @@ state.json のタスクの状態を、許された遷移だけで更新する。
 ```
 
 exit code: `0`=更新した、`1`=使い方不備・許されない遷移・タスク未検出、`4`=`retry` の上限超過。
+
+### task-commit — レビュー合格後のコミットと状態更新
+
+`in_review` のタスクの本体コミット、state.json の `done` 更新、状態ファイルのコミットを1コマンドで行う。
+
+```powershell
+.agents/workflow/scripts/task-commit.ps1 T1 feat "<説明>"
+```
+```bash
+.agents/workflow/scripts/task-commit.sh T1 feat "<説明>"
+```
+
+引数は `<TaskId> <type> <説明>`。type は `feat|fix|refactor|docs|test|chore|perf|ci`。
+
+1. 検証: TaskId の形式、type、説明(空でなく改行を含まない)、state.json の対象タスクが `in_review`
+2. `branch-check` が非0なら、その出力をそのまま流して exit 10 + その code(11〜15)
+3. `.agents/workflow` 配下を除く変更をステージする。ステージが空なら exit 20
+4. `<type>: <説明>` + 空行 + `Task: <TaskId> (<state.json の source>)` で本体をコミットする
+5. `task-state <TaskId> done --commit <本体のハッシュ>` で状態を更新する
+6. state.json・tasks.md・comprehension のうち git に無視されていないものだけを
+   `chore: <TaskId> の進捗状態を更新` でコミットする(追跡しないリポジトリでは何もしない)
+7. stdout に結果を出し、最後の行に `Next:` 行を出す
+
+exit code: `0`=コミットした、`1`=使い方不備・検証失敗、`11`〜`15`=`branch-check` の exit 1〜5、
+`20`=コミットする変更が無い、`30`=`git commit` の失敗、`31`=`task-state` の `done` の失敗。
+`Next:` 行は exit 0 が `continue`、exit 20 が `escalate reason=no-changes`。それ以外の失敗には出さない
+(11〜15 は `branch-check` の出力をそのまま流す)。
 
 ### next-task — 次に処理するタスクの選択
 
@@ -615,7 +654,11 @@ PR が MERGED だった場合のみ `--branch` / `-Branch`(次のグループ用
 `group` を次のグループ(未完了タスクを含む最初のグループ)に更新する。stdout に
 `ADVANCED <新ブランチ名> <新グループ名>` を出力する。state.json を書き換えるのは
 この MERGED の場合だけで、exit 7 / 8 / 9 / 1 では何も書き換えない(状況が変わったら
-同じコマンドを再実行すればよい)。
+同じコマンドを再実行すればよい)。切替後に state.json が git に無視されていなければ
+`git add` して `chore: <新グループ名> グループの作業を開始`(新グループ名が空なら
+`chore: 既定グループの作業を開始`)でコミットし、stdout の `ADVANCED` 行の後に
+`State commit: <ハッシュ7桁>`(ステージに変更が無ければ `State commit: none`)を出す。
+追跡しないリポジトリではコミットしない。コミットに失敗したら stderr に出して exit 1。
 
 exit code: `0`=切替完了、`1`=使い方・前提不備(グループ未完了・作業ツリー未クリーン・
 `--branch` 未指定や `develop/` 以外の名前 等)、`7`=PR 未作成(stdout `NO_PR`)、

@@ -82,17 +82,11 @@ state.json を直接編集しない):
   ユーザーにエスカレーションする(ユーザー判断でやり直す場合は `task-state <タスクID> reset`
   で `pending` に戻す)
 
-### 5. 合格時: 最終検証とコミット
+### 5. 合格時: 品質ゲートと理解確認質問の生成
 
-(手順5.2 の品質ゲートで FAIL(blocking) になった場合はここから不合格に転じ、手順4へ戻る)
+(手順5.1 の品質ゲートで FAIL(blocking) になった場合はここから不合格に転じ、手順4へ戻る)
 
-1. `branch-check --state` を実行し、コミットしてよいブランチかを機械的に判定する
-   (PowerShell: `.agents/workflow/scripts/branch-check.ps1 -State` / POSIX:
-   `branch-check.sh --state`。`main` の判定は branch-check の `Next: switch-branch reason=main` が担う)。
-   **出力の最後の行が `Next: continue` 以外なら
-   コミットせずに中断**し、`Next:` 行(無いときはその旨)と stderr の内容を添えて
-   ユーザーに報告する(本来 `/agent-workflow` 開始時に `develop/*` ブランチにいるはず)
-2. `config.json` の `verify_before_commit` が `true` の場合のみ、最終ゲートとして
+1. `config.json` の `verify_before_commit` が `true` の場合のみ、最終ゲートとして
    親が品質ゲートを1回実行する:
    - `quality_gate` が定義されていれば `/agent-quality-gate` を実行する
      (typecheck/lint/test をまとめて検証。`blocking` ステップの失敗のみ不合格)
@@ -102,45 +96,37 @@ state.json を直接編集しない):
    - 未定義なら従来どおり `test_command` を1回実行する
    - **FAIL(blocking)なら不合格扱い**で手順4へ。non-blocking の失敗は
      コミット可だが、報告の「残課題」に品質ゲートの結果を必ず記載する
-3. conventional commits 形式でコミットする(タスク単位で1コミット。タスク本体の
-   実装差分のみを対象とし、ワークフロー状態ファイルは含めない):
-   ```
-   <type>: <タスクタイトルに基づく説明>
+2. `config.json` の `comprehension_check.enabled` が `true` の場合のみ、理解確認質問を生成する
+   (質問ファイルを手順6の `task-commit` が行う状態ファイルのコミットに含めるため、
+   コミットの**前**に行う):
+   1. `.agents/workflow/comprehension/` ディレクトリがなければ作成する
+   2. レビューで把握済みの diff・受け入れ基準・完了報告のみから質問を生成する(追加のファイル読み込みは行わない)
+   3. 質問数は `comprehension_check.questions_per_task` に従う
+   4. 以下の観点テンプレートからバランスよく質問を作成する:
+      - **設計判断**: なぜこの実装方針か、トレードオフ
+      - **動作の仕組み**: 変更したコードの処理フロー、エッジケース
+      - **依存の理解**: 実装で利用した既存モジュール・外部ライブラリ・フレームワーク機能について、その大まかな役割と仕組み
+      - **影響範囲**: この変更が他のどこに影響しうるか
+   5. `agent-comprehension-check/SKILL.md` の質問ファイルフォーマットに従い、
+      `.agents/workflow/comprehension/<タスクID>.md` に保存する
+      - 質問ファイルに `## 解説` 見出しは含めない(未解説判定のため)
+   6. 保存したファイルパスを会話に出力する
 
-   Task: <タスクID> (<計画ソース>)
-   ```
-4. state.json: `task-state <タスクID> done --commit <手順5.3のコミットハッシュ>`(PowerShell は
-   `-Commit <hash>`)で status を `done` にし、`commit` を記録する
-5. Claude Code Task(表示用)も completed に更新
+### 6. 合格時: コミット(task-commit)
 
-### 6. 合格時: 理解確認質問の生成(設定有効時のみ)
+`task-commit` を実行する(PowerShell: `.agents/workflow/scripts/task-commit.ps1 -TaskId <ID> -Type <type> -Description "<説明>"` /
+POSIX: `.agents/workflow/scripts/task-commit.sh <ID> <type> "<説明>"`)。
+親が決めるのは `type`(conventional commits の type)と説明(タスクタイトルに基づく1行)だけ。
+次の処理はスクリプトが行う:
 
-`config.json` の `comprehension_check.enabled` が `true` の場合のみ実施する:
+- `branch-check`(コミットしてよいブランチかの判定)
+- 本体コミット(ワークフロー状態ファイルを除く。タスク単位で1コミット)
+- `task-state done`(status を `done` にし、`commit` を記録)
+- 状態ファイル(state.json・tasks.md・comprehension ファイル等)の `chore` コミット
 
-1. `.agents/workflow/comprehension/` ディレクトリがなければ作成する
-2. レビューで把握済みの diff・受け入れ基準・完了報告のみから質問を生成する(追加のファイル読み込みは行わない)
-3. 質問数は `comprehension_check.questions_per_task` に従う
-4. 以下の観点テンプレートからバランスよく質問を作成する:
-   - **設計判断**: なぜこの実装方針か、トレードオフ
-   - **動作の仕組み**: 変更したコードの処理フロー、エッジケース
-   - **依存の理解**: 実装で利用した既存モジュール・外部ライブラリ・フレームワーク機能について、その大まかな役割と仕組み
-   - **影響範囲**: この変更が他のどこに影響しうるか
-5. `agent-comprehension-check/SKILL.md` の質問ファイルフォーマットに従い、
-   `.agents/workflow/comprehension/<タスクID>.md` に保存する
-   - 質問ファイルに `## 解説` 見出しは含めない(未解説判定のため)
-6. 保存したファイルパスを会話に出力する
-
-### 7. ワークフロー状態のコミット
-
-手順5でのタスク本体コミット時点では `commit` ハッシュが確定しておらず、
-また手順6の理解確認質問ファイルも未生成であるため、state.json の `done` 更新は
-タスク本体コミットに含められない。手順6まで完了した時点で、state.json・tasks.md・
-comprehensionファイル等のワークフロー状態変更一式を**まとめて別コミット**する
-(タスク本体コミットとは必然的に別コミットになる):
-
-```
-chore: <タスクID> の進捗状態を更新
-```
+出力の最後の行が `Next: continue` 以外なら、コミットが済んだと見なさず中断し、
+`Next:` 行の reason と stderr の内容をユーザーに報告する。
+`Next: continue` の場合は、Claude Code Task(表示用)も completed に更新する。
 
 ## ユーザーへの報告
 
@@ -149,13 +135,11 @@ chore: <タスクID> の進捗状態を更新
 - **レビュー結果**(手順3完了時)に最低限報告する項目:
   - 合格 / 不合格の判定
   - 不合格の場合は指摘事項の件数と概要(原因種別: コードレビュー指摘 / 品質ゲート FAIL)
-- **コミット完了時**(手順5完了時)に最低限報告する項目:
+- **コミット完了時**(手順6完了時。task-commit の出力から)に最低限報告する項目:
   - コミットハッシュ
   - コミットメッセージ(タイトル行)
   - 品質ゲートの結果(non-blocking の失敗があれば残課題として明記)
-- **ワークフロー状態コミット完了時**(手順7完了時)に最低限報告する項目:
-  - `chore` コミットのハッシュ
-  - 含めたファイル(state.json / tasks.md / comprehensionファイル等)
+  - `State commit:` 行の内容(状態ファイルの `chore` コミットのハッシュ。状態ファイルを追跡しないリポジトリでは `none`)
 - **修正再依頼時**(手順4)に最低限報告する項目:
   - 現在の retries 回数 / `max_fix_retries`
   - `fix-notes.md` の保存先パス(または直接作成した `prompt.md` のパス)

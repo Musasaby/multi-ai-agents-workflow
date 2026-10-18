@@ -509,6 +509,55 @@ t_sync_group_absent_kept_absent() {
     assert_eq "<absent>" "$(state_group)" "group key not added to legacy state.json"
 }
 
+state_branch() {
+    python3 - "$(py_path "$PROJ/.agents/workflow/state.json")" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding='utf-8') as f:
+    print(json.load(f)['branch'])
+PY
+}
+
+# state.json から branch と updated_at を除いた内容(変わっていないことの確認用)
+state_without_branch() {
+    python3 - "$(py_path "$PROJ/.agents/workflow/state.json")" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding='utf-8') as f:
+    s = json.load(f)
+s.pop('branch', None)
+s.pop('updated_at', None)
+print(json.dumps(s, ensure_ascii=False, sort_keys=False))
+PY
+}
+
+t_sync_set_branch_current() {
+    basic_tasks
+    write_state "T1:done" "T2:pending" "T3:pending" "T4:pending"
+    local before
+    before="$(state_without_branch)"
+    git -C "$PROJ" switch -q -c develop/new
+    run_script state-sync.sh --set-branch
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_eq "develop/new" "$(state_branch)" "branch written"
+    assert_eq "$(git -C "$PROJ" branch --show-current)" "$(state_branch)" "branch matches git (branch-check --state precondition)"
+    assert_eq "$before" "$(state_without_branch)" "other keys unchanged"
+    assert_contains "$OUT" "Updated branch: main -> develop/new" "stdout"
+}
+
+t_sync_set_branch_named() {
+    basic_tasks
+    write_state "T1:done" "T2:pending" "T3:pending" "T4:pending"
+    run_script state-sync.sh --set-branch develop/other
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_eq "develop/other" "$(state_branch)" "branch written"
+}
+
+t_sync_set_branch_rejects_non_develop() {
+    basic_tasks
+    write_state "T1:done" "T2:pending" "T3:pending" "T4:pending"
+    run_script state-sync.sh --set-branch
+    assert_eq 1 "$CODE" "exit code on main"
+    assert_eq "main" "$(state_branch)" "branch unchanged"
+}
 
 # ---------- state-sync: 挿入 (#13) ----------
 
@@ -907,6 +956,9 @@ test_case "next: 区切り無しで全完了はexit 3" t_next_no_separator_all_d
 test_case "sync: init で group を初期化" t_sync_init_group_field
 test_case "sync: insert・追記で group を保持" t_sync_insert_preserves_group
 test_case "sync: group欄の無い旧stateには足さない" t_sync_group_absent_kept_absent
+test_case "sync: --set-branch は現在のブランチを state.json に書く" t_sync_set_branch_current
+test_case "sync: --set-branch に名前を渡せばその名前を書く" t_sync_set_branch_named
+test_case "sync: --set-branch は develop/ 以外を拒否する" t_sync_set_branch_rejects_non_develop
 test_case "insert: pendingの前に挿入" t_insert_before_pending
 test_case "insert: なし→T8、複数指定" t_insert_before_none_dep
 test_case "insert: pending以外は拒否" t_insert_before_non_pending_rejected

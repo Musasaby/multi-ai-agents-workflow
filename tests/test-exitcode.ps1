@@ -65,6 +65,20 @@ Invoke-TestCase "task-state: 成功時に LASTEXITCODE=0" {
     Assert-Eq 0 (Invoke-InProcess task-state.ps1 @{ TaskId = 'T1'; Action = 'start' }) "LASTEXITCODE"
 }
 
+Invoke-TestCase "task-commit: 成功時に LASTEXITCODE=0" {
+    Push-Location $script:Proj
+    git checkout -q -b develop/t 2>$null
+    Pop-Location
+    Set-State 'T1:in_review'
+    $path = "$script:Proj/.agents/workflow/state.json"
+    $s = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $s.branch = 'develop/t'
+    Write-Utf8File $path (($s | ConvertTo-Json -Depth 10) + "`n")
+    Set-GhStubResult -Stdout '[]'
+    Write-Utf8File "$script:Proj/a.txt" "a`n"
+    Assert-Eq 0 (Invoke-InProcess task-commit.ps1 @{ TaskId = 'T1'; Type = 'feat'; Description = 'x' }) "LASTEXITCODE"
+}
+
 Invoke-TestCase "dispatch-check: 成功時に LASTEXITCODE=0" {
     # 正常終了した run(dispatch-run が guard.sha256 を書く)の後の check。子は a.txt を変更し、
     # 完了報告(変更ファイル/テスト結果)を output.log に残す
