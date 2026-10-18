@@ -65,7 +65,9 @@ t_pr_generates() {
     assert_contains "$prompt" "--base main" "base branch"
     assert_contains "$prompt" "日本語" "japanese title/body instruction"
     assert_contains "$prompt" "git push -u" "push instruction"
-    assert_not_contains "$prompt" "{" "all placeholders replaced"
+    assert_contains "$prompt" 'gh api -X PATCH "repos/{owner}/{repo}/pulls/' "update existing PR via gh api"
+    assert_contains "$prompt" "-F body=@.agents/workflow/runs/pr-1-1/pr-body.md" "body file for update"
+    assert_not_contains "${prompt//\{owner\}\/\{repo\}/}" "{" "all placeholders replaced except {owner}/{repo}"
 }
 
 t_pr_increments() {
