@@ -49,7 +49,8 @@
   プロンプト・ログ・報告が上書きされず残る(事後調査に使える)
 - 一巡(全タスク `done`)した後は `workflow-archive` で `tasks.md` / `state.json` /
   `runs/` / `comprehension/` を `archive/` へ退避し、新サイクルは空の状態から始める
-  (config.json と scripts/ は退避対象外)
+  (config.json と scripts/ は退避対象外)。作業ブランチの PR がマージされるまではアーカイブしない
+  (未マージなら PR のレビューの残課題は追加モードで今のサイクルに足す)
 
 ## config.json
 
@@ -886,8 +887,45 @@ exit code: `0`=成功(一覧モードでは差分なし)、`1`=使い方不備�
 .agents/workflow/scripts/workflow-archive.ps1 <スラッグ>
 ```
 ```bash
-.agents/workflow/scripts/workflow-archive.sh <スラッグ>
+.agents/workflow/scripts/workflow-archive.sh <スラッグ> [--force]
 ```
 
-exit code: `0`=成功、`1`=使い方不備(スラッグ未指定・パス区切りや `..` を含む・
-workflow ディレクトリ不在・移動対象なし)。
+PowerShell 版は `-Force`、bash 版は `--force`(スラッグの前後どちらでも可)。
+`--force` / `-Force` を付けると PR の状態を確かめずにアーカイブする。
+
+```powershell
+.agents/workflow/scripts/workflow-archive.ps1 <スラッグ> -Force
+```
+```bash
+.agents/workflow/scripts/workflow-archive.sh <スラッグ> --force
+```
+
+アーカイブする前に、`state.json` の `branch` の PR の状態を `gh pr view` で確かめる。
+`branch` が空・`main`・`config.json` の `upstream.branch` のときは確かめずに進む。
+判定ごとの結果は次のとおり。
+
+| 判定 | 結果 | stdout |
+|------|------|--------|
+| PR が `MERGED` | アーカイブする(exit 0) | `Archived: ...` |
+| PR が `OPEN` | 止める(exit 2) | `OPEN <PR URL>` |
+| PR が `CLOSED` | 止める(exit 3) | `CLOSED <PR URL>` |
+| gh が無い・失敗・出力を解析できない | 止める(exit 4) | (`Next:` 行のみ) |
+| PR 未作成で、ブランチに未マージのコミットがある(比較先が無い場合も含む) | 止める(exit 5) | `NO_PR` |
+| PR 未作成で、未マージのコミットが無い・ローカルにブランチが無い | アーカイブする(exit 0) | `Archived: ...` |
+
+未マージのコミットの比較先は `upstream.branch`(無ければ `main`)。
+止めるとき(exit 2〜5)は何も移動せず、`archive/` も作らない。stdout の最後の行は次アクションを示す
+`Next:` 行になる。
+
+| exit | `Next:` 行 |
+|------|-----------|
+| 2 | `Next: escalate reason=pr-open` |
+| 3 | `Next: escalate reason=pr-closed` |
+| 4 | `Next: escalate reason=gh-unavailable` |
+| 5 | `Next: escalate reason=pr-not-created` |
+
+exit 0 の出力は `Archived: ...` の1行だけで、`Next:` 行は出さない。
+
+exit code: `0`=アーカイブした、`1`=使い方不備(スラッグ未指定・パス区切りや `..` を含む・
+workflow ディレクトリ不在・移動対象なし)、`2`=PR が OPEN、`3`=PR が CLOSED、
+`4`=gh で判定不能、`5`=PR 未作成でブランチに未マージのコミットがある。
