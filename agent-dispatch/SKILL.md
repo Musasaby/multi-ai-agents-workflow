@@ -64,10 +64,8 @@ Start-Process pwsh -ArgumentList "-NoProfile -File .agents/workflow/scripts/disp
 nohup .agents/workflow/scripts/dispatch-run.sh T1 2 > /dev/null 2>&1 &
 ```
 
-**Claude Code を子エージェントとして使う場合**: `command_template` に
-`--output-format stream-json --verbose` を指定すると、`dispatch-run` が出力を1行ずつ人が読める
-テキストとして `output.log` に逐次書き出すため、実行中の閲覧が機能する
-(生 JSON は `output.jsonl` に残る)。既定の `text` は子 CLI 側でバッファリングされる。
+子CLIの種類は `child_agent.profile` で指定する(`.agents/workflow/README.md` の「子CLIのプロファイル」)。
+子CLI固有の確かめ方は `references/<CLI>.md`(opencode: `references/opencode.md`)に書く。
 
 `config.json` の `child_agent.timeout_seconds` は `dispatch-wait`(§2)が判定する。
 タイムアウトを超えた場合はタスクを `in_progress` のままユーザーに報告する。
@@ -90,10 +88,12 @@ nohup .agents/workflow/scripts/dispatch-run.sh T1 2 > /dev/null 2>&1 &
   `output.log` が更新されずに経過すると `dispatch-run` が子を止め、`done` マーカーが
   `EXIT:idle-timeout` で書き出される。ハングや `idle-timeout` では、
   `child_agent.cli_log`(子CLI自身のログ。未設定なら子CLIのデフォルトのログ先。
-  例: opencode は `~/.local/share/opencode/log/opencode.log`)の末尾の ERROR 行を
-  確認する(`dispatch-check` も `CLI log:` 欄に出力する)。利用上限(usage/rate limit)・
+  子CLI固有の場所は `references/<CLI>.md`。opencode: `references/opencode.md`)の末尾の
+  ERROR 行を確認する(`dispatch-check` も `CLI log:` 欄に出力する)。利用上限(usage/rate limit)・
   プロバイダー障害(エンドポイントの 429・unavailable 等)を表す行があれば、
   子の作業の失敗ではなくプロバイダー側の問題が原因である可能性が高い(`Provider error: yes`)
+- **無効な検査の扱い**: `dispatch-check` の `Disabled checks:` が `none` 以外なら、無効な検査
+  (その子CLIでは検知できないこと)をユーザーへの報告に添え、検証では `output.log` の末尾を目で確かめる
 - **出力の最後の `Next:` 行で機械的に分岐する**(`EXIT` の値を親が目視で解釈しない。
   非0終了の見落としを防ぐため)。`dispatch-check` は終了状態の区分・管理ファイルの改ざん検知(Guard)・
   権限拒否の有無・完了報告の判定・変更件数・`git status --porcelain`・`git diff --stat`・
@@ -163,11 +163,9 @@ fix-notes に一時ファイルの置き場所(`$TMPDIR`)を書く(dispatch-run 
 #### `Next: escalate reason=token-limit`
 
 子は最後のツール実行の後に応答を出力しきれずに打ち切られた(出力トークン上限に達した)
-可能性が高い。確認方法:
-opencode ならセッション DB(`~/.local/share/opencode/opencode.db` の `message` テーブル)で
-該当セッションの最後の assistant メッセージを見て、`finish` が `length`(出力トークン上限で
-打ち切り)であること、または `tokens` の `reasoning` が上限(例: 32000)に近いことを確かめる
-(親がセッション DB を確かめられない場合は、ユーザーに確認を依頼する)。
+可能性が高い。確認方法は子CLIごとに異なる(セッションの記録で最後の assistant メッセージが
+出力トークン上限で打ち切られていないかを見る。opencode: `references/opencode.md`)。
+親が確かめられない場合は、ユーザーに確認を依頼する。
 この原因が濃厚な場合は、retries を消費する通常の再 dispatch の前に、次の対処のどれかを
 ユーザーに提案する:
 1. タスクを細かく分ける(`agent-task-plan` の追加モードでタスクを分割する)
@@ -219,28 +217,30 @@ exit 1(使い方の誤り): stderr の内容をユーザーに伝える。
   - exit code(`done` マーカーの内容)と `dispatch-check` の判定(Verdict)
   - テスト結果の検証結果(全件パスか、失敗があればその概要)
   - 次のフェーズ(レビューへ進む/再dispatchする/ユーザーへエスカレーションする)のどれになったか
+  - `Disabled checks:` が `none` 以外なら、無効な検査の内容
 
 ## トラブルシューティング
 
 ### `.agents/workflow/.config` 配下のディレクトリ作成が拒否される
 
-(`child_agent.isolate_xdg: true` で使っている場合)`sandbox` 環境で `.agents/workflow/.config` や `.agents/workflow/.config/opencode/log` ディレクトリの作成が権限不足等で拒否される場合は、以下のいずれかで対処する。
+(`child_agent.isolate_xdg: true` で使っている場合)`sandbox` 環境で `.agents/workflow/.config` 配下のディレクトリの作成が権限不足等で拒否される場合は、以下のいずれかで対処する。
 
 - **昇格実行**: ディレクトリ作成コマンドを管理者権限または昇格したコンテキストで実行する
-- **事前作成**: `/agents-md-setup` 等のセットアップ時に、リポジトリのセットアップ権限で `.agents/workflow/.config/opencode/log` を事前に作成しておく
+- **事前作成**: `/agents-md-setup` 等のセットアップ時に、リポジトリのセットアップ権限で必要なディレクトリを事前に作成しておく(子CLI固有のディレクトリは `references/<CLI>.md`。opencode: `references/opencode.md`)
 
 上記の対処後、事前チェックと実行の `XDG_CONFIG_HOME` / `XDG_DATA_HOME` 設定が正常に機能するようになる。
 
 ### 子エージェントCLIが認証エラー・`Unexpected server error` で失敗する
 
-`child_agent.isolate_xdg` が `true` だと、`~/.local/share/opencode/auth.json` 等の認証情報が
-見えなくなる。sandbox 環境でなければ `isolate_xdg` を `false`(既定)にする。sandbox 環境で
-`true` が必要な場合は、`.agents/workflow/.config` 配下で CLI のログイン(例:
-`XDG_CONFIG_HOME=.agents/workflow/.config XDG_DATA_HOME=.agents/workflow/.config opencode auth login`)を行う。
+`child_agent.isolate_xdg` が `true` だと、ホーム配下の認証情報が見えなくなる。
+sandbox 環境でなければ `isolate_xdg` を `false`(既定)にする。sandbox 環境で
+`true` が必要な場合は、`.agents/workflow/.config` 配下で CLI のログインを行う
+(コマンド例は `references/<CLI>.md`。opencode: `references/opencode.md`)。
 
 ### それでも `EEXIST` 等のエラーが出る場合
 
 `XDG_CONFIG_HOME` / `XDG_DATA_HOME` を設定した上で、子エージェントCLI起動時に `EEXIST: file already exists, mkdir '~/.config/...'` 等のエラーが出る場合、テンプレートのエスケープや環境変数の引き渡しに問題がある可能性がある。テンプレート内で `{prompt}` 以外の部分に `~` (チルダ)が展開される等、意図しないパス解釈が起きていないか確認する。
+子CLI固有の原因は `references/<CLI>.md`(opencode: `references/opencode.md`)を見る。
 
 ### 旧レイアウト(`.dispatch-prompt-<タスクID>.md` / `logs/` / `reports/`)が残っている場合
 
