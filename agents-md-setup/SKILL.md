@@ -7,6 +7,8 @@ description: AGENTS.md / .agents を正本としたエージェント共通設�
 
 single source of truth として `AGENTS.md`(リポジトリルート)と `.agents/` を正本にし、
 Claude Code 固有のパス(`CLAUDE.md`, `.claude/`)からはリンク経由で参照させる。
+`CLAUDE.md`・`.claude/` は親が Claude Code の場合のためのもので、AGENTS.md を直接読む親(Codex 等)では使われない(作られても害はない)。
+それ以外の親は配布元 README の「親エージェント・子CLIの対応」を参照する。
 ファイル・ディレクトリの作成や `.gitignore` / `.gitattributes` の整備は `workflow-setup` スクリプトが行う
 (処理の詳細と出力の仕様は `_templates/workflow/README.md` の「workflow-setup」の節を参照)。
 
@@ -36,6 +38,10 @@ Claude Code 固有のパス(`CLAUDE.md`, `.claude/`)からはリンク経由で�
 
 `.gitignore` / `.gitattributes` が変更されたらコミットする(未コミットだと `agent-dispatch` の事前チェック(作業ツリーがクリーン)で止まる)。
 
+`.agents/workflow/config.json` の `child_agent.command_template` と `child_agent.profile` を、使う子CLIに合わせて設定する
+(`.agents/workflow/README.md` の「子CLIのプロファイル」の例)。`.agents/workflow/.config/` は `child_agent.isolate_xdg` が
+true のときだけ作られる。
+
 ### 2. ファイルベース検証(必須)
 
 以下をすべて確認し、結果を報告する:
@@ -54,9 +60,9 @@ Claude Code 固有のパス(`CLAUDE.md`, `.claude/`)からはリンク経由で�
 
 ### 3. CLI検証(任意・時間がある場合)
 
-ファイルベース検証が通っていればセットアップは成功であるが、時間に余裕がある場合は以下のCLI検証を行う。
+ファイルベース検証が通っていればセットアップは成功であるが、時間に余裕がある場合は以下のCLI検証を行う(親が Claude Code の場合。`claude -p` を使う)。
 
-**注意**: `claude -p` の初回コールドスタートは環境構築のため60秒を超えうる。タイムアウト目安は3分とし、60秒で打ち切らないこと。
+**注意**: Claude Code の場合、`claude -p` の初回コールドスタートは環境構築のため60秒を超えうる。タイムアウト目安は3分とし、60秒で打ち切らないこと。
 
 1. **skill認識**: ヘッドレス実行で project skill が認識されること
    ```powershell
