@@ -156,7 +156,7 @@ try {
     $template = [string]$config.child_agent.command_template
     $tokens = Split-CommandLine $template
     $isStreamJson = $childProfile.OutputFormat -eq 'claude-stream-json'
-    $promptFile = (Resolve-Path -LiteralPath $promptPath).Path.Replace('\', '/')
+    $promptFile = [System.IO.Path]::GetFullPath((Join-Path (Get-Location).Path $promptPath)).Replace('\', '/')
     # {prompt_file}・{prompt} のどちらも無いテンプレートは、プロンプトを stdin で渡す
     $useStdin = -not ($template.Contains('{prompt_file}') -or $template.Contains('{prompt}'))
     $argList = @()
