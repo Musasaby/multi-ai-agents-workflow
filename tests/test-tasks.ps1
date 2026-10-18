@@ -698,6 +698,21 @@ Invoke-TestCase "gen: @参照だけのAGENTS.mdは警告" {
     Assert-NotContains $script:Err "AGENTS.md only contains" "no warning when AGENTS.md has content"
 }
 
+Invoke-TestCase "gen: AGENTS.md の @ 参照を展開する profile では警告しない" {
+    Set-Tasks $basicTasks
+    Set-State 'T1:pending'
+    Write-Utf8File "$script:Proj/AGENTS.md" "@.agents/skills/_templates/AGENTS.md`n"
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1
+    Assert-Contains $script:Err "the child CLI (profile: auto) does not expand them" "profile name in warning"
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg.child_agent | Add-Member -NotePropertyName profile -NotePropertyValue 'claude-stream-json' -Force
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-NotContains $script:Err "AGENTS.md only contains" "no warning for profile that expands @"
+}
+
 Invoke-TestCase "gen: 同じ行の参照ファイルも検証する" {
     Write-Utf8File "$script:Proj/a.txt" "x`n"
     Set-RefTasks "- **参照ファイル**: ``a.txt:1-5``(全体)"
