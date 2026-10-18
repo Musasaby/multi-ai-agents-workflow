@@ -26,10 +26,10 @@ description: GitHub IssueのIDまたは計画ドキュメントのパスを引�
 既存の `.agents/workflow/state.json` の有無と状態で分岐する:
 
 - **state.json が無い** → 通常モード(§1〜§5)で新規作成する
-- **state.json があり、全タスクが `done`** → 一巡完了とみなし、確認なしで
+- **state.json があり、全タスクが `done`** → まず、確認なしで
   `scripts/workflow-archive`(PowerShell: `.agents/workflow/scripts/workflow-archive.ps1`
-  / POSIX: `workflow-archive.sh`)にスラッグを渡してアーカイブしてから、通常モードで
-  新規作成する
+  / POSIX: `workflow-archive.sh`)にスラッグを渡して実行する。スクリプトが作業ブランチの
+  PR の状態を確かめ、マージ済みのときだけアーカイブする
   ```powershell
   .agents/workflow/scripts/workflow-archive.ps1 <スラッグ>
   ```
@@ -37,9 +37,27 @@ description: GitHub IssueのIDまたは計画ドキュメントのパスを引�
   .agents/workflow/scripts/workflow-archive.sh <スラッグ>
   ```
   スラッグは計画ソースやIssue番号から簡潔に生成する(例: `issue-42`)。
+  exit code ごとの次の行動:
+  - **exit 0** → アーカイブされた。通常モードで新規作成する
+  - **exit 2**(`Next: escalate reason=pr-open`。PR が未マージ)→ 何も移動されていない。
+    全タスクが `done` でも、PR がマージされるまでサイクルは終わっていない。
+    - 計画ソースがその PR のレビューで見つかった残課題なら、**追加モード**で今のサイクルに追記する。
+      state.json の `group` が空でなければ、追記するタスクに `- **グループ**: <group>` を付けて
+      今の PR のグループに入れる
+    - 別件なら、PR のマージを待つか、`--force`(PowerShell: `-Force`)でアーカイブして
+      新規作成するかを利用者に確認する
+  - **exit 3**(`pr-closed`)・**exit 5**(`pr-not-created`)・**exit 4**(`gh-unavailable`)→
+    利用者に状況を伝え、追加モードにするか、`--force` でアーカイブして新規作成するかを確認する
 - **state.json があり、未完了タスクが残っている** → 「進行中のワークフローがあるが
-  破棄してよいか」をユーザーに確認する。破棄する場合も削除ではなく上記と同じ
+  破棄してよいか」をユーザーに確認する。破棄する場合も削除ではなく
   `workflow-archive` でアーカイブする(履歴が残るため安全に「破棄」できる)。
+  利用者が破棄を承認しているので、`--force` を付けて PR の状態の判定を飛ばす
+  ```powershell
+  .agents/workflow/scripts/workflow-archive.ps1 <スラッグ> -Force
+  ```
+  ```bash
+  .agents/workflow/scripts/workflow-archive.sh <スラッグ> --force
+  ```
   破棄しない場合は §「追加モード」に進む(ユーザーが途中追加を意図している場合)か、
   作業を中断する。
 

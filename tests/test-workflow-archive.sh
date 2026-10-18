@@ -69,10 +69,125 @@ t_no_targets() {
     assert_file_absent "$PROJ/.agents/workflow/archive" "no archive dir created"
 }
 
+set_state_branch() {
+    python3 - "$(py_path "$PROJ/.agents/workflow/state.json")" "$1" <<'PY'
+import json, sys
+p, branch = sys.argv[1:3]
+with open(p, encoding='utf-8') as f:
+    s = json.load(f)
+s['branch'] = branch
+with open(p, 'w', encoding='utf-8', newline='\n') as f:
+    json.dump(s, f, ensure_ascii=False, indent=2)
+    f.write('\n')
+PY
+}
+
+setup_branch_state() {
+    write_tasks "# tasks"
+    write_state "T1:done"
+    set_state_branch develop/x
+}
+
+last_line() {
+    printf '%s\n' "$1" | tail -n 1
+}
+
+t_pr_open() {
+    setup_branch_state
+    gh_stub_set 0 '{"state":"OPEN","url":"https://example.com/pr/1"}' ''
+    run_script workflow-archive.sh myslug
+    assert_eq 2 "$CODE" "exit: $ERR"
+    assert_eq "OPEN https://example.com/pr/1" "$(printf '%s\n' "$OUT" | head -n 1)" "first line"
+    assert_eq "Next: escalate reason=pr-open" "$(last_line "$OUT")" "Next line"
+    assert_file_exists "$PROJ/.agents/workflow/state.json" "state.json kept"
+    assert_file_absent "$PROJ/.agents/workflow/archive" "no archive dir created"
+}
+
+t_pr_closed() {
+    setup_branch_state
+    gh_stub_set 0 '{"state":"CLOSED","url":"https://example.com/pr/1"}' ''
+    run_script workflow-archive.sh myslug
+    assert_eq 3 "$CODE" "exit: $ERR"
+    assert_eq "Next: escalate reason=pr-closed" "$(last_line "$OUT")" "Next line"
+    assert_file_exists "$PROJ/.agents/workflow/state.json" "state.json kept"
+    assert_file_absent "$PROJ/.agents/workflow/archive" "no archive dir created"
+}
+
+t_gh_failure() {
+    setup_branch_state
+    gh_stub_set 1 '' 'gh stub failure'
+    run_script workflow-archive.sh myslug
+    assert_eq 4 "$CODE" "exit: $ERR"
+    assert_eq "Next: escalate reason=gh-unavailable" "$(last_line "$OUT")" "Next line"
+    assert_file_exists "$PROJ/.agents/workflow/state.json" "state.json kept"
+    assert_file_absent "$PROJ/.agents/workflow/archive" "no archive dir created"
+}
+
+t_pr_merged() {
+    setup_branch_state
+    gh_stub_set 0 '{"state":"MERGED","url":"https://example.com/pr/1"}' ''
+    run_script workflow-archive.sh myslug
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_file_absent "$PROJ/.agents/workflow/state.json" "state.json moved"
+    assert_contains "$(gh_stub_log)" "pr view develop/x" "gh pr view called"
+}
+
+t_force() {
+    setup_branch_state
+    run_script workflow-archive.sh myslug --force
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_eq "" "$(gh_stub_log)" "gh not called"
+    assert_file_absent "$PROJ/.agents/workflow/state.json" "state.json moved"
+}
+
+t_no_pr_unmerged() {
+    setup_branch_state
+    gh_stub_set 1 '' 'no pull requests found for branch "develop/x"'
+    (
+        cd "$PROJ" || exit 1
+        git checkout -q -b develop/x
+        printf 'x\n' > x.txt
+        git add x.txt
+        git commit -q -m "feat: x"
+    ) || exit 1
+    run_script workflow-archive.sh myslug
+    assert_eq 5 "$CODE" "exit: $ERR"
+    assert_eq "NO_PR" "$(printf '%s\n' "$OUT" | head -n 1)" "first line"
+    assert_eq "Next: escalate reason=pr-not-created" "$(last_line "$OUT")" "Next line"
+    assert_contains "$ERR" "1 commit(s)" "stderr mentions commit count"
+    assert_file_exists "$PROJ/.agents/workflow/state.json" "state.json kept"
+    assert_file_absent "$PROJ/.agents/workflow/archive" "no archive dir created"
+}
+
+t_no_pr_no_new_commits() {
+    setup_branch_state
+    gh_stub_set 1 '' 'no pull requests found for branch "develop/x"'
+    git -C "$PROJ" branch develop/x
+    run_script workflow-archive.sh myslug
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_file_absent "$PROJ/.agents/workflow/state.json" "state.json moved"
+}
+
+t_no_pr_no_branch() {
+    setup_branch_state
+    gh_stub_set 1 '' 'no pull requests found for branch "develop/x"'
+    run_script workflow-archive.sh myslug
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_file_absent "$PROJ/.agents/workflow/state.json" "state.json moved"
+}
+
 echo "test-workflow-archive.sh"
 test_case "全対象の移動と Archived: の出力" t_all_targets
 test_case "一部の対象だけ移動" t_partial_targets
 test_case "スラッグなしは exit 1" t_slug_required
 test_case "パス区切り・.. を含むスラッグは exit 1" t_slug_with_path_chars
 test_case "移動対象なしは exit 1" t_no_targets
+test_case "PR が OPEN なら exit 2 で何も移動しない" t_pr_open
+test_case "PR が CLOSED なら exit 3" t_pr_closed
+test_case "gh が失敗したら exit 4" t_gh_failure
+test_case "PR が MERGED ならアーカイブする" t_pr_merged
+test_case "--force なら PR を確かめずにアーカイブする" t_force
+test_case "PR 未作成で未マージのコミットがあれば exit 5" t_no_pr_unmerged
+test_case "PR 未作成で未マージのコミットが無ければアーカイブする" t_no_pr_no_new_commits
+test_case "PR 未作成でブランチが無ければアーカイブする" t_no_pr_no_branch
 summary

@@ -65,4 +65,101 @@ Invoke-TestCase "移動対象なしは exit 1" {
     Assert-FileAbsent "$script:Proj/.agents/workflow/archive" "no archive dir created"
 }
 
+function Set-StateBranch { param([string]$Branch)
+    $path = "$script:Proj/.agents/workflow/state.json"
+    $state = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $state.branch = $Branch
+    Write-Utf8File $path ($state | ConvertTo-Json -Depth 10)
+}
+
+function Initialize-BranchState {
+    Set-Tasks "# tasks"
+    Set-State 'T1:done'
+    Set-StateBranch develop/x
+}
+
+Invoke-TestCase "PR が OPEN なら exit 2 で何も移動しない" {
+    Initialize-BranchState
+    Set-GhStubResult -Stdout '{"state":"OPEN","url":"https://example.com/pr/1"}'
+    Invoke-Script workflow-archive.ps1 myslug
+    Assert-Eq 2 $script:Code "exit: $($script:Err)"
+    Assert-Eq "OPEN https://example.com/pr/1" (($script:Out -split "`n")[0].Trim()) "first line"
+    Assert-Eq "Next: escalate reason=pr-open" (($script:Out -split "`n")[-1].Trim()) "Next line"
+    Assert-FileExists "$script:Proj/.agents/workflow/state.json" "state.json kept"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/archive" "no archive dir created"
+}
+
+Invoke-TestCase "PR が CLOSED なら exit 3" {
+    Initialize-BranchState
+    Set-GhStubResult -Stdout '{"state":"CLOSED","url":"https://example.com/pr/1"}'
+    Invoke-Script workflow-archive.ps1 myslug
+    Assert-Eq 3 $script:Code "exit: $($script:Err)"
+    Assert-Eq "Next: escalate reason=pr-closed" (($script:Out -split "`n")[-1].Trim()) "Next line"
+    Assert-FileExists "$script:Proj/.agents/workflow/state.json" "state.json kept"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/archive" "no archive dir created"
+}
+
+Invoke-TestCase "gh が失敗したら exit 4" {
+    Initialize-BranchState
+    Set-GhStubResult -Code 1 -Stderr 'gh stub failure'
+    Invoke-Script workflow-archive.ps1 myslug
+    Assert-Eq 4 $script:Code "exit: $($script:Err)"
+    Assert-Eq "Next: escalate reason=gh-unavailable" (($script:Out -split "`n")[-1].Trim()) "Next line"
+    Assert-FileExists "$script:Proj/.agents/workflow/state.json" "state.json kept"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/archive" "no archive dir created"
+}
+
+Invoke-TestCase "PR が MERGED ならアーカイブする" {
+    Initialize-BranchState
+    Set-GhStubResult -Stdout '{"state":"MERGED","url":"https://example.com/pr/1"}'
+    Invoke-Script workflow-archive.ps1 myslug
+    Assert-Eq 0 $script:Code "exit: $($script:Err)"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/state.json" "state.json moved"
+    Assert-Contains (Get-GhStubLog) "pr view develop/x" "gh pr view called"
+}
+
+Invoke-TestCase "-Force なら PR を確かめずにアーカイブする" {
+    Initialize-BranchState
+    Invoke-Script workflow-archive.ps1 myslug -Force
+    Assert-Eq 0 $script:Code "exit: $($script:Err)"
+    Assert-Eq "" ("$(Get-GhStubLog)".Trim()) "gh not called"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/state.json" "state.json moved"
+}
+
+Invoke-TestCase "PR 未作成で未マージのコミットがあれば exit 5" {
+    Initialize-BranchState
+    Set-GhStubResult -Code 1 -Stderr 'no pull requests found for branch "develop/x"'
+    Push-Location $script:Proj
+    try {
+        git checkout -q -b develop/x
+        Write-Utf8File "$script:Proj/x.txt" "x`n"
+        git add x.txt
+        git commit -q -m "feat: x"
+    } finally { Pop-Location }
+    Invoke-Script workflow-archive.ps1 myslug
+    Assert-Eq 5 $script:Code "exit: $($script:Err)"
+    Assert-Eq "NO_PR" (($script:Out -split "`n")[0].Trim()) "first line"
+    Assert-Eq "Next: escalate reason=pr-not-created" (($script:Out -split "`n")[-1].Trim()) "Next line"
+    Assert-Contains $script:Err "1 commit(s)" "stderr mentions commit count"
+    Assert-FileExists "$script:Proj/.agents/workflow/state.json" "state.json kept"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/archive" "no archive dir created"
+}
+
+Invoke-TestCase "PR 未作成で未マージのコミットが無ければアーカイブする" {
+    Initialize-BranchState
+    Set-GhStubResult -Code 1 -Stderr 'no pull requests found for branch "develop/x"'
+    git -C $script:Proj branch develop/x
+    Invoke-Script workflow-archive.ps1 myslug
+    Assert-Eq 0 $script:Code "exit: $($script:Err)"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/state.json" "state.json moved"
+}
+
+Invoke-TestCase "PR 未作成でブランチが無ければアーカイブする" {
+    Initialize-BranchState
+    Set-GhStubResult -Code 1 -Stderr 'no pull requests found for branch "develop/x"'
+    Invoke-Script workflow-archive.ps1 myslug
+    Assert-Eq 0 $script:Code "exit: $($script:Err)"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/state.json" "state.json moved"
+}
+
 Show-Summary
