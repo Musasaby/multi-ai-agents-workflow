@@ -26,6 +26,8 @@
 │   ├── tasklib.ps1 / tasklib.py  tasks.md 解析・依存欄検証の共通部品
 │   ├── upstream-issue.ps1 / .sh
 │   ├── upstream-issue-template.md  upstream への Issue 本文テンプレート
+│   ├── workflow-setup.ps1 / .sh  セットアップ(テンプレート側から実行)
+│   ├── workflow-update.ps1 / .sh  upstream の取り込み(テンプレート側から実行)
 │   ├── workflow-sync-scripts.ps1 / .sh
 │   └── workflow-archive.ps1 / .sh
 ├── runs/<タスクID>-<試行回数>/   ← 実行単位の生成物(.gitignore対象。PR作成の単発依頼は pr-<N>-1/)
@@ -205,6 +207,7 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 | `create-pr` | PR を作成する | group-advance(exit 7) |
 | `wait-merge` | PR のマージを待つ(報告して停止) | group-advance(exit 8)・dispatch-check(exit 0、PR 作成の run `pr-*`。PR を検証してから報告する) |
 | `continue` | そのまま作業を続ける | branch-check(exit 0)・group-advance(exit 0)・task-commit(exit 0)・quality-gate(exit 0) |
+| `confirm` | `DECIDE` 行や差分をユーザーに確認する | workflow-setup(exit 3)・workflow-update(exit 3) |
 | `switch-branch` | 専用ブランチを作る(`reason=main` / `merged`) | branch-check(exit 2 / 3) |
 | `escalate` | ユーザーに理由を説明し判断を仰ぐ | 下の reason 一覧 |
 
@@ -223,6 +226,7 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 - `no-changes` — dispatch-check の exit 7(変更が無いのが正しいタスクなら review に進んでよい)・task-commit の exit 20(コミットする変更が無い)
 - `quality-gate` — quality-gate の exit 2(blocking のステップが失敗)
 - `no-steps` — quality-gate の exit 3(実行するステップが0件)
+- `conflict` / `subtree-failed` / `dirty-tree` — workflow-update の exit 2 / 21 / 20(コンフリクト / コンフリクト以外の subtree pull の失敗 / 作業ツリーが汚れている)
 
 ### dispatch-prompt-gen — dispatchプロンプトの機械生成
 
@@ -771,6 +775,73 @@ exit code: `0`=PASS(`Next: continue`)、`1`=使い方不備・config が読め�
 本文は `upstream-issue-template.md` をもとに作る。ラベルは付けない。
 
 exit code: `0`=成功、`1`=使い方不備・`upstream.url` 未設定・GitHub 以外の URL、その他=gh の exit code。
+
+### workflow-setup — セットアップと検証
+
+利用先に `.agents/workflow/` 一式と関連設定を揃える。すべて冪等で、既存のファイルは上書きしない。
+**必ずテンプレート側のコピー(`.agents/skills/_templates/workflow/scripts/`)から実行する**
+(`.agents/workflow/scripts/` 側から実行すると exit 1)。
+
+```powershell
+.agents/skills/_templates/workflow/scripts/workflow-setup.ps1           # 不足しているものを作る・足す
+.agents/skills/_templates/workflow/scripts/workflow-setup.ps1 -Check    # 何も変えず不足を出力
+```
+```bash
+bash .agents/skills/_templates/workflow/scripts/workflow-setup.sh
+bash .agents/skills/_templates/workflow/scripts/workflow-setup.sh --check
+```
+
+行う処理:
+
+1. `.agents/workflow/runs/`・`.agents/workflow/.config/opencode/log/` を作る
+2. `config.json`・`README.md` を `.agents/workflow/` にコピーする(無ければ)
+3. `scripts/` の未配置分を `workflow-sync-scripts --copy-missing` でコピーする(`.sh` に実行権限を付ける)
+4. `AGENTS.md` をテンプレートからコピーする(無ければ)
+5. `CLAUDE.md` を `@AGENTS.md` の1行で作る(無ければ。独自の内容があれば `DECIDE claude-md`)
+6. `.claude` を `.agents` へのリンクにする(Windows はジャンクション、それ以外はシンボリックリンク。壊れている・別の場所を指す・実ディレクトリなら `DECIDE claude-link` / `claude-dir`)
+7. `.gitignore` に `.claude`・`.agents/settings.local.json`・`.agents/workflow/.config/`・`.agents/workflow/runs/`・`.agents/workflow/archive/`・`.agents/scheduled_tasks.lock` を足す
+8. `.gitattributes` に `.agents/workflow/scripts/*.sh`・`*.py` の `text eol=lf` を足す
+9. 旧レイアウト(`.dispatch-run.*`・`logs`・`reports`・`.dispatch-prompt-*.md`)が残っていれば `DECIDE old-layout`
+
+出力の行:
+
+| 行 | 意味 |
+|----|------|
+| `CREATED <パス>` | 作成した |
+| `APPENDED <ファイル>: <行>` | 既存ファイルに行を足した |
+| `MISSING <パス>` | `--check` のとき、不足しているもの(何も変えない) |
+| `DECIDE <種別>: <内容>` | 利用者の判断が要る事項(自動では直さない) |
+
+最後の行は `DECIDE` があれば `Next: confirm`、無ければ `Next: continue`。
+
+exit code: `0`=変更済み(`--check` では不足なし)かつ `DECIDE` なし、`1`=使い方不備・git の外・テンプレート側以外からの実行、
+`3`=`DECIDE` あり(`--check` では `MISSING` あり)。
+
+### workflow-update — upstream の取り込み
+
+利用先で `.agents/skills/` を upstream から更新し、配置済みスクリプトとの差分を知らせる。
+**必ずテンプレート側のコピー(`.agents/skills/_templates/workflow/scripts/`)から実行する**。
+
+```powershell
+.agents/skills/_templates/workflow/scripts/workflow-update.ps1
+```
+```bash
+bash .agents/skills/_templates/workflow/scripts/workflow-update.sh
+```
+
+手順:
+
+1. 作業ツリーがクリーンか確認する(汚れていれば `git status --porcelain` を stderr に出して exit 20)
+2. `config.json` の `upstream.url`・`upstream.branch` を読む(読めなければ配布元の URL と `main`)
+3. `git subtree pull --prefix=.agents/skills <url> <branch> --squash` を実行する
+   (失敗時、未解決のファイルがあれば `CONFLICT <パス>` を1行ずつ出して exit 2、それ以外は exit 21)
+4. `workflow-sync-scripts` で配置済みスクリプトとの差分を調べる(差分があれば exit 3)
+
+最後の行は `Next: continue`(exit 0)/ `Next: confirm`(exit 3。差分を確認し、承認を得て `workflow-sync-scripts --overwrite`)/
+`Next: escalate reason=<dirty-tree|conflict|subtree-failed>`。
+
+exit code: `0`=更新済みで差分なし、`1`=使い方不備・git の外・テンプレート側以外からの実行、`2`=コンフリクト、
+`3`=更新済みで配置済みスクリプトに差分あり、`20`=作業ツリーが汚れている、`21`=subtree pull の失敗(コンフリクト以外)。
 
 ### workflow-sync-scripts — 配布テンプレートの更新を配置先に反映
 
