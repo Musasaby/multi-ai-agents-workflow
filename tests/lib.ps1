@@ -105,7 +105,21 @@ function New-TestProject {
 }
 
 function Remove-TestProject {
-    if ($script:Proj) { Remove-Item -Recurse -Force $script:Proj -ErrorAction SilentlyContinue }
+    if ($script:Proj) {
+        # dispatch-start がデタッチ起動した dispatch-run は done を書いた後も少しの間動いており、
+        # Windows ではその間ディレクトリを消せない。コマンドラインにプロジェクト名を含むプロセスの終了を待つ(最大30秒)。
+        # Get-Process の CommandLine はプロセスごとに問い合わせて遅いため、WMI の1回のクエリで探す
+        if ($IsWindows) {
+            $name = Split-Path $script:Proj -Leaf
+            for ($i = 0; $i -lt 60; $i++) {
+                $alive = @(Get-CimInstance Win32_Process -Filter "CommandLine LIKE '%$name%'" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.ProcessId -ne $PID })
+                if ($alive.Count -eq 0) { break }
+                Start-Sleep -Milliseconds 500
+            }
+        }
+        Remove-Item -Recurse -Force $script:Proj -ErrorAction SilentlyContinue
+    }
     $script:Proj = $null
 }
 
