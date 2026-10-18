@@ -21,6 +21,3 @@ test-tasks.sh: __pycache__ を作らない
 
 # test-exitcode.sh は存在しない(sh 側では各テストが直接 exit code を断言する)
 test-exitcode.ps1: *
-
-# #59: T35 で test-quality-gate.ps1 を足す(T35 でこの2行を消す)
-test-quality-gate.sh: *

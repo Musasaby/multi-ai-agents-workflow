@@ -212,4 +212,12 @@ Invoke-TestCase "workflow-sync-scripts: 成功時に LASTEXITCODE=0" {
     Assert-Eq 0 (Invoke-InProcess '../../skills/_templates/workflow/scripts/workflow-sync-scripts.ps1') "LASTEXITCODE"
 }
 
+Invoke-TestCase "quality-gate: 成功時に LASTEXITCODE=0" {
+    $path = "$script:Proj/.agents/workflow/config.json"
+    $cfg = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $cfg.quality_gate.steps = @([ordered]@{ name = 'a'; command = 'echo ok'; blocking = $true })
+    Write-Utf8File $path (($cfg | ConvertTo-Json -Depth 10) + "`n")
+    Assert-Eq 0 (Invoke-InProcess quality-gate.ps1 @{ OutDir = 'out' }) "LASTEXITCODE"
+}
+
 Show-Summary
