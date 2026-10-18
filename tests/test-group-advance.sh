@@ -124,6 +124,36 @@ t_advance_merged() {
     assert_eq "A" "$(state_group)" "state.json group updated to the next group"
 }
 
+t_advance_merged_commits_state() {
+    setup_advance
+    (
+        cd "$PROJ"
+        printf '.agents/remote.git/\n.agents/other-clone/\n.agents/workflow/scripts/\n.agents/workflow/config.json\n.agents/workflow/runs/\n' > .gitignore
+        git add .gitignore .agents/workflow/state.json .agents/workflow/tasks.md
+        git commit -q -m "track state"
+        # PR マージ後の main を模す(切替後も state.json が main 側に存在するようにする)
+        git checkout -q main
+        git merge -q --ff-only develop/g1
+        git push -q origin main
+        git checkout -q develop/g1
+    )
+    gh_stub MERGED "https://example.com/pr/1"
+    run_script group-advance.sh --branch develop/g2
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "State commit: " "stdout has the state commit line"
+    assert_eq "chore: A グループの作業を開始" "$(cd "$PROJ" && git log -1 --format=%s)" "latest commit on the new branch"
+    assert_eq "develop/g2" "$(cd "$PROJ" && git branch --show-current)" "on the new branch"
+    assert_eq "" "$(cd "$PROJ" && git status --porcelain)" "working tree is clean"
+}
+
+t_advance_merged_untracked_state_no_commit() {
+    setup_advance
+    gh_stub MERGED "https://example.com/pr/1"
+    run_script group-advance.sh --branch develop/g2
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "State commit: none" "no state commit"
+}
+
 t_advance_merged_pulls_main() {
     setup_advance
     # origin/main にだけあるコミットを用意し、ローカル main を古くしておく
@@ -229,6 +259,8 @@ test_case "advance: PR なしは exit 7" t_advance_no_pr
 test_case "advance: OPEN は exit 8" t_advance_open
 test_case "advance: CLOSED は exit 9" t_advance_closed
 test_case "advance: MERGED はブランチ作成と state 更新" t_advance_merged
+test_case "advance: 状態ファイルを追跡するリポジトリでは切替後に state.json をコミットする" t_advance_merged_commits_state
+test_case "advance: .agents を追跡しないリポジトリでは state.json をコミットしない" t_advance_merged_untracked_state_no_commit
 test_case "advance: MERGED は main を origin/main まで進める" t_advance_merged_pulls_main
 test_case "advance: MERGED で --branch 無しは exit 1" t_advance_merged_requires_branch
 test_case "advance: develop/ 以外の --branch は exit 1" t_advance_branch_prefix_rejected

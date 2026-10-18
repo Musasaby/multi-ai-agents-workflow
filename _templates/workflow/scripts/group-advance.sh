@@ -265,5 +265,31 @@ then
     exit 1
 fi
 
+STATE_REL=".agents/workflow/state.json"
+STATE_COMMIT="none"
+if ! git check-ignore -q "$STATE_REL"; then
+    if [ -n "$NEXT_GROUP" ]; then
+        COMMIT_MSG="chore: $NEXT_GROUP グループの作業を開始"
+    else
+        COMMIT_MSG="chore: 既定グループの作業を開始"
+    fi
+    git add -- "$STATE_REL" 2> "$GIT_ERR_FILE"
+    GIT_CODE=$?
+    if [ "$GIT_CODE" -ne 0 ]; then
+        echo "git add '$STATE_REL' failed (exit $GIT_CODE): $(cat "$GIT_ERR_FILE")" >&2
+        exit 1
+    fi
+    if ! git diff --cached --quiet -- "$STATE_REL"; then
+        git commit -q -m "$COMMIT_MSG" > /dev/null 2> "$GIT_ERR_FILE"
+        GIT_CODE=$?
+        if [ "$GIT_CODE" -ne 0 ]; then
+            echo "git commit failed (exit $GIT_CODE): $(cat "$GIT_ERR_FILE")" >&2
+            exit 1
+        fi
+        STATE_COMMIT="$(git rev-parse --short=7 HEAD)"
+    fi
+fi
+
 echo "ADVANCED $NEW_BRANCH $NEXT_GROUP"
+echo "State commit: $STATE_COMMIT"
 echo "Next: continue"
