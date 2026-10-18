@@ -377,6 +377,38 @@ Invoke-TestCase "check: 全角コロンのPR URLも有効(exit 0)" {
     Assert-Contains $script:Out "Completion report: found" "report"
 }
 
+# T12: 有効な完了報告($code 0・7)なら最後の `## 完了報告` ブロックを report.md に保存する
+# (sh 版(test-dispatch.sh)と同じ名前の3ケース)
+Invoke-TestCase "check: 有効な完了報告を report.md に保存する" {
+    New-Run 0 "作業ログ`n## 完了報告`n- 変更ファイル: a.txt`n- テスト結果: 全件パス`n`n## 備考の後"
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "## 完了報告`n- 変更ファイル: a.txt`n- テスト結果: 全件パス`n" ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/report.md")) "report.md content (3 lines + one trailing newline)"
+    Assert-Contains $script:Out "Report: .agents/workflow/runs/T1-1/report.md" "report path line"
+}
+
+# T12: report.md が既にあれば上書きしない
+Invoke-TestCase "check: report.md が既にあれば上書きしない" {
+    New-Run 0 "作業ログ`n## 完了報告`n- 変更ファイル: a.txt`n- テスト結果: 全件パス`n`n## 備考の後"
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/T1-1/report.md" "old`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "old`n" ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/report.md")) "existing report.md kept"
+    Assert-Contains $script:Out "Report: .agents/workflow/runs/T1-1/report.md" "report path line"
+}
+
+# T12: 完了報告が無効($code 5)なら report.md を作らず Report: 行も出さない
+Invoke-TestCase "check: 完了報告が無効なら report.md を作らない" {
+    New-Run 0 "## 完了報告`n- 変更ファイル: <一覧>"
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 5 $script:Code "exit code: $($script:Err)"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/runs/T1-1/report.md" "no report.md"
+    Assert-NotContains $script:Out "Report:" "no Report: line"
+}
+
 Invoke-TestCase "check: 箇条書きの値・CRLF・ANSIを含む完了報告は有効" {
     New-Run 0 "$esc[0m`$ $esc[0mbash tests/test.sh`r`n## 完了報告`r`n- 変更ファイル:`r`n  - ``a.txt```r`n- テスト結果: 全件パス`r"
     Write-Utf8File "$script:Proj/a.txt" "x`n"

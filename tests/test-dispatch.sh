@@ -465,6 +465,40 @@ t_check_report_fullwidth_pr_url() {
     assert_contains "$OUT" "Completion report: found" "report"
 }
 
+# T11: 有効な完了報告(CODE 0・7)なら最後の `## 完了報告` ブロックを report.md に保存する
+t_check_report_saved() {
+    make_run 0 $'作業ログ\n## 完了報告\n- 変更ファイル: a.txt\n- テスト結果: 全件パス\n\n## 備考の後'
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_eq "$(printf '## 完了報告\n- 変更ファイル: a.txt\n- テスト結果: 全件パス')" \
+        "$(cat "$PROJ/.agents/workflow/runs/T1-1/report.md")" "report.md content"
+    assert_eq "$(printf '## 完了報告\n- 変更ファイル: a.txt\n- テスト結果: 全件パス\n' | wc -c | tr -d ' ')" \
+        "$(wc -c < "$PROJ/.agents/workflow/runs/T1-1/report.md" | tr -d ' ')" "report.md has 3 lines + one trailing newline"
+    assert_contains "$OUT" "Report: .agents/workflow/runs/T1-1/report.md" "report path line"
+}
+
+# T11: report.md が既にあれば上書きしない
+t_check_report_existing_kept() {
+    make_run 0 $'作業ログ\n## 完了報告\n- 変更ファイル: a.txt\n- テスト結果: 全件パス\n\n## 備考の後'
+    printf 'x\n' > "$PROJ/a.txt"
+    printf 'old\n' > "$PROJ/.agents/workflow/runs/T1-1/report.md"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_eq "old" "$(cat "$PROJ/.agents/workflow/runs/T1-1/report.md")" "existing report.md kept"
+    assert_contains "$OUT" "Report: .agents/workflow/runs/T1-1/report.md" "report path line"
+}
+
+# T11: 完了報告が無効(CODE 5)なら report.md を作らず Report: 行も出さない
+t_check_report_invalid_not_saved() {
+    make_run 0 $'## 完了報告\n- 変更ファイル: <一覧>'
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 5 "$CODE" "exit code: $ERR"
+    assert_file_absent "$PROJ/.agents/workflow/runs/T1-1/report.md" "no report.md"
+    assert_not_contains "$OUT" "Report:" "no Report: line"
+}
+
 t_check_report_list_value_and_ansi() {
     # 値が次行以降の箇条書き・CRLF・ANSI エスケープ・前方のツール実行行があっても有効
     make_run 0 "${ESC}[0m\$ ${ESC}[0mbash tests/test.sh"$'\r\n## 完了報告\r\n- 変更ファイル:\r\n  - `a.txt`\r\n- テスト結果: 全件パス\r'
@@ -843,6 +877,9 @@ test_case "check: テンプレートのままの完了報告は無効(exit 5)" t
 test_case "check: 必須項目が無い完了報告は無効(exit 5)" t_check_report_missing_field
 test_case "check: 全角コロンの必須項目も有効(exit 0)" t_check_report_fullwidth_required_fields
 test_case "check: 全角コロンのPR URLも有効(exit 0)" t_check_report_fullwidth_pr_url
+test_case "check: 有効な完了報告を report.md に保存する" t_check_report_saved
+test_case "check: report.md が既にあれば上書きしない" t_check_report_existing_kept
+test_case "check: 完了報告が無効なら report.md を作らない" t_check_report_invalid_not_saved
 test_case "check: 箇条書きの値・CRLF・ANSIを含む完了報告は有効" t_check_report_list_value_and_ansi
 test_case "check: 権限拒否はexit 6" t_check_permission_denied
 test_case "check: 変更0件はexit 7" t_check_no_changes

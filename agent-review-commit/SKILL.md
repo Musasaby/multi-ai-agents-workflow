@@ -57,13 +57,15 @@ state.json を直接編集しない):
   現在の試行回数+1であり、例えば試行1が不合格なら `runs/<タスクID>-2/fix-notes.md` に
   保存する(`/agent-dispatch <タスクID>` を `-Attempt <次の試行回数>` でリトライ実行した際、
   生成スクリプト `dispatch-prompt-gen` がこのファイルを読み込んでプロンプト冒頭に結合する。
-  ファイルが無い状態で `-Attempt 2` 以上を実行すると exit 3 になる)。
+  ファイルが無い状態で `-Attempt 2` 以上を実行すると `dispatch-start` が止まる。前の試行の変更が
+  作業ツリーに残っていれば exit 20 `reason=dirty-tree` で stderr に `fix-notes.md not found` を出し、
+  作業ツリーがクリーンなら exit 43 `reason=prompt-gen` になる)。
   `fix-notes.md` にはタスク固有の指摘だけを書き、一時ファイルの置き場所・管理ファイルの扱い・
   プロジェクト外の禁止など、`dispatch-prompt-template.md` の「実装ルール」が定める事項を
   書き直さない(言い回しの違いが矛盾に見え、子が迷うため。規則は実装ルールの1か所に置く)。
   指摘が複雑でテンプレートに収まらない場合は、`fix-notes.md` を作らず、親が
   `runs/<タスクID>-<次の試行回数>/prompt.md` を直接作成して生成スクリプトをバイパスしてよい
-  (`/agent-dispatch` §2 のフォールバック手順に準ずる)。
+  (`/agent-dispatch` §1 のフォールバック手順に準ずる)。
   再依頼の前に `task-state <タスクID> retry` を実行する(`retries` を +1 して status を
   `in_progress` に戻す)。その後 `/agent-dispatch <タスクID>` をリトライモードで実行する
   (修正後のテスト再実行も指示に含まれる)

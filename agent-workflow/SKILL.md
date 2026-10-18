@@ -177,28 +177,31 @@ PR とブランチ切替」を参照)とサイクル完了時に、PR 作成を�
 (タスクIDは採番しない)。親は PR のタイトル・本文を自分で書かず、gh コマンドも直接実行しない。
 
 1. `git status --porcelain` が空であることを確認する
-2. `dispatch-prompt-gen` の PR モードでプロンプトを生成する。対象タスク(state.json で
-   `done` かつ commit が `git log origin/main..HEAD` に含まれるもの)は自動で選ばれる。スクリプトが
-   `git fetch origin main` を行い、ローカルの `main` ではなく最新の `origin/main` と比べる
-   (origin が無い・fetch に失敗した場合は exit 1)
+2. `dispatch-start --pr` を実行する。対象タスク(state.json で `done` かつ commit が
+   `git log origin/main..HEAD` に含まれるもの)は自動で選ばれ、プロンプト生成・疎通確認・
+   デタッチ起動までが行われる。スクリプトが `git fetch origin main` を行い、ローカルの `main` ではなく
+   最新の `origin/main` と比べる(origin が無い・fetch に失敗した場合は失敗する)
    ```powershell
-   .agents/workflow/scripts/dispatch-prompt-gen.ps1 -Pr
+   .agents/workflow/scripts/dispatch-start.ps1 -Pr
    ```
    ```bash
-   .agents/workflow/scripts/dispatch-prompt-gen.sh --pr
+   .agents/workflow/scripts/dispatch-start.sh --pr
    ```
-   stdout の `RunId: pr-<N>` を控える(出力先は `runs/pr-<N>-1/prompt.md`)。exit 1 の場合
-   (`main` 上で実行した、対象タスクが無い 等)は stderr を添えてユーザーに報告する
-3. `/agent-dispatch` §3 と同じ方法で、`dispatch-run` に `pr-<N>` と試行回数 `1` を渡して
-   デタッチ起動する(例: `dispatch-run.ps1 -TaskId pr-<N> -Attempt 1`)。プロンプトには、
+   `Next: wait` なら stdout の `Run: pr-<N>-1` を控える。それ以外は reason と stderr を
+   ユーザーに報告する(`main` 上で実行した、対象タスクが無い 等)。プロンプトには、
    push(`git push -u`)、`gh pr create --base main`、日本語のタイトル・本文、既存 PR の
    確認、マージ禁止が含まれている
-4. `/agent-dispatch` §4 と同じ方法で完了を検知し、`dispatch-check`(`pr-<N>` / `1`)で判定する。
-   成功したときの `Next:` 行は `wait-merge`。レビューには進まず、手順5(PR の確認)に進む
-5. **PR の検証**: `gh pr view <作業ブランチ> --json url,state,baseRefName` を実行し、
+3. `dispatch-wait` で完了を待つ(`-TaskId pr-<N> -Attempt 1` / `pr-<N> 1`)。
+   出力の `Next:` 行で分岐する。
+   - `Next: wait-merge` → 手順4(PR の検証)に進む(レビュー・コミットは行わない)
+   - `Next: wait`(1回の呼び出しの待ち時間の上限に達しただけで、子はまだ実行中) → 同じ引数で
+     `dispatch-wait` を再度実行して待ちを続ける
+   - それ以外(`Next: escalate reason=...` 等) → reason と stderr、`output.log` の末尾を
+     ユーザーに報告して停止する
+4. **PR の検証**: `gh pr view <作業ブランチ> --json url,state,baseRefName` を実行し、
    PR が存在し、`baseRefName` が `main` であることを確認する。確認できなければ、
    `output.log` の末尾を添えてユーザーに報告する
-6. PR URL をユーザーに報告して停止する(マージはユーザーが行う)
+5. PR URL をユーザーに報告して停止する(マージはユーザーが行う)
 
 ## 完了時のサマリー報告
 
