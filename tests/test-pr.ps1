@@ -45,7 +45,9 @@ Invoke-TestCase "pr: プロンプト生成" {
     Assert-Contains $prompt "--base main" "base branch"
     Assert-Contains $prompt "日本語" "japanese instruction"
     Assert-Contains $prompt "git push -u" "push instruction"
-    Assert-NotContains $prompt "{" "all placeholders replaced"
+    Assert-Contains $prompt 'gh api -X PATCH "repos/{owner}/{repo}/pulls/' "update existing PR via gh api"
+    Assert-Contains $prompt "-F body=@.agents/workflow/runs/pr-1-1/pr-body.md" "body file for update"
+    Assert-NotContains ($prompt.Replace('{owner}/{repo}', '')) "{" "all placeholders replaced except {owner}/{repo}"
 }
 
 Invoke-TestCase "pr: 連番" {
