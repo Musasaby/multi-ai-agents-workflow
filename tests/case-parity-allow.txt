@@ -19,12 +19,5 @@ test-dispatch.sh: run: プロジェクトルート以外から相対パスで起
 # ps1 版は tasklib.ps1 を使い Python を実行しないため、この確認は ps1 に該当しない
 test-tasks.sh: __pycache__ を作らない
 
-# workflow-archive の PR 状態確認は sh 側を先に実装(ps1 版は後続タスクで追加し、この許可を外す)
-test-workflow-archive.sh: PR が OPEN なら exit 2 で何も移動しない
-test-workflow-archive.sh: PR が CLOSED なら exit 3
-test-workflow-archive.sh: gh が失敗したら exit 4
-test-workflow-archive.sh: PR が MERGED ならアーカイブする
-test-workflow-archive.sh: -Force なら PR を確かめずにアーカイブする
-
 # test-exitcode.sh は存在しない(sh 側では各テストが直接 exit code を断言する)
 test-exitcode.ps1: *
