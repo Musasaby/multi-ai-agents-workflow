@@ -247,6 +247,48 @@ Invoke-TestCase "run: ログが更新され続ければ idle_timeout_seconds で
     Assert-FileAbsent "$script:Proj/.agents/workflow/runs/T1-1/idle-timeout" "no idle-timeout file"
 }
 
+# command_template を差し替える($Value = テンプレート)
+function Set-Template {
+    param([string]$Value)
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg.child_agent.command_template = $Value
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+}
+
+Invoke-TestCase "run: {prompt_file} で 40000 文字のプロンプトをファイルパスで渡す" {
+    Set-PyChild "import sys`nprint('LEN=' + str(len(open(sys.argv[1], encoding='utf-8').read())))"
+    Set-Template 'python3 ./child.py "{prompt_file}"'
+    [System.IO.File]::WriteAllText("$script:Proj/.agents/workflow/runs/T1-1/prompt.md", ('a' * 40000), [System.Text.UTF8Encoding]::new($false))
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq "EXIT:0" (Get-DoneExit) "done marker"
+    Assert-Contains ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.log")) "LEN=40000" "prompt_file length"
+}
+
+Invoke-TestCase "run: プレースホルダが無いテンプレートは stdin でプロンプトを渡す" {
+    Set-PyChild "import sys`nsys.stdout.write(sys.stdin.read())"
+    Set-Template 'python3 ./child.py'
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/T1-1/prompt.md" "hello-stdin`n"
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq "EXIT:0" (Get-DoneExit) "done marker"
+    Assert-Contains ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.log")) "hello-stdin" "stdin prompt"
+}
+
+Invoke-TestCase "run: profile claude-stream-json は command_template に stream-json が無くても output.jsonl を書く" {
+    Set-PyChild "print('{\`"type\`":\`"result\`",\`"subtype\`":\`"success\`",\`"result\`":\`"ok\`"}')"
+    Set-Profile claude-stream-json
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    Assert-FileExists "$script:Proj/.agents/workflow/runs/T1-1/output.jsonl" "output.jsonl"
+    Assert-Contains ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.log")) "[result] exit_subtype=success" "result line"
+}
+
+Invoke-TestCase "run: 利用先の child-profiles.json を guard.sha256 に記録する" {
+    Set-Child 'Write-Output hello'
+    Write-Utf8File "$script:Proj/.agents/workflow/child-profiles.json" "{}`n"
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    Assert-Contains ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/guard.sha256")) ".agents/workflow/child-profiles.json" "guard has child-profiles.json"
+}
+
 Invoke-TestCase "run: 呼び出し元の TMPDIR/TEMP/TMP を書き換えない" {
     Set-EnvChild
     Invoke-RunWithCallerTmp
