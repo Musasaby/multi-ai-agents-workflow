@@ -20,6 +20,7 @@
 │   ├── next-task.ps1 / .sh
 │   ├── group-advance.ps1 / .sh  グループ完了後の PR 状態判定と次グループのブランチ切替
 │   ├── branch-check.ps1 / .sh  今のブランチが作業に使ってよいかの判定(main 上・PR マージ済み・state.json との不一致)
+│   ├── quality-gate.ps1 / .sh  品質ゲート(quality_gate.steps の実行と判定)
 │   ├── task-state.ps1 / .sh
 │   ├── task-commit.ps1 / .sh  レビュー合格後のコミットと状態更新
 │   ├── tasklib.ps1 / tasklib.py  tasks.md 解析・依存欄検証の共通部品
@@ -59,14 +60,14 @@
 | `child_agent.warmup_command` | サイクルの最初の dispatch の前に1回だけ実行するコマンド(例: `./gradlew compileDebugKotlin`)。空なら省略 | `""` |
 | `child_agent.idle_timeout_seconds` | 子のログ(`output.log`)が更新されない時間の上限(秒)。超えると `dispatch-run` が子を止め、`done` に `EXIT:idle-timeout` を記録する(`dispatch-check` は exit 4)。未指定・0 以下は無効。POSIX 版は python3 経路のみ対応 | `600` |
 | `child_agent.cli_log` | 子CLI自身のログファイルのパス(先頭の `~/` はホームディレクトリ。例: opencode は `~/.local/share/opencode/log/opencode.log`)。`dispatch-check` がエラー行を出す | 未指定 |
-| `test_command` | 子エージェントに実行させるテストコマンド。空ならタスクごとに親が指定 | `""` |
+| `test_command` | 子エージェントに実行させるテストコマンド。空ならタスクごとに親が指定。`quality_gate.steps` の test ステップと同じコマンドに揃える | `""` |
 | `branch_per_group` | tasks.md にグループ区切り(`<!-- グループ <名前> -->`)がある場合に、グループ単位の PR 作成・ブランチ切替(next-task の exit 6 と `group-advance`)を必須手順にする。`false` ならグループを解釈せず全タスクを1つのまとまりとして扱う。config.json が無い・読めない場合の既定値も `true` | `true` |
 | `verify_before_commit` | コミット直前に親がテストコマンドを1回実行する最終ゲート | `false` |
 | `max_fix_retries` | レビュー不合格時の子エージェントへの再依頼上限。超過で親のサブエージェントにフォールバック | `2` |
 | `comprehension_check.enabled` | タスク合格時に理解確認質問を生成するか | `false` |
 | `comprehension_check.questions_per_task` | タスクあたりの質問数 | `3` |
 | `quality_gate.steps` | 品質ゲートのステップ定義。各要素は `name`(表示名)・`command`(実行コマンド)・`blocking`(真なら不合格時に進行停止)を持つ | `[{name:typecheck,...},{name:test,...},{name:lint,...}]` |
-| `quality_gate.child_dispatch_command` | 子エージェントへの検証指示に使う統合コマンド。空文字列でなければ blocking ステップの個別列挙に代えてこの1コマンドを子に指示する。Gradle 等のデーモンの多重コールドスタート回避に有効 | `""` |
+| `quality_gate.child_dispatch_command` | 子エージェントへの検証指示に使う統合コマンド。空文字列でなければ blocking ステップの個別列挙に代えてこの1コマンドを子に指示する。Gradle 等のデーモンの多重コールドスタート回避に有効。子にも同じ判定をさせる場合は `bash .agents/workflow/scripts/quality-gate.sh`(Windows の子は `pwsh -NoProfile -File .agents/workflow/scripts/quality-gate.ps1`)を指定できる | `""` |
 | `upstream.url` | upstream リポジトリの URL。`workflow-update` skill で使用 | `https://github.com/Musasaby/multi-ai-agents-workflow.git` |
 | `upstream.branch` | upstream 追従ブランチ名 | `main` |
 
@@ -203,7 +204,7 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 | `group-advance` | グループ境界。group-advance を実行する | next-task(exit 6) |
 | `create-pr` | PR を作成する | group-advance(exit 7) |
 | `wait-merge` | PR のマージを待つ(報告して停止) | group-advance(exit 8)・dispatch-check(exit 0、PR 作成の run `pr-*`。PR を検証してから報告する) |
-| `continue` | そのまま作業を続ける | branch-check(exit 0)・group-advance(exit 0)・task-commit(exit 0) |
+| `continue` | そのまま作業を続ける | branch-check(exit 0)・group-advance(exit 0)・task-commit(exit 0)・quality-gate(exit 0) |
 | `switch-branch` | 専用ブランチを作る(`reason=main` / `merged`) | branch-check(exit 2 / 3) |
 | `escalate` | ユーザーに理由を説明し判断を仰ぐ | 下の reason 一覧 |
 
@@ -220,6 +221,8 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 - `permission-denied` / `outside-access` — dispatch-check の exit 6
 - `token-limit` / `no-report` — dispatch-check の exit 5
 - `no-changes` — dispatch-check の exit 7(変更が無いのが正しいタスクなら review に進んでよい)・task-commit の exit 20(コミットする変更が無い)
+- `quality-gate` — quality-gate の exit 2(blocking のステップが失敗)
+- `no-steps` — quality-gate の exit 3(実行するステップが0件)
 
 ### dispatch-prompt-gen — dispatchプロンプトの機械生成
 
@@ -705,6 +708,47 @@ exit code: `0`=使ってよい、`1`=使い方不備・git 失敗、`2`=`main` �
 (stdout `MERGED <PR URL>`)、`4`=gh で判定できない、`5`=state.json の `branch` と不一致。
 
 exit 1 以外では stdout の最後の行に `Next:` 行を出す(「Next: 行」の節を参照)。
+
+### quality-gate — 品質ゲートの実行と判定
+
+`config.json` の `quality_gate.steps` を定義順に実行し、合否を判定する。blocking のステップが
+失敗しても後続のステップは実行する(全ステップの結果を一度に報告するため)。各ステップは stdin を
+閉じて `bash -c`(ps1 版は `pwsh`)で実行する。
+
+```powershell
+.agents/workflow/scripts/quality-gate.ps1 [-OutDir <ディレクトリ>] [-Steps typecheck,test] [-Fix]
+```
+```bash
+.agents/workflow/scripts/quality-gate.sh [--out-dir <ディレクトリ>] [--steps typecheck,test] [--fix]
+```
+
+ステップの解決順:
+
+1. `quality_gate.steps` の各要素。`command` が空のステップは、`package.json` の `scripts` に同名の
+   キーがあれば `npm run <name>`、無ければ SKIP(実行しない)
+2. `config.json` に `quality_gate` が無ければ、`package.json` の `scripts` から `typecheck`・`lint`・`test` の
+   順に検出する(typecheck・test は blocking、lint は non-blocking)
+
+オプション:
+
+- `--steps` / `-Steps`: 名前をカンマ区切りで指定すると、解決後のステップをその名前だけに絞る
+- `--fix` / `-Fix`: `fix_command` を持つステップは、`command` の前に `fix_command` を実行する。出力は
+  `<name>.fix.log` に書き、判定には含めない
+- `--out-dir` / `-OutDir`: ログの置き場所。省略時は `.agents/workflow/runs/quality-gate-<YYYYMMDD-HHMMSS>/` を作る
+
+各ステップの stdout / stderr は `<out-dir>/<name>.log` に書く。
+
+stdout は次の行を出す:
+
+- ステップごとに `PASS|FAIL|SKIP <name> (blocking|non-blocking): <command>`
+- 失敗したステップごとに `--- <name> (last 20 lines)` とログの末尾20行
+- `Logs: <out-dir>`
+- `Result: PASS|FAIL|NO-STEPS` と、最後の行の `Next:` 行(「Next: 行」の節を参照)
+
+exit code: `0`=PASS(`Next: continue`)、`1`=使い方不備・config が読めない、
+`2`=FAIL(blocking のステップが失敗。`Next: escalate reason=quality-gate`)、
+`3`=実行するステップが0件(`Next: escalate reason=no-steps`)。non-blocking のステップだけが
+失敗した場合は FAIL 行を出すが、exit は `0`。
 
 ### upstream-issue — ワークフロー由来の問題を配布元に起票
 
