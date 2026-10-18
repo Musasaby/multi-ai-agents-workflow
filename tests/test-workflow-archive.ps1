@@ -126,4 +126,40 @@ Invoke-TestCase "-Force なら PR を確かめずにアーカイブする" {
     Assert-FileAbsent "$script:Proj/.agents/workflow/state.json" "state.json moved"
 }
 
+Invoke-TestCase "PR 未作成で未マージのコミットがあれば exit 5" {
+    Initialize-BranchState
+    Set-GhStubResult -Code 1 -Stderr 'no pull requests found for branch "develop/x"'
+    Push-Location $script:Proj
+    try {
+        git checkout -q -b develop/x
+        Write-Utf8File "$script:Proj/x.txt" "x`n"
+        git add x.txt
+        git commit -q -m "feat: x"
+    } finally { Pop-Location }
+    Invoke-Script workflow-archive.ps1 myslug
+    Assert-Eq 5 $script:Code "exit: $($script:Err)"
+    Assert-Eq "NO_PR" (($script:Out -split "`n")[0].Trim()) "first line"
+    Assert-Eq "Next: escalate reason=pr-not-created" (($script:Out -split "`n")[-1].Trim()) "Next line"
+    Assert-Contains $script:Err "1 commit(s)" "stderr mentions commit count"
+    Assert-FileExists "$script:Proj/.agents/workflow/state.json" "state.json kept"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/archive" "no archive dir created"
+}
+
+Invoke-TestCase "PR 未作成で未マージのコミットが無ければアーカイブする" {
+    Initialize-BranchState
+    Set-GhStubResult -Code 1 -Stderr 'no pull requests found for branch "develop/x"'
+    git -C $script:Proj branch develop/x
+    Invoke-Script workflow-archive.ps1 myslug
+    Assert-Eq 0 $script:Code "exit: $($script:Err)"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/state.json" "state.json moved"
+}
+
+Invoke-TestCase "PR 未作成でブランチが無ければアーカイブする" {
+    Initialize-BranchState
+    Set-GhStubResult -Code 1 -Stderr 'no pull requests found for branch "develop/x"'
+    Invoke-Script workflow-archive.ps1 myslug
+    Assert-Eq 0 $script:Code "exit: $($script:Err)"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/state.json" "state.json moved"
+}
+
 Show-Summary

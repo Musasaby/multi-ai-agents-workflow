@@ -21,8 +21,3 @@ test-tasks.sh: __pycache__ を作らない
 
 # test-exitcode.sh は存在しない(sh 側では各テストが直接 exit code を断言する)
 test-exitcode.ps1: *
-
-# workflow-archive.ps1 側のテストは未追加(後続タスクで足したらこの許可を外す)
-test-workflow-archive.sh: PR 未作成で未マージのコミットがあれば exit 5
-test-workflow-archive.sh: PR 未作成で未マージのコミットが無ければアーカイブする
-test-workflow-archive.sh: PR 未作成でブランチが無ければアーカイブする

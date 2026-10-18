@@ -10,8 +10,9 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 # workflow 状態(tasks.md / state.json / runs/ / comprehension/)を archive/ へ移動する。
 # Usage: workflow-archive.ps1 <スラッグ> [-Force]
 # 判定順と exit code は workflow-archive.sh と同じ:
-#   1=使い方不備 / 2=PR OPEN / 3=PR CLOSED / 4=gh で判定不能。
-# 止めるとき(2 / 3 / 4)は何も移動せず、stdout の最後の行に "Next:" 行を出す。
+#   1=使い方不備 / 2=PR OPEN / 3=PR CLOSED / 4=gh で判定不能 /
+#   5=PR 未作成でブランチに未マージのコミットがある(比較先が無い場合も含む)。
+# 止めるとき(2 / 3 / 4 / 5)は何も移動せず、stdout の最後の行に "Next:" 行を出す。
 
 function Fail {
     param([string]$Message, [int]$Code = 1, [string]$Next = '')
@@ -93,7 +94,28 @@ function Test-PrState {
         }
         if ($ghCode -ne 0) {
             $ghErr = [System.IO.File]::ReadAllText($errFile)
-            if ($ghErr -match '(?i)no pull request') { return }
+            if ($ghErr -match '(?i)no pull request') {
+                # PR 未作成: ブランチに比較先へ入っていないコミットがあれば、まだサイクルが終わっていないとみなす
+                & git rev-parse --verify --quiet "refs/heads/$stateBranch" *> $null
+                if ($LASTEXITCODE -ne 0) { return }   # ローカルにブランチが無い(失う作業が無い)
+                $base = if ($upstream) { $upstream } else { 'main' }
+                $baseRef = ''
+                & git rev-parse --verify --quiet "refs/heads/$base" *> $null
+                if ($LASTEXITCODE -eq 0) {
+                    $baseRef = "refs/heads/$base"
+                } else {
+                    & git rev-parse --verify --quiet "refs/remotes/origin/$base" *> $null
+                    if ($LASTEXITCODE -eq 0) { $baseRef = "refs/remotes/origin/$base" }
+                }
+                if ($baseRef) {
+                    $count = [int]((& git rev-list --count "$baseRef..refs/heads/$stateBranch") -join '').Trim()
+                    if ($count -eq 0) { return }
+                    Write-Output 'NO_PR'
+                    Fail "$count commit(s) on '$stateBranch' are not in '$base' and no PR exists (create the PR and add tasks to the current cycle, or use -Force to archive anyway)" 5 'Next: escalate reason=pr-not-created'
+                }
+                Write-Output 'NO_PR'
+                Fail "'$base' not found: cannot check whether '$stateBranch' is merged (use -Force to archive anyway)" 5 'Next: escalate reason=pr-not-created'
+            }
             Fail "gh pr view failed (exit $ghCode): $ghErr" 4 'Next: escalate reason=gh-unavailable'
         }
         $ghJson = (@($ghOut) -join "`n").Trim()
