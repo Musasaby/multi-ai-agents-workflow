@@ -101,4 +101,13 @@ Invoke-TestCase "update: コンフリクトは CONFLICT 行と exit 2" {
     Assert-Eq "Next: escalate reason=conflict" (@($script:Out -split "`n")[-1].Trim()) "last line"
 }
 
+Invoke-TestCase "update: 差分の確認に失敗したら exit 22" {
+    Initialize-ProjectWithUpstream
+    Add-UpstreamCommit "_templates/workflow/scripts/workflow-sync-scripts.ps1" "exit 1"
+    Invoke-Update
+    Assert-Eq 22 $script:Code "exit 22: $($script:Out) $($script:Err)"
+    Assert-Eq "Next: escalate reason=sync-failed" (@($script:Out -split "`n")[-1].Trim()) "last line"
+    Assert-Contains $script:Err "workflow-sync-scripts.ps1 failed" "stderr"
+}
+
 Show-Summary

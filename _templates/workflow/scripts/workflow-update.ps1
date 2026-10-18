@@ -3,10 +3,11 @@
 #
 # Usage:
 #   workflow-update.ps1
-# 最後の行: Next: continue / confirm / escalate reason=<dirty-tree|conflict|subtree-failed>
+# 最後の行: Next: continue / confirm / escalate reason=<dirty-tree|conflict|subtree-failed|sync-failed>
 # exit: 0=更新済みで配置済みスクリプトとの差分なし / 1=使い方不備・git の外 /
 #       2=コンフリクト(CONFLICT <パス> を出力) / 3=更新済みで配置済みスクリプトに差分あり /
-#       20=作業ツリーが汚れている / 21=subtree pull の失敗(コンフリクト以外)
+#       20=作業ツリーが汚れている / 21=subtree pull の失敗(コンフリクト以外) /
+#       22=配置済みスクリプトとの差分確認(workflow-sync-scripts)の失敗
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -67,9 +68,9 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 & pwsh -NoProfile -File (Join-Path $templateScripts 'workflow-sync-scripts.ps1')
-if ($LASTEXITCODE -eq 3) {
-    Write-Output "Next: confirm"
-    exit 3
-}
-Write-Output "Next: continue"
-exit 0
+$syncCode = $LASTEXITCODE
+if ($syncCode -eq 0) { Write-Output "Next: continue"; exit 0 }
+if ($syncCode -eq 3) { Write-Output "Next: confirm"; exit 3 }
+[Console]::Error.WriteLine("workflow-sync-scripts.ps1 failed (exit $syncCode)")
+Write-Output "Next: escalate reason=sync-failed"
+exit 22
