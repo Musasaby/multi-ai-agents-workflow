@@ -8,14 +8,19 @@ set -euo pipefail
 #   2. スラッグのパス区切り・'..' の検査、移動対象の有無(無ければ exit 1)
 #   3. --force が無ければ PR の状態を確かめる(state.json の branch が空・main・config.json の
 #      upstream.branch と同じなら gh を呼ばずに通す)。gh pr view の結果で分岐する:
-#      - PR なし(gh が「no pull request」で失敗)・MERGED → アーカイブする
+#      - MERGED → アーカイブする
+#      - PR なし(gh が「no pull request」で失敗)→ ローカルにブランチが無い、または比較先
+#        (upstream.branch、無ければ main)に未マージのコミットが無ければアーカイブする。
+#        未マージのコミットがある・比較先が無い → stdout "NO_PR"、exit 5
 #      - OPEN   → stdout "OPEN <PR URL>"、exit 2
 #      - CLOSED → stdout "CLOSED <PR URL>"、exit 3
 #      - gh が無い・失敗・出力を解析できない → exit 4
 #      - それ以外の state → exit 1
-# exit: 0=アーカイブした / 1=使い方不備 / 2=PR OPEN / 3=PR CLOSED / 4=gh で判定不能
-# 止めるとき(2 / 3 / 4)は何も移動せず、archive/ も作らない。stdout の最後の行は次アクションを示す
-# "Next:" 行(2=escalate reason=pr-open / 3=escalate reason=pr-closed / 4=escalate reason=gh-unavailable)。
+# exit: 0=アーカイブした / 1=使い方不備 / 2=PR OPEN / 3=PR CLOSED / 4=gh で判定不能 /
+#       5=PR 未作成でブランチに未マージのコミットがある(比較先が無い場合も含む)
+# 止めるとき(2 / 3 / 4 / 5)は何も移動せず、archive/ も作らない。stdout の最後の行は次アクションを示す
+# "Next:" 行(2=escalate reason=pr-open / 3=escalate reason=pr-closed / 4=escalate reason=gh-unavailable /
+# 5=escalate reason=pr-not-created)。
 # exit 0 の出力は "Archived: ..." の1行だけ("Next:" 行は出さない)
 
 FORCE=0
@@ -99,7 +104,29 @@ check_pr() {
     gh pr view "$BRANCH" --json state,url > "$GH_OUT_FILE" 2> "$GH_ERR_FILE" || GH_CODE=$?
     if [ "$GH_CODE" -ne 0 ]; then
         if grep -qi 'no pull request' "$GH_ERR_FILE"; then
-            return 0
+            # PR 未作成: ブランチに比較先へ入っていないコミットがあれば、まだサイクルが終わっていないとみなす
+            if ! git rev-parse --verify --quiet "refs/heads/$BRANCH" > /dev/null; then
+                return 0   # ローカルにブランチが無い(失う作業が無い)
+            fi
+            local BASE BASE_REF COUNT
+            BASE="${UPSTREAM:-main}"
+            BASE_REF=""
+            if git rev-parse --verify --quiet "refs/heads/$BASE" > /dev/null; then
+                BASE_REF="refs/heads/$BASE"
+            elif git rev-parse --verify --quiet "refs/remotes/origin/$BASE" > /dev/null; then
+                BASE_REF="refs/remotes/origin/$BASE"
+            fi
+            if [ -n "$BASE_REF" ]; then
+                COUNT="$(git rev-list --count "$BASE_REF..refs/heads/$BRANCH")"
+                [ "$COUNT" -eq 0 ] && return 0
+                echo "NO_PR"
+                echo "$COUNT commit(s) on '$BRANCH' are not in '$BASE' and no PR exists (create the PR and add tasks to the current cycle, or use --force to archive anyway)" >&2
+            else
+                echo "NO_PR"
+                echo "'$BASE' not found: cannot check whether '$BRANCH' is merged (use --force to archive anyway)" >&2
+            fi
+            echo "Next: escalate reason=pr-not-created"
+            exit 5
         fi
         echo "gh pr view failed (exit $GH_CODE): $(cat "$GH_ERR_FILE")" >&2
         echo "Next: escalate reason=gh-unavailable"

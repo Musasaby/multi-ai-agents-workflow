@@ -140,6 +140,42 @@ t_force() {
     assert_file_absent "$PROJ/.agents/workflow/state.json" "state.json moved"
 }
 
+t_no_pr_unmerged() {
+    setup_branch_state
+    gh_stub_set 1 '' 'no pull requests found for branch "develop/x"'
+    (
+        cd "$PROJ" || exit 1
+        git checkout -q -b develop/x
+        printf 'x\n' > x.txt
+        git add x.txt
+        git commit -q -m "feat: x"
+    ) || exit 1
+    run_script workflow-archive.sh myslug
+    assert_eq 5 "$CODE" "exit: $ERR"
+    assert_eq "NO_PR" "$(printf '%s\n' "$OUT" | head -n 1)" "first line"
+    assert_eq "Next: escalate reason=pr-not-created" "$(last_line "$OUT")" "Next line"
+    assert_contains "$ERR" "1 commit(s)" "stderr mentions commit count"
+    assert_file_exists "$PROJ/.agents/workflow/state.json" "state.json kept"
+    assert_file_absent "$PROJ/.agents/workflow/archive" "no archive dir created"
+}
+
+t_no_pr_no_new_commits() {
+    setup_branch_state
+    gh_stub_set 1 '' 'no pull requests found for branch "develop/x"'
+    git -C "$PROJ" branch develop/x
+    run_script workflow-archive.sh myslug
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_file_absent "$PROJ/.agents/workflow/state.json" "state.json moved"
+}
+
+t_no_pr_no_branch() {
+    setup_branch_state
+    gh_stub_set 1 '' 'no pull requests found for branch "develop/x"'
+    run_script workflow-archive.sh myslug
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_file_absent "$PROJ/.agents/workflow/state.json" "state.json moved"
+}
+
 echo "test-workflow-archive.sh"
 test_case "全対象の移動と Archived: の出力" t_all_targets
 test_case "一部の対象だけ移動" t_partial_targets
@@ -151,4 +187,7 @@ test_case "PR が CLOSED なら exit 3" t_pr_closed
 test_case "gh が失敗したら exit 4" t_gh_failure
 test_case "PR が MERGED ならアーカイブする" t_pr_merged
 test_case "--force なら PR を確かめずにアーカイブする" t_force
+test_case "PR 未作成で未マージのコミットがあれば exit 5" t_no_pr_unmerged
+test_case "PR 未作成で未マージのコミットが無ければアーカイブする" t_no_pr_no_new_commits
+test_case "PR 未作成でブランチが無ければアーカイブする" t_no_pr_no_branch
 summary
