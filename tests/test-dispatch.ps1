@@ -282,6 +282,17 @@ Invoke-TestCase "run: profile claude-stream-json は command_template に stream
     Assert-Contains ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.log")) "[result] exit_subtype=success" "result line"
 }
 
+Invoke-TestCase "run: stream-json で stdin に大きいプロンプトを渡しても、子が先に stderr に大量に書くと止まらない" {
+    Set-PyChild "import sys`nsys.stderr.write('e' * 200000)`nsys.stderr.flush()`ndata = sys.stdin.read()`nprint('{\`"type\`":\`"result\`",\`"subtype\`":\`"success\`",\`"result\`":\`"LEN=' + str(len(data)) + '\`"}')"
+    Set-Template 'python3 ./child.py'
+    Set-Profile claude-stream-json
+    Set-IdleTimeout 10
+    [System.IO.File]::WriteAllText("$script:Proj/.agents/workflow/runs/T1-1/prompt.md", ('a' * 200000), [System.Text.UTF8Encoding]::new($false))
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq "EXIT:0" (Get-DoneExit) "done marker"
+    Assert-Contains ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.jsonl")) "LEN=200000" "stdin length"
+}
+
 Invoke-TestCase "run: 利用先の child-profiles.json を guard.sha256 に記録する" {
     Set-Child 'Write-Output hello'
     Write-Utf8File "$script:Proj/.agents/workflow/child-profiles.json" "{}`n"

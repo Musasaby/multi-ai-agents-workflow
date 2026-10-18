@@ -358,6 +358,21 @@ t_run_profile_stream_json_writes_jsonl_without_template_keyword() {
     assert_contains "$(cat "$PROJ/.agents/workflow/runs/T1-1/output.log")" "[result] exit_subtype=success" "result line"
 }
 
+t_run_stream_json_large_stdin_does_not_deadlock() {
+    set_py_child "import sys
+sys.stderr.write('e' * 200000)
+sys.stderr.flush()
+data = sys.stdin.read()
+print('{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"LEN=' + str(len(data)) + '\"}')"
+    set_template 'python3 ./child.py'
+    set_profile claude-stream-json
+    set_idle_timeout 10
+    python3 -c "open(r'$(py_path "$PROJ/.agents/workflow/runs/T1-1/prompt.md")', 'w', encoding='utf-8', newline='').write('a' * 200000)"
+    run_script dispatch-run.sh T1 1
+    assert_eq "EXIT:0" "$(done_exit)" "done marker"
+    assert_contains "$(cat "$PROJ/.agents/workflow/runs/T1-1/output.jsonl")" "LEN=200000" "stdin length"
+}
+
 t_run_guard_records_child_profiles() {
     set_child 'echo hello'
     printf '{}\n' > "$PROJ/.agents/workflow/child-profiles.json"
@@ -983,6 +998,7 @@ test_case "run: ログが更新され続ければ idle_timeout_seconds で止め
 test_case "run: {prompt_file} で 40000 文字のプロンプトをファイルパスで渡す" t_run_prompt_file_placeholder_passes_long_prompt
 test_case "run: プレースホルダが無いテンプレートは stdin でプロンプトを渡す" t_run_no_placeholder_passes_prompt_via_stdin
 test_case "run: profile claude-stream-json は command_template に stream-json が無くても output.jsonl を書く" t_run_profile_stream_json_writes_jsonl_without_template_keyword
+test_case "run: stream-json で stdin に大きいプロンプトを渡しても、子が先に stderr に大量に書くと止まらない" t_run_stream_json_large_stdin_does_not_deadlock
 test_case "run: 利用先の child-profiles.json を guard.sha256 に記録する" t_run_guard_records_child_profiles
 test_case "check: 正常" t_check_ok
 test_case "check: signalはexit 4" t_check_signal

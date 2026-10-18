@@ -196,11 +196,19 @@ try {
         }
         $errJob = Register-ObjectEvent -InputObject $proc -EventName ErrorDataReceived -Action $errAction -MessageData $logPath
 
+        $stdinJob = $null
         try {
             $proc.Start() | Out-Null
-            if ($useStdin) { $proc.StandardInput.Write($prompt) }
-            $proc.StandardInput.Close()
             $proc.BeginErrorReadLine()
+            if ($useStdin) {
+                # 子が stdin を読み切る前に stderr / stdout へ大量に書いても止まらないよう、別スレッドで書き込む
+                $stdinJob = Start-ThreadJob -ArgumentList $proc.StandardInput, $prompt -ScriptBlock {
+                    param($Writer, $Text)
+                    try { $Writer.Write($Text) } catch { } finally { try { $Writer.Close() } catch { } }
+                }
+            } else {
+                $proc.StandardInput.Close()
+            }
 
             while ($null -ne ($line = $proc.StandardOutput.ReadLine())) {
                 Add-Content -Path $jsonlPath -Value $line -Encoding utf8
@@ -216,6 +224,10 @@ try {
             $proc.WaitForExit()
             $exitCode = $proc.ExitCode
         } finally {
+            if ($stdinJob) {
+                Wait-Job $stdinJob | Out-Null
+                Remove-Job $stdinJob -Force -ErrorAction SilentlyContinue
+            }
             Unregister-Event -SourceIdentifier $errJob.Name -ErrorAction SilentlyContinue
             Remove-Job -Id $errJob.Id -Force -ErrorAction SilentlyContinue
         }
