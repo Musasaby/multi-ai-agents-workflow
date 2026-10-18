@@ -19,5 +19,13 @@ test-dispatch.sh: run: プロジェクトルート以外から相対パスで起
 # ps1 版は tasklib.ps1 を使い Python を実行しないため、この確認は ps1 に該当しない
 test-tasks.sh: __pycache__ を作らない
 
+# 要件の検証(#66)。ps1 版は T2 で足すので、足したらこの5行(と下の1行)を消す
+test-tasks.sh: sync: 要件がすべてタスクに対応すれば対応表を出す
+test-tasks.sh: sync: どのタスクにも対応しない要件はexit 1
+test-tasks.sh: sync: 存在しない要件IDはexit 1
+test-tasks.sh: sync: 要件節があるのに要件欄が無いタスクはexit 1
+test-tasks.sh: sync: 要件節の形式違反の行はexit 1
+test-tasks.sh: sync: 要件節も要件欄も無ければ対応表を出さない
+
 # test-exitcode.sh は存在しない(sh 側では各テストが直接 exit code を断言する)
 test-exitcode.ps1: *
