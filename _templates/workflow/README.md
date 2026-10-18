@@ -206,6 +206,7 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 | `group-advance` | グループ境界。group-advance を実行する | next-task(exit 6) |
 | `create-pr` | PR を作成する | group-advance(exit 7) |
 | `wait-merge` | PR のマージを待つ(報告して停止) | group-advance(exit 8)・dispatch-check(exit 0、PR 作成の run `pr-*`。PR を検証してから報告する) |
+| `update-pr` | 既存の PR に未 push のコミットを push し、本文を作り直す(PR作成の単発依頼を再実行する) | group-advance(exit 10) |
 | `continue` | そのまま作業を続ける | branch-check(exit 0)・group-advance(exit 0)・task-commit(exit 0)・quality-gate(exit 0) |
 | `confirm` | `DECIDE` 行や差分をユーザーに確認する | workflow-setup(exit 3)・workflow-update(exit 3) |
 | `switch-branch` | 専用ブランチを作る(`reason=main` / `merged`) | branch-check(exit 2 / 3) |
@@ -283,6 +284,9 @@ tasks.md や AGENTS.md を直してから dispatch する:
 origin が無い・fetch に失敗した場合は exit 1)。stdout に `RunId: pr-<N>` を
 出力するので、`dispatch-run` に `pr-<N>` と `1` を渡して起動する。作業ブランチではなく
 `main` 上で実行した場合や、対象タスクが無い場合は exit 1。
+PR が既にある場合は、子が未 push のコミットを push し、PR の全コミットをもとに作り直した本文で
+`gh api -X PATCH repos/{owner}/{repo}/pulls/<N> -F body=@<file>` により更新する
+(`gh pr edit` は旧 Projects 廃止のエラーで失敗するため使わない)。
 
 ```powershell
 .agents/workflow/scripts/dispatch-prompt-gen.ps1 -Pr
@@ -660,7 +664,7 @@ PR が MERGED だった場合のみ `--branch` / `-Branch`(次のグループ用
 `git switch -c <新ブランチ>` で切替し、state.json の `branch` を新ブランチ名、
 `group` を次のグループ(未完了タスクを含む最初のグループ)に更新する。stdout に
 `ADVANCED <新ブランチ名> <新グループ名>` を出力する。state.json を書き換えるのは
-この MERGED の場合だけで、exit 7 / 8 / 9 / 1 では何も書き換えない(状況が変わったら
+この MERGED の場合だけで、exit 7 / 8 / 9 / 10 / 1 では何も書き換えない(状況が変わったら
 同じコマンドを再実行すればよい)。切替後に state.json が git に無視されていなければ
 `git add` して `chore: <新グループ名> グループの作業を開始`(新グループ名が空なら
 `chore: 既定グループの作業を開始`)でコミットし、stdout の `ADVANCED` 行の後に
@@ -670,10 +674,12 @@ PR が MERGED だった場合のみ `--branch` / `-Branch`(次のグループ用
 exit code: `0`=切替完了、`1`=使い方・前提不備(グループ未完了・作業ツリー未クリーン・
 `--branch` 未指定や `develop/` 以外の名前 等)、`7`=PR 未作成(stdout `NO_PR`)、
 `8`=PR が OPEN(マージ待ち。stdout `OPEN <PR URL>`)、`9`=PR が未マージのまま閉鎖
-(エスカレーション)。git / gh の失敗時は何も書き換えずその exit code を返す
+(エスカレーション)、`10`=PR が OPEN だが `origin/<branch>` に未 push のコミットがある、または
+`origin/<branch>` が無い(stdout `OPEN <PR URL>`、`Next: update-pr`。fetch はせず、ローカルの
+リモート追跡ブランチと比べて判定する)。git / gh の失敗時は何も書き換えずその exit code を返す
 (gh の失敗はメッセージが「no pull requests found」の場合のみ exit 7 の「PR なし」扱い)。
 
-exit 0・7・8・9 では stdout の最後の行に `Next:` 行を出す(「Next: 行」の節を参照)。
+exit 0・7・8・9・10 では stdout の最後の行に `Next:` 行を出す(「Next: 行」の節を参照)。
 
 使い方と分岐後の進め方は `agent-workflow` skill の「グループ単位の PR とブランチ切替」を参照。
 
