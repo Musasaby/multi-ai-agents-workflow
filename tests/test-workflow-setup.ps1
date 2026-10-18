@@ -86,4 +86,29 @@ Invoke-TestCase "setup: 旧レイアウトを DECIDE で知らせる" {
     Remove-ClaudeLink
 }
 
+Invoke-TestCase "setup: isolate_xdg が false なら .agents/workflow/.config を作らない" {
+    Initialize-EmptyProject
+    Invoke-Setup
+    Assert-Eq 0 $script:Code "exit 0: $($script:Out) $($script:Err)"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/.config" ".config not created"
+    Assert-NotContains $script:Out "CREATED .agents/workflow/.config" "no .config CREATED line"
+    Remove-ClaudeLink
+}
+
+Invoke-TestCase "setup: isolate_xdg が true なら .agents/workflow/.config を作る" {
+    Initialize-EmptyProject
+    Invoke-Setup
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = [System.IO.File]::ReadAllText($cfgPath) | ConvertFrom-Json
+    $cfg.child_agent | Add-Member -NotePropertyName isolate_xdg -NotePropertyValue $true -Force
+    $cfg.child_agent | Add-Member -NotePropertyName note -NotePropertyValue '日本語' -Force
+    Write-Utf8File $cfgPath (($cfg | ConvertTo-Json -Depth 20) + "`n")
+    Invoke-Setup
+    Assert-Eq 0 $script:Code "2nd run exit 0: $($script:Out) $($script:Err)"
+    Assert-Contains $script:Out "CREATED .agents/workflow/.config" "CREATED .config"
+    Add-Result (Test-Path "$script:Proj/.agents/workflow/.config" -PathType Container) ".config dir not created"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/.config/opencode" "opencode dir not created"
+    Remove-ClaudeLink
+}
+
 Show-Summary

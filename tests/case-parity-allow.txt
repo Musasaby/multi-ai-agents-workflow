@@ -19,9 +19,5 @@ test-dispatch.sh: run: プロジェクトルート以外から相対パスで起
 # ps1 版は tasklib.ps1 を使い Python を実行しないため、この確認は ps1 に該当しない
 test-tasks.sh: __pycache__ を作らない
 
-# T10 で ps1 側を書くまでの一時的な許可
-test-workflow-setup.sh: setup: isolate_xdg が false なら .agents/workflow/.config を作らない
-test-workflow-setup.sh: setup: isolate_xdg が true なら .agents/workflow/.config を作る
-
 # test-exitcode.sh は存在しない(sh 側では各テストが直接 exit code を断言する)
 test-exitcode.ps1: *
