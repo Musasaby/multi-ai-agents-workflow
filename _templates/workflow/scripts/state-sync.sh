@@ -1,4 +1,10 @@
 #!/bin/bash
+# Usage:
+#   state-sync.sh --init --source <source>        state.json を tasks.md から新規作成する
+#   state-sync.sh                                 tasks.md の新規タスク・タイトル変更を state.json に反映する
+#   state-sync.sh --insert <ID> --before <ID,...> 新タスクを pending の後続タスクの依存欄に挿入する
+#   state-sync.sh --set-branch [<名前>]           state.json の branch を <名前>(省略時は現在のブランチ)にする。
+#                                                 develop/ で始まる名前のみ。tasks.md は読まない
 set -euo pipefail
 
 # On Windows (Git Bash + native python3), argv/file I/O default to the
@@ -12,6 +18,8 @@ INIT=false
 SOURCE=""
 INSERT=""
 BEFORE=""
+SET_BRANCH=false
+SET_BRANCH_NAME=""
 
 need_value() {
     if [ "$2" -lt 2 ]; then
@@ -26,9 +34,23 @@ while [ $# -gt 0 ]; do
         --source) need_value "$1" $#; SOURCE="$2"; shift 2 ;;
         --insert) need_value "$1" $#; INSERT="$2"; shift 2 ;;
         --before) need_value "$1" $#; BEFORE="$2"; shift 2 ;;
+        --set-branch)
+            SET_BRANCH=true
+            if [ $# -ge 2 ] && [[ "$2" != --* ]]; then
+                SET_BRANCH_NAME="$2"
+                shift 2
+            else
+                shift
+            fi
+            ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
 done
+
+if [ "$SET_BRANCH" = true ] && { [ "$INIT" = true ] || [ -n "$SOURCE" ] || [ -n "$INSERT" ] || [ -n "$BEFORE" ]; }; then
+    echo "--set-branch cannot be combined with --init, --source, --insert or --before" >&2
+    exit 1
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/../../.."
@@ -36,6 +58,49 @@ ROOT="$(pwd)"
 
 TASKS_PATH="$ROOT/.agents/workflow/tasks.md"
 STATE_PATH="$ROOT/.agents/workflow/state.json"
+
+# --- ブランチの書き換え: tasks.md は読まず、state.json の branch と updated_at だけを更新する ---
+if [ "$SET_BRANCH" = true ]; then
+    if [ ! -f "$STATE_PATH" ]; then
+        echo "state.json not found: $STATE_PATH (run with --init first)" >&2
+        exit 1
+    fi
+    NEW_BRANCH="$SET_BRANCH_NAME"
+    if [ -z "$NEW_BRANCH" ]; then
+        NEW_BRANCH="$(git branch --show-current)"
+        if [ -z "$NEW_BRANCH" ]; then
+            echo "Cannot determine the branch (detached HEAD?); pass a branch name to --set-branch" >&2
+            exit 1
+        fi
+    fi
+    case "$NEW_BRANCH" in
+        develop/*) ;;
+        *) echo "Branch must start with 'develop/': $NEW_BRANCH" >&2; exit 1 ;;
+    esac
+    if command -v cygpath > /dev/null 2>&1; then
+        STATE_PATH_SB="$(cygpath -m "$STATE_PATH")"
+    else
+        STATE_PATH_SB="$STATE_PATH"
+    fi
+    python3 - "$STATE_PATH_SB" "$NEW_BRANCH" <<'PY'
+import datetime, json, sys
+
+state_path, branch = sys.argv[1:3]
+with open(state_path, encoding='utf-8') as f:
+    state = json.load(f)
+old = state.get('branch')
+if old == branch:
+    print('Branch unchanged: ' + branch)
+    sys.exit(0)
+state['branch'] = branch
+state['updated_at'] = datetime.datetime.now().astimezone().isoformat(timespec='seconds')
+with open(state_path, 'w', encoding='utf-8', newline='\n') as f:
+    json.dump(state, f, ensure_ascii=False, indent=2)
+    f.write('\n')
+print('Updated branch: ' + str(old) + ' -> ' + branch)
+PY
+    exit 0
+fi
 
 if [ ! -f "$TASKS_PATH" ]; then
     echo "tasks.md not found: $TASKS_PATH" >&2

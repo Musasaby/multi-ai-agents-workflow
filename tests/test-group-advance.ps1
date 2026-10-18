@@ -123,6 +123,43 @@ Invoke-TestCase "advance: MERGED はブランチ作成と state 更新" {
     Assert-Eq "A" (Get-StateGroup) "state.json group updated to the next group"
 }
 
+Invoke-TestCase "advance: 状態ファイルを追跡するリポジトリでは切替後に state.json をコミットする" {
+    Initialize-AdvanceProject
+    Push-Location $script:Proj
+    try {
+        Set-Content -Path .gitignore -Value ".agents/remote.git/`n.agents/other-clone/`n.agents/workflow/scripts/`n.agents/workflow/config.json`n.agents/workflow/runs/`n" -NoNewline
+        git add .gitignore .agents/workflow/state.json .agents/workflow/tasks.md
+        git commit -q -m "track state"
+        # PR マージ後の main を模す(切替後も state.json が main 側に存在するようにする)
+        git checkout -q main 2>$null
+        git merge -q --ff-only develop/g1
+        git push -q origin main 2>$null
+        git checkout -q develop/g1 2>$null
+    } finally {
+        Pop-Location
+    }
+    Set-GhStub MERGED 'https://example.com/pr/1'
+    Invoke-Script group-advance.ps1 '-Branch' 'develop/g2'
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Out "State commit: " "stdout has the state commit line"
+    Push-Location $script:Proj
+    try {
+        Assert-Eq "chore: A グループの作業を開始" ("$(git log -1 --format=%s)").Trim() "latest commit on the new branch"
+        Assert-Eq "develop/g2" ("$(git branch --show-current)").Trim() "on the new branch"
+        Assert-Eq "" ("$(git status --porcelain)").Trim() "working tree is clean"
+    } finally {
+        Pop-Location
+    }
+}
+
+Invoke-TestCase "advance: .agents を追跡しないリポジトリでは state.json をコミットしない" {
+    Initialize-AdvanceProject
+    Set-GhStub MERGED 'https://example.com/pr/1'
+    Invoke-Script group-advance.ps1 '-Branch' 'develop/g2'
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Out "State commit: none" "no state commit"
+}
+
 Invoke-TestCase "advance: MERGED は main を origin/main まで進める" {
     Initialize-AdvanceProject
     # origin/main にだけあるコミットを用意し、ローカル main を古くしておく

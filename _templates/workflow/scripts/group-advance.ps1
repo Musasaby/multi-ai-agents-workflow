@@ -188,7 +188,29 @@ try {
     Set-StateField $state 'updated_at' (Get-Date).ToString('yyyy-MM-ddTHH:mm:sszzz')
     [System.IO.File]::WriteAllText((Join-Path (Get-Location) $statePath), ($state | ConvertTo-Json -Depth 10) + "`n", [System.Text.UTF8Encoding]::new($false))
 
+    $stateRel = '.agents/workflow/state.json'
+    $stateCommit = 'none'
+    & git check-ignore -q $stateRel 1> $null 2> $null
+    if ($LASTEXITCODE -ne 0) {
+        if ($nextGroup) {
+            $commitMsg = "chore: $nextGroup グループの作業を開始"
+        } else {
+            $commitMsg = 'chore: 既定グループの作業を開始'
+        }
+        & git add -- $stateRel 1> $null 2> $errFile
+        $gitCode = $LASTEXITCODE
+        if ($gitCode -ne 0) { Fail "git add '$stateRel' failed (exit $gitCode): $([System.IO.File]::ReadAllText($errFile))" 1 }
+        & git diff --cached --quiet -- $stateRel 1> $null 2> $null
+        if ($LASTEXITCODE -ne 0) {
+            & git commit -q -m $commitMsg 1> $null 2> $errFile
+            $gitCode = $LASTEXITCODE
+            if ($gitCode -ne 0) { Fail "git commit failed (exit $gitCode): $([System.IO.File]::ReadAllText($errFile))" 1 }
+            $stateCommit = ("$(git rev-parse --short=7 HEAD)").Trim()
+        }
+    }
+
     Write-Output "ADVANCED $Branch $nextGroup"
+    Write-Output "State commit: $stateCommit"
     Write-Output 'Next: continue'
 } finally {
     Remove-Item $errFile -Force -ErrorAction SilentlyContinue

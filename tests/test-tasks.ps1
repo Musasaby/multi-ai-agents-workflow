@@ -402,6 +402,47 @@ Invoke-TestCase "sync: group欄の無い旧stateには足さない" {
     Assert-Eq "<absent>" (Get-StateGroup) "group key not added to legacy state.json"
 }
 
+# ---------- state-sync: --set-branch (#60) ----------
+
+function Get-StateBranch { return (ConvertFrom-Json (Get-StateText)).branch }
+
+# state.json から branch と updated_at を除いた内容(変わっていないことの確認用)
+function Get-StateWithoutBranch {
+    $state = ConvertFrom-Json (Get-StateText)
+    $state.PSObject.Properties.Remove('branch')
+    $state.PSObject.Properties.Remove('updated_at')
+    return ($state | ConvertTo-Json -Depth 10 -Compress)
+}
+
+Invoke-TestCase "sync: --set-branch は現在のブランチを state.json に書く" {
+    Set-Tasks $basicTasks
+    Set-State 'T1:done' 'T2:pending' 'T3:pending' 'T4:pending'
+    $before = Get-StateWithoutBranch
+    git -C $script:Proj switch -q -c develop/new 2>$null
+    Invoke-Script state-sync.ps1 -SetBranch
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "develop/new" (Get-StateBranch) "branch written"
+    Assert-Eq (git -C $script:Proj branch --show-current) (Get-StateBranch) "branch matches git (branch-check --state precondition)"
+    Assert-Eq $before (Get-StateWithoutBranch) "other keys unchanged"
+    Assert-Contains $script:Out "Updated branch: main -> develop/new" "stdout"
+}
+
+Invoke-TestCase "sync: --set-branch に名前を渡せばその名前を書く" {
+    Set-Tasks $basicTasks
+    Set-State 'T1:done' 'T2:pending' 'T3:pending' 'T4:pending'
+    Invoke-Script state-sync.ps1 -SetBranch -Branch develop/other
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "develop/other" (Get-StateBranch) "branch written"
+}
+
+Invoke-TestCase "sync: --set-branch は develop/ 以外を拒否する" {
+    Set-Tasks $basicTasks
+    Set-State 'T1:done' 'T2:pending' 'T3:pending' 'T4:pending'
+    Invoke-Script state-sync.ps1 -SetBranch
+    Assert-Eq 1 $script:Code "exit code on main"
+    Assert-Eq "main" (Get-StateBranch) "branch unchanged"
+}
+
 # ---------- state-sync: 挿入 (#13) ----------
 
 Invoke-TestCase "insert: pendingの前に挿入" {

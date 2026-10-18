@@ -183,6 +183,8 @@ git commit -m "chore: <計画ソース> のタスク計画を作成"
 追加モードの作業自体もファイル変更・コミットを伴うため、まず
 `agent-branch-guard` skill の手順でブランチを確かめる
 (main 上やマージ済みブランチなら専用ブランチを作ってから進む)。
+専用ブランチを作った場合は、`state-sync --set-branch` で state.json の `branch` を
+更新してから追記を始める。
 
 1. **新IDの採番**: `.agents/workflow/state.json` から既存の最大タスクID
    (例: 既存最大が `T7` なら次は `T8`)を取得する。**tasks.md 全文は読み直さない**
