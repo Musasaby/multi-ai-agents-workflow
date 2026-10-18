@@ -21,3 +21,9 @@ test-tasks.sh: __pycache__ を作らない
 
 # test-exitcode.sh は存在しない(sh 側では各テストが直接 exit code を断言する)
 test-exitcode.ps1: *
+
+# #59: ps1 版のケースは T37 で足す(T37 でこの5行を消す)
+test-quality-gate.sh: gate: command が空なら package.json の同名スクリプトを使う
+test-quality-gate.sh: gate: quality_gate が無ければ package.json から検出する
+test-quality-gate.sh: gate: -Steps で絞り込む
+test-quality-gate.sh: gate: -Fix は fix_command を先に実行する
