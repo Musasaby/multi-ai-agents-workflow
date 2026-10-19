@@ -12,6 +12,7 @@ $TasksPath = "$Root/.agents/workflow/tasks.md"
 $StatePath = "$Root/.agents/workflow/state.json"
 $ConfigPath = "$Root/.agents/workflow/config.json"
 $RunsBase = "$Root/.agents/workflow/runs"
+. "$PSScriptRoot/tasklib.ps1"
 
 # --- PR mode: PR作成を子に単発依頼するプロンプトを生成する ---
 # 対象タスク = state.json で done かつ commit が git log origin/<base>..HEAD に含まれるもの。
@@ -47,16 +48,29 @@ if ($Pr) {
     }
     $commits = @(git log "$baseRef..HEAD" --format=%H)
     $selected = @()
+    $selectedIds = @()
     foreach ($t in (Get-Content $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json).tasks) {
         $c = $t.commit
         if ($t.status -eq 'done' -and $c -and @($commits | Where-Object { $_.StartsWith($c) }).Count -gt 0) {
             $selected += "- $($t.id): $($t.title) (commit $c)"
+            $selectedIds += $t.id
         }
     }
     if ($selected.Count -eq 0) {
         [Console]::Error.WriteLine("No done tasks whose commit is in $baseRef..HEAD (nothing to include in the PR)")
         exit 1
     }
+    $reqLines = @()
+    if (Test-Path $TasksPath) {
+        try {
+            $prLines = @(Split-TaskLines ([System.IO.File]::ReadAllText($TasksPath, [System.Text.Encoding]::UTF8)))
+            $reqLines = @(Get-PrRequirementLines (Read-TaskList $prLines) $prLines $selectedIds)
+        } catch {
+            [Console]::Error.WriteLine($_.Exception.Message)
+            exit 1
+        }
+    }
+    $requirementList = if ($reqLines.Count -gt 0) { $reqLines -join "`n" } else { '- なし(tasks.md に要件の節が無い、またはこの PR のタスクに対応する要件が無い)' }
     $prN = 1
     if (Test-Path $RunsBase) {
         Get-ChildItem -Path $RunsBase -Directory | Where-Object { $_.Name -match '^pr-(\d+)-1$' } | ForEach-Object {
@@ -68,6 +82,7 @@ if ($Pr) {
     $null = New-Item -ItemType Directory -Force $prRunDir
     $text = Get-Content "$PSScriptRoot/dispatch-pr-prompt-template.md" -Raw -Encoding UTF8
     $text = $text.Replace('{task_list}', ($selected -join "`n"))
+    $text = $text.Replace('{requirement_list}', $requirementList)
     $text = $text.Replace('{branch}', $branch)
     $text = $text.Replace('{base_branch}', $baseBranch)
     $text = $text.Replace('{base_ref}', $baseRef)
@@ -126,7 +141,6 @@ foreach ($line in $sectionLines) {
 }
 
 # 依存欄の検証(不正なトークンは黙って捨てずにエラーにする)
-. "$PSScriptRoot/tasklib.ps1"
 $allTasks = @(Read-TaskList @(Split-TaskLines ([System.IO.File]::ReadAllText($TasksPath, [System.Text.Encoding]::UTF8))))
 $targetTask = $allTasks | Where-Object { $_.id -eq $TaskId } | Select-Object -First 1
 try {
