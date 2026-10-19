@@ -1,10 +1,12 @@
 ﻿# 進捗と次の操作を短く出す(読み取り専用)。
-# 引数: [-Summary](省略時は通常モード。-Summary は別タスクで実装する)
+# 引数: [-Summary](省略時は通常モード)
 # stdout: "Progress: <done>/<全タスク> done"、"Group: <名前> <done>/<数>"(グループ区切りがあるときだけ)、
 #       "Current: <ID> <status> | <title>" / "Current: none"、
 #       "Run: <ID>-<N> running elapsed=<秒>s log_idle=<秒>s" / "Run: <ID>-<N> finished"(in_progress で run があるときだけ)、
 #       "Failed: T3, T5"(failed があるときだけ)、"PR: <state> <url>" / "PR: none" / "PR: unknown"(finish / group-advance のときだけ)、
 #       "Comprehension: unanswered=<n>[ <ファイル名> ...]"、最後に "Next: ..."
+#       -Summary のときは、先頭に "Task <ID> <status> <commit 先頭7文字 | -> retries=<n> | <title>"(全タスク)と
+#       要件の行("Requirement ..."・"Summary: ...")を足し、Next の直前に "Worktree: clean" / "Worktree: dirty <n>" を足す
 # exit: 0=出力あり / 1=使い方・tasks.md/state.json 不備・next-task.ps1 の失敗
 param([switch]$Summary)
 
@@ -98,6 +100,21 @@ foreach ($t in $tasks) { $titleOf[$t.id] = $t.title }
 $done = @($stTasks | Where-Object { "$($_.status)" -eq 'done' }).Count
 $out = [System.Collections.Generic.List[string]]::new()
 
+# --- Task / Requirement(-Summary のときだけ) ---
+if ($Summary) {
+    foreach ($t in $stTasks) {
+        $commit = if ($t.commit) { ([string]$t.commit).Substring(0, [Math]::Min(7, ([string]$t.commit).Length)) } else { '-' }
+        $retries = if ($null -ne $t.retries) { [string]$t.retries } else { '0' }
+        $out.Add("Task $($t.id) $($t.status) $commit retries=$retries | $($titleOf["$($t.id)"])")
+    }
+    try {
+        foreach ($l in @(Get-RequirementStatusLines $tasks $lines $stTasks)) { $out.Add($l) }
+    } catch {
+        [Console]::Error.WriteLine($_.Exception.Message)
+        exit 1
+    }
+}
+
 $out.Add("Progress: $done/$($stTasks.Count) done")
 
 # --- Group ---
@@ -178,6 +195,20 @@ if (Test-Path $ComprehensionDir -PathType Container) {
     }
 }
 $out.Add("Comprehension: unanswered=$($unanswered.Count)" + (($unanswered | ForEach-Object { " $_" }) -join ''))
+
+# --- Worktree(-Summary のときだけ git を呼ぶ) ---
+if ($Summary) {
+    $nDirty = 0
+    try {
+        $porcelain = @(& git status --porcelain 2> $null)
+        if ($LASTEXITCODE -eq 0) {
+            $nDirty = @($porcelain | Where-Object { "$_".TrimEnd("`r").Length -gt 0 }).Count
+        }
+    } catch {
+        $nDirty = 0
+    }
+    $out.Add($(if ($nDirty -eq 0) { 'Worktree: clean' } else { "Worktree: dirty $nDirty" }))
+}
 
 # --- Next ---
 if ($runShown) {
