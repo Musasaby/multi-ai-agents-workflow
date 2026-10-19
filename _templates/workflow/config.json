@@ -24,6 +24,11 @@
     "enabled": false,
     "questions_per_task": 3
   },
+  "text_refine": {
+    "skill": null,
+    "targets": ["summary", "confirm", "commit", "pr_body", "task_done"],
+    "reader": "informed"
+  },
   "upstream": {
     "url": "https://github.com/Musasaby/multi-ai-agents-workflow.git",
     "branch": "main"
