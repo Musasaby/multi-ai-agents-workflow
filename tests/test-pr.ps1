@@ -84,4 +84,23 @@ Invoke-TestCase "pr: origin が無ければexit 1" {
     Assert-Eq 1 $script:Code "no origin -> exit 1"
 }
 
+Invoke-TestCase "pr: 要件の対応をプロンプトに載せる" {
+    Initialize-Branch
+    Set-Tasks "## 要件`n- R1: 要望1`n- R2: 要望2`n`n## T1: ブランチ上のタスク`n- **要件**: R1`n- **依存**: なし`n`n## T2: マージ済みのタスク`n- **要件**: R2`n- **依存**: なし`n`n## T3: 未着手のタスク`n- **要件**: R1`n- **依存**: なし`n`n## T4: 別PRでマージ済みのタスク`n- **要件**: なし`n- **依存**: なし`n"
+    Invoke-Script dispatch-prompt-gen.ps1 '-Pr'
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    $prompt = [System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/pr-1-1/prompt.md")
+    Assert-Contains $prompt "- R1: 要望1(この PR: T1 / 他の PR: T3)" "requirement line"
+    Assert-NotContains $prompt "- R2:" "requirement of merged task excluded"
+}
+
+Invoke-TestCase "pr: 要件の節が無ければなしと書く" {
+    Initialize-Branch
+    Invoke-Script dispatch-prompt-gen.ps1 '-Pr'
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    $prompt = [System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/pr-1-1/prompt.md")
+    Assert-Contains $prompt "- なし(tasks.md に要件の節が無い、またはこの PR のタスクに対応する要件が無い)" "none text"
+    Assert-NotContains $prompt "{requirement_list}" "placeholder replaced"
+}
+
 Show-Summary
