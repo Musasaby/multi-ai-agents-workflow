@@ -95,23 +95,39 @@ if [ "$PR_MODE" = true ]; then
     mkdir -p "$PR_RUN_DIR"
     python3 - "$STATE_PATH_PY" "$(to_py_path "$SCRIPT_DIR/dispatch-pr-prompt-template.md")" \
         "$(to_py_path "$PR_RUN_DIR/prompt.md")" "$BRANCH" "$BASE_BRANCH" "$BASE_REF" \
-        ".agents/workflow/runs/pr-${PR_N}-1" "$COMMITS" <<'PY' || { rmdir "$PR_RUN_DIR" 2>/dev/null; exit 1; }
-import json, sys
-state_path, template_path, prompt_path, branch, base, base_ref, run_dir, commits = sys.argv[1:9]
+        ".agents/workflow/runs/pr-${PR_N}-1" "$COMMITS" "$(to_py_path "$TASKS_PATH")" \
+        "$(to_py_path "$SCRIPT_DIR")" <<'PY' || { rmdir "$PR_RUN_DIR" 2>/dev/null; exit 1; }
+import json, os, sys
+state_path, template_path, prompt_path, branch, base, base_ref, run_dir, commits, tasks_path, script_dir = sys.argv[1:11]
+sys.path.insert(0, script_dir)
+import tasklib
 commits = [c for c in commits.split() if c]
 with open(state_path, encoding='utf-8') as f:
     tasks = json.load(f)['tasks']
 selected = []
+selected_ids = []
 for t in tasks:
     c = t.get('commit')
     if t.get('status') == 'done' and c and any(h.startswith(c) for h in commits):
         selected.append('- ' + t['id'] + ': ' + t['title'] + ' (commit ' + c + ')')
+        selected_ids.append(t['id'])
 if not selected:
     print('No done tasks whose commit is in ' + base_ref + '..HEAD (nothing to include in the PR)', file=sys.stderr)
     sys.exit(1)
+req_lines = []
+if os.path.isfile(tasks_path):
+    with open(tasks_path, encoding='utf-8', newline='') as f:
+        content = f.read()
+    try:
+        req_lines = tasklib.pr_requirement_lines(tasklib.parse_tasks(content), content, selected_ids)
+    except tasklib.TaskFileError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+requirement_list = '\n'.join(req_lines) if req_lines else \
+    '- なし(tasks.md に要件の節が無い、またはこの PR のタスクに対応する要件が無い)'
 with open(template_path, encoding='utf-8') as f:
     text = f.read()
-for key, value in (('{task_list}', '\n'.join(selected)), ('{branch}', branch),
+for key, value in (('{task_list}', '\n'.join(selected)), ('{requirement_list}', requirement_list), ('{branch}', branch),
                    ('{base_branch}', base), ('{base_ref}', base_ref), ('{run_dir}', run_dir)):
     text = text.replace(key, value)
 with open(prompt_path, 'w', encoding='utf-8', newline='\n') as f:

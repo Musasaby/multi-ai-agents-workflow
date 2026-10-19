@@ -48,10 +48,10 @@ tasks.md にグループ区切りがあり、config の `branch_per_group` が�
    .agents/workflow/scripts/group-advance.sh --branch "develop/<作業名>-<グループ名>"
    ```
 2. 出力の最後の `Next:` 行で分岐する:
-   - **`Next: create-pr`**(exit 7。PR 未作成): 「PR作成(子への単発依頼)」を必ず実行し、
-     PR URL をユーザーに報告して停止する(マージはユーザーが行う)
+   - **`Next: create-pr`**(exit 7。PR 未作成): 先に「要件の充足確認」を行い、問題が無ければ
+     「PR作成(子への単発依頼)」を必ず実行し、PR URL をユーザーに報告して停止する(マージはユーザーが行う)
    - **`Next: update-pr`**(exit 10。PR はオープンだが、PR を作ったあとに足したコミットが未 push。
-     stdout に `OPEN <PR URL>`): 「PR作成(子への単発依頼)」を実行する(子が push と PR 本文の
+     stdout に `OPEN <PR URL>`): 先に「要件の充足確認」を行ってから「PR作成(子への単発依頼)」を実行する(子が push と PR 本文の
      作り直しを行う)。完了後に PR URL をユーザーに報告して停止する。親は自分で `git push` や
      PR 本文の更新をしない。レビュー指摘への対応タスクを追加モードで同じグループに足して
      完了させたときに、この分岐になる
@@ -176,6 +176,28 @@ PR が未マージ(OPEN)の場合や、PR が未作成で未マージのコミ�
 - 子エージェントCLIが連続して異常終了・タイムアウトする
 - タスク分解時点と前提が変わった(計画の矛盾、依存タスクの設計変更が必要 等)
 
+## 要件の充足確認
+
+PR 作成の前に、要件が満たされているかを親が確かめる。「PR作成(子への単発依頼)」の手順1の前に行う
+(グループ完了時の `Next: create-pr` / `Next: update-pr`、サイクル完了時の両方)。
+
+1. `req-status`(PowerShell: `.agents/workflow/scripts/req-status.ps1` / POSIX: `req-status.sh`)を実行する。
+   `No requirements section` と出たら、この確認は省略して PR 作成に進む
+   ```powershell
+   .agents/workflow/scripts/req-status.ps1
+   ```
+   ```bash
+   .agents/workflow/scripts/req-status.sh
+   ```
+2. 対象は、この PR のタスクを含む要件(グループ完了時)または全要件(サイクル完了時)。
+   要件ごとに、要件の本文を `git diff origin/main...HEAD` と対応タスクの完了報告に照らし、
+   「満たした / 部分 / 未対応」を判断する。`partial` の要件で未完了タスクが後のグループにあるものは、
+   このグループで担う分だけを判断する。`## 対象外` 節に記録済みの要件・要件の一部は除外する
+3. 部分・未対応があれば PR 作成に進まず停止する。要件と判断の根拠を報告し、追加モード
+   (`agent-task-plan`)でタスクを足すか、対象外にするかをユーザーに確認する。対象外にする場合は
+   `## 対象外` 節に `- R3 の〜: 〜のため対象外(充足確認で合意)` と追記してコミットする
+4. すべて満たしていれば PR 作成に進む。PR 本文には要件の一覧が機械的に載る(`dispatch-prompt-gen --pr`)
+
 ## PR作成(子への単発依頼)
 
 グループ完了時(group-advance が `Next: create-pr`(PR 未作成)または `Next: update-pr`
@@ -183,6 +205,7 @@ PR が未マージ(OPEN)の場合や、PR が未作成で未マージのコミ�
 単発で依頼する。PR 作成はタスクではないため、tasks.md / state.json には載せない
 (タスクIDは採番しない)。親は PR のタイトル・本文を自分で書かず、gh コマンドも直接実行しない。
 
+0. 先に「要件の充足確認」を行い、満たしていなければここで停止する
 1. `git status --porcelain` が空であることを確認する
 2. `dispatch-start --pr` を実行する。対象タスク(state.json で `done` かつ commit が
    `git log origin/main..HEAD` に含まれるもの)は自動で選ばれ、プロンプト生成・疎通確認・
@@ -215,6 +238,7 @@ PR が未マージ(OPEN)の場合や、PR が未作成で未マージのコミ�
 
 - タスクごとの結果(done/failed、コミットハッシュ、リトライ回数)
 - 残課題・子エージェントの報告にあった備考
+- 要件ごとの充足状況(`req-status` の一覧と判断)
 - 次のアクション提案(PR が未作成なら「PR作成(子への単発依頼)」を実行し、PR URL を報告する。
   マージはユーザーが行う)
 - **理解確認**: `.agents/workflow/comprehension/` に未回答の質問ファイル(`**あなたの回答**:` がコメントアウトのままのファイル)がある場合、その一覧を提示する

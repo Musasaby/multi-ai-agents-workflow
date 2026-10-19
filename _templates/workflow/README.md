@@ -17,6 +17,7 @@
 │   ├── dispatch-prompt-template.md
 │   ├── dispatch-pr-prompt-template.md   PR作成の単発依頼用(dispatch-prompt-gen --pr)
 │   ├── state-sync.ps1 / .sh
+│   ├── req-status.ps1 / .sh  要件ごとの充足状況の一覧(グループ・サイクル完了時の充足確認に使う)
 │   ├── next-task.ps1 / .sh
 │   ├── group-advance.ps1 / .sh  グループ完了後の PR 状態判定と次グループのブランチ切替
 │   ├── branch-check.ps1 / .sh  今のブランチが作業に使ってよいかの判定(main 上・PR マージ済み・state.json との不一致)
@@ -377,13 +378,17 @@ origin が無い・fetch に失敗した場合は exit 1)。stdout に `RunId: p
 PR が既にある場合は、子が未 push のコミットを push し、PR の全コミットをもとに作り直した本文で
 `gh api -X PATCH repos/{owner}/{repo}/pulls/<N> -F body=@<file>` により更新する
 (`gh pr edit` は旧 Projects 廃止のエラーで失敗するため使わない)。
+プロンプトには要件の一覧も入る。tasks.md の要件のうち、この PR のタスクを含むものだけを
+`- R1: <本文>(この PR: T1 / 他の PR: T3)` の形で並べる。対応する要件が無い場合(要件の節が無い場合を含む)は
+`- なし(...)` の1行になる。子はこの一覧を PR 本文に「要件と対応タスク」として載せる。
 
 ```powershell
 .agents/workflow/scripts/dispatch-prompt-gen.ps1 -Pr
 ```
 ```bash
 .agents/workflow/scripts/dispatch-prompt-gen.sh --pr
-```exit 0 の場合も生成されたプロンプト全文は会話に読み込まない
+```
+exit 0 の場合も生成されたプロンプト全文は会話に読み込まない
 (読み込むと機械生成によるトークン節約が無意味になる)。
 
 ### dispatch-start — 事前チェックからデタッチ起動まで
@@ -686,6 +691,41 @@ tasks.md では出さない。
 
 exit code: `0`=成功、`1`=使い方不備・検証エラー(tasks.md/state.json 不在、`--init` 時の
 `--source` 欠落や state.json 既存、依存欄の不正、挿入先が `pending` でない 等)。
+
+### req-status — 要件ごとの充足状況の一覧
+
+tasks.md の要件とタスクの対応を state.json の状態と突き合わせ、要件ごとの充足状況を一覧する
+(読み取り専用。tasks.md・state.json は変更しない)。グループ・サイクルの完了時に、要件が
+満たされたかを親が確認するために使う。引数は取らない。
+
+```powershell
+.agents/workflow/scripts/req-status.ps1
+```
+```bash
+.agents/workflow/scripts/req-status.sh
+```
+
+出力形式:
+
+```
+Requirement R1 [<状態>]: T1(done abc1234), T2(pending) | <要件の本文>
+Requirement なし: T5(done def5678)
+Summary: done=<n> partial=<n> pending=<n>
+```
+
+- 要件の記述順に `Requirement R1 [<状態>]: ... | <本文>` の行を出す。要件欄が `なし` のタスクがあれば
+  `Requirement なし: ...` の行を続け、最後に `Summary:` の行を出す
+- `Requirement なし` の行は要件の状態に含めない。`Summary` の件数にも数えない
+- `## 要件` 節も要件欄も無い tasks.md では `No requirements section` の1行だけを出す
+- 状態の決め方: 対応タスクがすべて `done` なら `done`、1件以上 `done` なら `partial`、0件なら `pending`
+- タスクの表記: `done` は `T1(done abc1234)`(commit の先頭7文字。commit が無ければ `T1(done)`)、
+  それ以外は `T2(pending)` のように status をそのまま出す。state.json に無いタスクは `T3(missing)`
+
+exit code: `0`=成功、`1`=使い方不備(引数あり)・tasks.md/state.json 不在・要件の検査エラー
+(「tasks.md」節の「要件の節と要件欄」の検査と同じ)。
+
+充足したかどうかの判断は親が行う。このスクリプトは状態を機械的に並べるだけで、PR 作成や
+グループの進行を止めない。
 
 ### task-state — タスクの状態遷移
 

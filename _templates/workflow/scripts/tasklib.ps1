@@ -225,6 +225,67 @@ function Test-Requirements {
     return $table
 }
 
+# 要件ごとのタスクの状態行(文字列の配列)。節も欄も無ければ空配列。不正なら Test-Requirements の例外をそのまま上げる。
+# $StateTasks は ConvertFrom-Json した state.json の .tasks
+function Get-RequirementStatusLines {
+    param($Tasks, [string[]]$Lines, $StateTasks)
+    $table = @(Test-Requirements $Tasks $Lines)
+    if ($table.Count -eq 0) { return @() }
+    $texts = @{}
+    foreach ($r in (Read-Requirements $Lines).items) { $texts[$r.id] = $r.text }
+    $byId = @{}
+    foreach ($s in @($StateTasks)) { $byId[$s.id] = $s }
+    $label = {
+        param($tid)
+        $st = $byId[$tid]
+        if ($null -eq $st) { return "$tid(missing)" }
+        $status = if ($null -eq $st.status) { 'None' } else { [string]$st.status }
+        if ($status -eq 'done' -and $st.commit) {
+            $c = [string]$st.commit
+            return "$tid(done $($c.Substring(0, [Math]::Min(7, $c.Length))))"
+        }
+        return "$tid($status)"
+    }
+    $out = [System.Collections.Generic.List[string]]::new()
+    $counts = @{ done = 0; partial = 0; pending = 0 }
+    foreach ($row in $table) {
+        $labels = (@($row.tasks) | ForEach-Object { & $label $_ }) -join ', '
+        if ($row.label -ceq 'なし') {
+            $out.Add("Requirement なし: $labels")
+            continue
+        }
+        $nDone = 0
+        foreach ($tid in $row.tasks) {
+            if ($byId.ContainsKey($tid) -and $byId[$tid].status -eq 'done') { $nDone++ }
+        }
+        $state = if ($nDone -eq @($row.tasks).Count) { 'done' } elseif ($nDone -gt 0) { 'partial' } else { 'pending' }
+        $counts[$state]++
+        $out.Add("Requirement $($row.label) [$state]: $labels | $($texts[$row.label])")
+    }
+    $out.Add("Summary: done=$($counts.done) partial=$($counts.partial) pending=$($counts.pending)")
+    return $out.ToArray()
+}
+
+# PR 本文用の要件一覧の行(文字列の配列)。PR のタスクを含む要件だけ、要件の記述順。該当なしなら空配列
+function Get-PrRequirementLines {
+    param($Tasks, [string[]]$Lines, [string[]]$PrTaskIds)
+    $table = @(Test-Requirements $Tasks $Lines)
+    if ($table.Count -eq 0) { return @() }
+    $texts = @{}
+    foreach ($r in (Read-Requirements $Lines).items) { $texts[$r.id] = $r.text }
+    $out = [System.Collections.Generic.List[string]]::new()
+    foreach ($row in $table) {
+        if ($row.label -ceq 'なし') { continue }
+        $mine = @($row.tasks | Where-Object { $PrTaskIds -contains $_ })
+        if ($mine.Count -eq 0) { continue }
+        $others = @($row.tasks | Where-Object { $PrTaskIds -notcontains $_ })
+        $s = "- $($row.label): $($texts[$row.label])(この PR: $($mine -join ', ')"
+        if ($others.Count -gt 0) { $s += " / 他の PR: $($others -join ', ')" }
+        $out.Add($s + ')')
+    }
+    return $out.ToArray()
+}
+
 # 依存欄を検証してタスクIDの配列を返す。不正なら例外を投げる
 function Get-TaskDeps {
     param($Task)

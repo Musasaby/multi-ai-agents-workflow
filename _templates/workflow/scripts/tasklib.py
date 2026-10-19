@@ -232,6 +232,67 @@ def check_requirements(tasks, content):
     return table
 
 
+def requirement_status_lines(tasks, content, state_tasks):
+    """要件ごとのタスクの状態行を返す。節も欄も無ければ []。不正なら TaskFileError。"""
+    table = check_requirements(tasks, content)
+    if not table:
+        return []
+    _, reqs = parse_requirements(content)
+    texts = {r['id']: r['text'] for r in reqs}
+    by_id = {t['id']: t for t in state_tasks}
+
+    def label(tid):
+        st = by_id.get(tid)
+        if st is None:
+            return tid + '(missing)'
+        if st.get('status') == 'done' and st.get('commit'):
+            return tid + '(done ' + str(st['commit'])[:7] + ')'
+        return tid + '(' + str(st.get('status')) + ')'
+
+    lines = []
+    counts = {'done': 0, 'partial': 0, 'pending': 0}
+    for rid, tids in table:
+        labels = ', '.join(label(t) for t in tids)
+        if rid == 'なし':
+            lines.append('Requirement なし: ' + labels)
+            continue
+        n_done = sum(1 for t in tids if by_id.get(t, {}).get('status') == 'done')
+        if n_done == len(tids):
+            state = 'done'
+        elif n_done > 0:
+            state = 'partial'
+        else:
+            state = 'pending'
+        counts[state] += 1
+        lines.append('Requirement ' + rid + ' [' + state + ']: ' + labels + ' | ' + texts[rid])
+    lines.append('Summary: done=%d partial=%d pending=%d'
+                 % (counts['done'], counts['partial'], counts['pending']))
+    return lines
+
+
+def pr_requirement_lines(tasks, content, pr_task_ids):
+    """PR 本文用の要件一覧の行を返す。PR のタスクを1件以上含む要件だけ、要件の記述順に。"""
+    table = check_requirements(tasks, content)
+    if not table:
+        return []
+    _, reqs = parse_requirements(content)
+    texts = {r['id']: r['text'] for r in reqs}
+    pr_ids = set(pr_task_ids)
+    lines = []
+    for rid, tids in table:
+        if rid == 'なし':
+            continue
+        mine = [t for t in tids if t in pr_ids]
+        if not mine:
+            continue
+        others = [t for t in tids if t not in pr_ids]
+        s = '- ' + rid + ': ' + texts[rid] + '(この PR: ' + ', '.join(mine)
+        if others:
+            s += ' / 他の PR: ' + ', '.join(others)
+        lines.append(s + ')')
+    return lines
+
+
 def parse_deps(task):
     """依存欄を検証してタスクIDのリストを返す。不正なら TaskFileError。"""
     tid = task['id']
