@@ -8,6 +8,8 @@ set -euo pipefail
 #       "Run: <ID>-<N> running elapsed=<秒>s log_idle=<秒>s" / "Run: <ID>-<N> finished"(in_progress で run があるときだけ)、
 #       "Failed: T3, T5"(failed があるときだけ)、"PR: <state> <url>" / "PR: none" / "PR: unknown"(finish / group-advance のときだけ)、
 #       "Comprehension: unanswered=<n>[ <ファイル名> ...]"、最後に "Next: ..."
+#       --summary のときは、先頭に "Task <ID> <status> <commit 先頭7文字 | -> retries=<n> | <title>"(全タスク)と
+#       要件の行("Requirement ..."・"Summary: ...")を足し、Next の直前に "Worktree: clean" / "Worktree: dirty <n>" を足す
 # exit: 0=出力あり / 1=使い方・tasks.md/state.json 不備・next-task.sh の失敗
 
 export PYTHONUTF8=1
@@ -94,14 +96,22 @@ print(state, str(data.get('url') or ''))
     fi
 fi
 
+# --- 作業ツリーの変更数(--summary のときだけ git を呼ぶ) ---
+DIRTY_COUNT=0
+if [ "$SUMMARY" -eq 1 ]; then
+    DIRTY_COUNT="$(git status --porcelain 2> /dev/null | tr -d '\r' | grep -c . || true)"
+    DIRTY_COUNT="${DIRTY_COUNT:-0}"
+fi
+
 python3 - "$(to_py_path "$SCRIPT_DIR")" "$(to_py_path "$TASKS_PATH")" "$(to_py_path "$STATE_PATH")" \
-    "$(to_py_path "$RUNS_DIR")" "$(to_py_path "$COMPREHENSION_DIR")" "$SUMMARY" "$NEXT_LINE" "$PR_STATE" "$PR_URL" <<'PY'
+    "$(to_py_path "$RUNS_DIR")" "$(to_py_path "$COMPREHENSION_DIR")" "$SUMMARY" "$NEXT_LINE" "$PR_STATE" "$PR_URL" \
+    "$DIRTY_COUNT" <<'PY'
 import json, os, re, sys, time
 
 sys.stdout.reconfigure(newline='\n')
 
 (script_dir, tasks_path, state_path, runs_dir, comprehension_dir,
- summary, next_line, pr_state, pr_url) = sys.argv[1:10]
+ summary, next_line, pr_state, pr_url, dirty_count) = sys.argv[1:11]
 sys.path.insert(0, script_dir)
 import tasklib
 
@@ -118,7 +128,22 @@ except tasklib.TaskFileError as e:
 st_tasks = state['tasks']
 status_of = {t['id']: t.get('status') for t in st_tasks}
 done = sum(1 for t in st_tasks if t.get('status') == 'done')
-out = ['Progress: ' + str(done) + '/' + str(len(st_tasks)) + ' done']
+title_of = {t['id']: t['title'] for t in tasks}
+out = []
+
+# --- Task / Requirement(--summary のときだけ) ---
+if summary == '1':
+    for t in st_tasks:
+        commit = str(t.get('commit') or '')[:7] or '-'
+        out.append('Task ' + t['id'] + ' ' + str(t.get('status')) + ' ' + commit
+                   + ' retries=' + str(t.get('retries', 0)) + ' | ' + title_of.get(t['id'], ''))
+    try:
+        out.extend(tasklib.requirement_status_lines(tasks, content, st_tasks))
+    except tasklib.TaskFileError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+
+out.append('Progress: ' + str(done) + '/' + str(len(st_tasks)) + ' done')
 
 # --- Group ---
 order = tasklib.group_order(content)
@@ -136,7 +161,6 @@ if len(order) >= 2:
         out.append('Group: ' + (group or '(default)') + ' ' + str(n_done) + '/' + str(len(members)))
 
 # --- Current / Run ---
-title_of = {t['id']: t['title'] for t in tasks}
 current = next((t for t in st_tasks if t.get('status') in ('in_progress', 'in_review')), None)
 run_shown = False
 if current is None:
@@ -187,6 +211,11 @@ if os.path.isdir(comprehension_dir):
             if any(l.strip() == '**あなたの回答**: <!-- ここに記入 -->' for l in f):
                 unanswered.append(name)
 out.append('Comprehension: unanswered=' + str(len(unanswered)) + ''.join(' ' + n for n in unanswered))
+
+# --- Worktree(--summary のときだけ) ---
+if summary == '1':
+    n_dirty = int(dirty_count or 0)
+    out.append('Worktree: clean' if n_dirty == 0 else 'Worktree: dirty ' + str(n_dirty))
 
 # --- Next ---
 if run_shown:
