@@ -387,7 +387,8 @@ PR が既にある場合は、子が未 push のコミットを push し、PR �
 ```
 ```bash
 .agents/workflow/scripts/dispatch-prompt-gen.sh --pr
-```exit 0 の場合も生成されたプロンプト全文は会話に読み込まない
+```
+exit 0 の場合も生成されたプロンプト全文は会話に読み込まない
 (読み込むと機械生成によるトークン節約が無意味になる)。
 
 ### dispatch-start — 事前チェックからデタッチ起動まで
