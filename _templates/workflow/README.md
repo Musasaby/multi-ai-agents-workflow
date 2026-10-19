@@ -281,7 +281,7 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 
 ### Next: 行 — 次の行動の機械可読な指示
 
-判定系スクリプト(`next-task`・`branch-check`・`group-advance`・`dispatch-start`・`dispatch-wait`・`dispatch-check`)は、stdout の
+判定系スクリプト(`next-task`・`branch-check`・`group-advance`・`dispatch-start`・`dispatch-wait`・`dispatch-check`・`workflow-status`)は、stdout の
 最後の行に `Next: <行動> [<タスクID>] [reason=<理由>]` を出す。親は exit code の表ではなく
 この行に従う。`Next:` 行が無い(exit 1 等の使い方不備・入力不備)ときは `escalate reason=error`
 として stderr をユーザーに報告する。
@@ -290,11 +290,11 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 |------|------|----------------|
 | `dispatch <ID>` | そのタスクを dispatch する | next-task(exit 0) |
 | `review <ID>` | そのタスクをレビューする | next-task(exit 0、`in_review`)・dispatch-check(exit 0。PR 作成の run を除く) |
-| `wait` | 子がまだ実行中。完了を待つ | dispatch-start(exit 0)・dispatch-wait(exit 2)・dispatch-check(exit 2) |
-| `finish` | 全タスク完了。サマリー報告へ | next-task(exit 3) |
-| `group-advance` | グループ境界。group-advance を実行する | next-task(exit 6) |
-| `create-pr` | PR を作成する | group-advance(exit 7) |
-| `wait-merge` | PR のマージを待つ(報告して停止) | group-advance(exit 8)・dispatch-check(exit 0、PR 作成の run `pr-*`。PR を検証してから報告する) |
+| `wait` | 子がまだ実行中。完了を待つ | dispatch-start(exit 0)・dispatch-wait(exit 2)・dispatch-check(exit 2)・workflow-status(実行中の run があるとき) |
+| `finish` | 全タスク完了。サマリー報告へ | next-task(exit 3)・workflow-status |
+| `group-advance` | グループ境界。group-advance を実行する | next-task(exit 6)・workflow-status |
+| `create-pr` | PR を作成する | group-advance(exit 7)・workflow-status(PR が無いとき) |
+| `wait-merge` | PR のマージを待つ(報告して停止) | group-advance(exit 8)・dispatch-check(exit 0、PR 作成の run `pr-*`。PR を検証してから報告する)・workflow-status(PR が `OPEN` のとき) |
 | `update-pr` | 既存の PR に未 push のコミットを push し、本文を作り直す(PR作成の単発依頼を再実行する) | group-advance(exit 10) |
 | `continue` | そのまま作業を続ける | branch-check(exit 0)・group-advance(exit 0)・task-commit(exit 0)・quality-gate(exit 0) |
 | `confirm` | `DECIDE` 行や差分をユーザーに確認する | workflow-setup(exit 3)・workflow-update(exit 3) |
@@ -308,7 +308,7 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 - `blocked` — next-task の exit 4(実行可能なタスクが無い)
 - `gh-unavailable` — branch-check の exit 4(gh で PR 状態を判定できない)
 - `state-branch-mismatch` — branch-check の exit 5(state.json の `branch` と現在のブランチが不一致)
-- `pr-closed` — group-advance の exit 9(PR が未マージのまま閉鎖)
+- `pr-closed` — group-advance の exit 9(PR が未マージのまま閉鎖)・workflow-status(PR が `CLOSED`)
 - `tampered` — dispatch-check の exit 8(管理ファイルの改ざん・git 状態の変化)
 - `provider-error` / `idle-timeout` / `abnormal-exit` — dispatch-check の exit 4(この順で判定)
 - `permission-denied` / `outside-access` — dispatch-check の exit 6
@@ -726,6 +726,64 @@ exit code: `0`=成功、`1`=使い方不備(引数あり)・tasks.md/state.json 
 
 充足したかどうかの判断は親が行う。このスクリプトは状態を機械的に並べるだけで、PR 作成や
 グループの進行を止めない。
+
+### workflow-status — 進捗と次の操作の一覧
+
+進捗と次の操作を短く一覧する(読み取り専用。tasks.md・state.json は変更しない)。中断後の再開時や
+完了時のサマリー報告に使う。引数は取らない(`--summary` / `-Summary` だけ指定できる)。
+
+```powershell
+.agents/workflow/scripts/workflow-status.ps1
+.agents/workflow/scripts/workflow-status.ps1 -Summary
+```
+```bash
+.agents/workflow/scripts/workflow-status.sh
+.agents/workflow/scripts/workflow-status.sh --summary
+```
+
+通常モードの出力(上から順。条件付きの行は条件を満たすときだけ出す):
+
+```
+Progress: <done>/<全タスク> done
+Group: <名前> <done>/<数>
+Current: <ID> <status> | <title>
+Run: <ID>-<N> running elapsed=<秒>s log_idle=<秒>s
+Failed: T3, T5
+PR: <state> <url>
+Comprehension: unanswered=<n> <ファイル名> ...
+Next: <行動> [reason=<理由>]
+```
+
+- `Progress:` — 常に出す
+- `Group:` — グループ区切りが2つ以上あるときだけ。`state.json` の `group`(無効なら最初の未完了タスクのグループ)の進捗
+- `Current:` — `in_progress` / `in_review` のタスクがあればその行、無ければ `Current: none`
+- `Run:` — `Current` が `in_progress` で、そのタスクの最新の run に `guard.sha256` があるときだけ。
+  `done` ファイルがあれば `finished`、無ければ `running`(`elapsed` は guard からの経過、`log_idle` は `output.log` の無更新秒数。ログが無ければ `-`)
+- `Failed:` — `failed` のタスクがあるときだけ
+- `PR:` — `next-task` の判定が `finish` / `group-advance` のときだけ(下記)
+- `Comprehension:` — 常に出す。`comprehension/` の質問ファイルのうち、回答が未記入のものの件数とファイル名
+- `Next:` — 最後に1行。実行中の run があれば `wait`、PR が `none` なら `create-pr`、`OPEN` なら `wait-merge`、
+  `CLOSED` なら `escalate reason=pr-closed`、それ以外は `next-task` の `Next:` 行をそのまま出す
+
+PR の状態は、`next-task` の判定が `finish` / `group-advance` のときだけ `gh pr view <state.json の branch>` で調べる。
+PR が無ければ `PR: none`、gh が無い・`branch` が空・gh の失敗(PR 無し以外)・出力を読めないときは `PR: unknown`
+(`Next:` は `next-task` の行のまま)。
+
+`--summary`(`-Summary`)では、完了時のサマリー報告用に行を足す:
+
+```
+Task <ID> <status> <commit 先頭7文字 | -> retries=<n> | <title>
+Requirement R1 [<状態>]: ...
+Summary: done=<n> partial=<n> pending=<n>
+Worktree: clean | dirty <n>
+```
+
+- `Task` — 全タスクを `state.json` の並び順で、先頭(`Progress` の前)に出す。`retries` が無ければ `0`
+- `Requirement` / `Summary` — `req-status` と同じ行(`Task` の直後)
+- `Worktree:` — `git status --porcelain` の行数。`Comprehension` の次(`Next` の直前)に出す。`--summary` のときだけ git を呼ぶ。git の失敗は `clean` として扱う
+
+exit code: `0`=出力あり、`1`=使い方不備・tasks.md/state.json 不在・`next-task` の失敗(exit 1)・
+`--summary` 時の要件の検査エラー。
 
 ### task-state — タスクの状態遷移
 
