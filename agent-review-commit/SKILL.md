@@ -118,6 +118,8 @@ state.json を直接編集しない):
 `task-commit` を実行する(PowerShell: `.agents/workflow/scripts/task-commit.ps1 -TaskId <ID> -Type <type> -Description "<説明>"` /
 POSIX: `.agents/workflow/scripts/task-commit.sh <ID> <type> "<説明>"`)。
 親が決めるのは `type`(conventional commits の type)と説明(タスクタイトルに基づく1行)だけ。
+説明は `.agents/workflow/runs/refine/commit.md` に書き、`agent-workflow/references/report-template.md` の
+「日本語の推敲」の手順(場面 `commit`)で推敲してから `task-commit` に渡す(`type` は推敲しない)。
 次の処理はスクリプトが行う:
 
 - `branch-check`(コミットしてよいブランチかの判定)
@@ -133,14 +135,16 @@ POSIX: `.agents/workflow/scripts/task-commit.sh <ID> <type> "<説明>"`)。
 
 - **報告・説明はすべて日本語で行うこと**(AGENTS.md の再掲。このskillは実行のたびに
   読み込まれるため、ここに明記しておくことで日本語指定の効きを強くする)
-- **レビュー結果**(手順3完了時)に最低限報告する項目:
+- 報告の書き方は `agent-workflow/references/report-template.md` に従う(状況・起きたこと・次にすること。
+  内部語は言葉に直し、必要なら括弧で補足してよい)。この skill では次の場面を使う
+- **レビュー結果**(手順3完了時。テンプレートの「レビュー結果」)に入れる事実:
   - 合格 / 不合格の判定
   - 不合格の場合は指摘事項の件数と概要(原因種別: コードレビュー指摘 / 品質ゲート FAIL)
-- **コミット完了時**(手順6完了時。task-commit の出力から)に最低限報告する項目:
+- **コミット完了時**(手順6完了時。テンプレートの「コミット完了」。task-commit の出力から)に入れる事実:
   - コミットハッシュ
   - コミットメッセージ(タイトル行)
   - 品質ゲートの結果(non-blocking の失敗があれば残課題として明記)
-  - `State commit:` 行の内容(状態ファイルの `chore` コミットのハッシュ。状態ファイルを追跡しないリポジトリでは `none`)
-- **修正再依頼時**(手順4)に最低限報告する項目:
+  - 状態ファイルを別コミットにした場合は、そのハッシュ(追跡しないリポジトリでは書かない)
+- **修正再依頼時**(手順4)に入れる事実:
   - 現在の retries 回数 / `max_fix_retries`
   - `fix-notes.md` の保存先パス(または直接作成した `prompt.md` のパス)
