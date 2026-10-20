@@ -141,6 +141,50 @@ bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --overw
 
 理解確認(任意・デフォルト無効): 質問ファイルに回答後、`/agent-comprehension-check` で判定・解説を依頼(別セッション可)
 
+## ユーザーへの報告と日本語の推敲
+
+### 報告の形
+
+- 親エージェントの報告は、`agent-workflow/references/report-template.md` の3点(状況・起きたこと・次にすること)の形で書きます。場面ごとの書き方も、このファイルにあります
+- 進捗は、親が数えずに `workflow-status` で機械的に出します。完了時は `workflow-status --summary` の出力からサマリーを作ります
+
+### yomiyasu による日本語の推敲(任意)
+
+[yomiyasu](https://github.com/nanaism/yomiyasu) は、AI が書いた日本語を推敲する skill です。本リポジトリには**同梱しません**。理由は次の3つです。
+
+1. SKILL.md が大きく、トークンを多く使うため
+2. `yomiyasu_check.py` の実行に Python が要るため
+3. 入れ方と skill の名前が、利用者ごとに違うため
+
+有効にする手順:
+
+1. `npx skills add nanaism/yomiyasu` などで yomiyasu を導入します
+2. `.agents/workflow/config.json` の `text_refine.skill` に、入れ方に合う名前を書きます。名前は、親エージェントの skill 一覧に出る名前です
+3. 必要なら `text_refine.targets`(推敲する場面)と `text_refine.reader`(想定する読み手)を変えます
+
+入れ方と `text_refine.skill` の対応(yomiyasu の資料で分かっているもの):
+
+| 入れ方 | `text_refine.skill` |
+|--------|---------------------|
+| Claude Code の `npx skills add` / `gh skill install` | `yomiyasu` |
+| Claude Code のプラグイン | `yomiyasu:yomiyasu` |
+| Codex | `yomiyasu:yomiyasu` |
+| `npx openskills install` | `yomiyasu` |
+
+それ以外のエージェントは、親の skill 一覧で名前を確かめてください。
+
+推敲される場面は、次の5つです(`targets` の値)。
+
+- `commit`: コミットメッセージの説明
+- `task_done`: タスク1件が done になったときの報告
+- `pr_body`: PR の説明
+- `confirm`: 停止して判断を仰ぐときの報告
+- `summary`: 完了時のサマリー
+
+次のものは推敲されません: 子へのプロンプト(prompt.md・fix-notes.md)、tasks.md・state.json などの管理ファイル、スクリプトの出力、コード、途中経過の報告。
+
+`text_refine.skill` が未設定のまま yomiyasu を導入していると、推敲の場面で知らせが出ます。どのエージェント用に入れた場合も対象です(プロジェクトとホームの `*/skills/yomiyasu/`、Claude Code のプラグイン)。
+
 ## 開発者向け(本リポジトリの開発)
 
 本リポジトリの `.claude` は `.agents` へのジャンクション(標準形)です。
