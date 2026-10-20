@@ -3,7 +3,7 @@ set -euo pipefail
 
 # yomiyasu(文章推敲 skill)への依頼文を config.json の text_refine から機械生成する(推敲そのものは親が行う)。
 # 引数: <target> <input> [--check]
-#       target は summary / confirm / commit / pr_body / task_done のいずれか
+#       target は summary / confirm / commit / pr_body / task_done / tasks のいずれか
 #       --check は推敲済みファイルに対する yomiyasu の記録を探し、判断が要る候補を出す
 # stdout: 推敲しないとき "Refine: off"、(skill 未設定なら導入検出の "Found: <場所>" と "Hint: ..."、)"Next: continue"。
 #       推敲するとき "Refine: <skill>"、"Output: <出力パス>"、"Request: <依頼文>"、"Next: refine"
@@ -11,13 +11,16 @@ set -euo pipefail
 #       yomiyasu なら "Refine: <skill>"、"Output: <出力パス>"、"Record: <記録>"、"Candidates: N"、"Candidate: <キー> <抜粋>"...。
 #       判断が全部あれば "Next: continue" と "Text:" 以降に推敲済みの本文、足りなければ "Undecided: <キー>" と "Next: decide-candidates"、
 #       確かめられなければ "Unchecked: <理由>" と "Next: escalate reason=refine-unchecked"
-# exit: 0=出力あり / 1=使い方・入力不備 / 2=--check で判断待ちの候補あり / 3=--check で確かめられない
+#       tasks の --check は先に推敲前後の構造(見出し・依存・要件ID 等の機械パースする行)を比べ、
+#       同じなら "Structure: same"(yomiyasu なら続けて記録を確かめ、候補が全部判断済みのとき "Next: continue" だけで "Text:" は出さない)、
+#       違えば "Changed: L<行> <抜粋>"、"Refined: L<行> <抜粋>"、"Next: escalate reason=refine-structure-changed"
+# exit: 0=出力あり / 1=使い方・入力不備 / 2=--check で判断待ちの候補あり / 3=--check で確かめられない / 4=--check で tasks の構造が変わった
 
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
 export PYTHONDONTWRITEBYTECODE=1
 
-USAGE="Usage: text-refine.sh <summary|confirm|commit|pr_body|task_done> <input> [--check]"
+USAGE="Usage: text-refine.sh <summary|confirm|commit|pr_body|task_done|tasks> <input> [--check]"
 
 if [ "$#" -ne 2 ] && [ "$#" -ne 3 ]; then
     echo "$USAGE" >&2
@@ -36,7 +39,7 @@ if [ "$#" -eq 3 ]; then
 fi
 
 case "$TARGET" in
-    summary|confirm|commit|pr_body|task_done) ;;
+    summary|confirm|commit|pr_body|task_done|tasks) ;;
     *)
         echo "$USAGE" >&2
         exit 1
@@ -65,7 +68,7 @@ sys.stdout.reconfigure(newline='\n')
 target, input_path, root, config_path, home = sys.argv[1:6]
 check = sys.argv[6] == '1'
 
-DEFAULT_TARGETS = ['summary', 'confirm', 'commit', 'pr_body', 'task_done']
+DEFAULT_TARGETS = ['summary', 'confirm', 'commit', 'pr_body', 'task_done', 'tasks']
 READERS = {
     'expert': '同じ分野の専門家',
     'informed': '分野は違うが技術に詳しい人',
@@ -77,6 +80,7 @@ KINDS = {
     'confirm': 'ユーザーに判断を求める確認の依頼です',
     'commit': 'コミットメッセージの説明の1行です',
     'pr_body': 'PR説明です',
+    'tasks': '子エージェントへの実装依頼と利用者の承認に使うタスク定義です。推敲するのは、要件の本文・前提・解釈・対象外と、各タスクの目的欄・受け入れ基準の文です',
 }
 KEEP_BASE = 'コマンド・パス・タスクID・コミットハッシュ・URL・括弧書きの補足'
 KEEP_EXTRA = {
@@ -85,6 +89,7 @@ KEEP_EXTRA = {
     'confirm': '、「状況・起きたこと・次にすること」の3つのまとまりとその順番',
     'commit': '、1行のまま改行しないこと',
     'pr_body': '、見出しと節の順番、要件一覧とテスト計画の項目',
+    'tasks': '、見出し・グループの区切り行・依存・要件・グループ・参照ファイルの行と参照ファイルの箇条・要件ID(R1: 等)・コードブロックの中身・識別子',
 }
 
 # 設定の読み込み(ファイル・キーが無い・読めなければ skill=null 扱い)
@@ -220,14 +225,77 @@ def is_int(v):
     return isinstance(v, int) and not isinstance(v, bool)
 
 
+def structure(text):
+    keys = []
+    in_code = False
+    in_bullets = False
+    for no, raw_line in enumerate(text.splitlines(), 1):
+        line = raw_line.rstrip()
+        if line.lstrip().startswith('```'):
+            keys.append((no, line))
+            in_code = not in_code
+            in_bullets = False
+            continue
+        if in_code:
+            keys.append((no, line))
+            continue
+        if in_bullets:
+            if re.match(r'^\s*-\s+(?!\*\*)', line):
+                keys.append((no, line))
+                continue
+            in_bullets = False
+        if line.startswith('#') or line.startswith('<!--'):
+            keys.append((no, line))
+            continue
+        m = re.match(r'^\s*-\s+\*\*(依存|要件|グループ|参照ファイル)\*\*:', line)
+        if m:
+            keys.append((no, line))
+            in_bullets = m.group(1) == '参照ファイル'
+            continue
+        m = re.match(r'^- R\d+:', line)
+        if m:
+            keys.append((no, m.group(0)))
+    return keys
+
+
+def read_text(path):
+    with open(path, encoding='utf-8-sig') as f:
+        return f.read()
+
+
+def check_structure():
+    if not os.path.isfile(input_path):
+        unchecked('input not found')
+    if not os.path.isfile(output_path):
+        unchecked('output not found')
+    before = structure(read_text(input_path))
+    after = structure(read_text(output_path))
+    for i in range(max(len(before), len(after))):
+        b = before[i] if i < len(before) else None
+        a = after[i] if i < len(after) else None
+        if b is None or a is None or b[1] != a[1]:
+            print('Changed: L%s %s' % (b[0] if b else '-', excerpt(b[1] if b else '')))
+            print('Refined: L%s %s' % (a[0] if a else '-', excerpt(a[1] if a else '')))
+            print('Next: escalate reason=refine-structure-changed')
+            sys.exit(4)
+    print('Structure: same')
+
+
 def run_check():
-    if skill.strip() not in ('yomiyasu', 'yomiyasu:yomiyasu'):
+    is_tasks = target == 'tasks'
+    if is_tasks:
         print('Refine: ' + skill)
+        print('Output: ' + output_path)
+        check_structure()
+    if skill.strip() not in ('yomiyasu', 'yomiyasu:yomiyasu'):
+        if not is_tasks:
+            print('Refine: ' + skill)
         print('Check: skipped')
         print('Next: continue')
         sys.exit(0)
-    print('Refine: ' + skill)
-    print('Output: ' + output_path)
+    if not is_tasks:
+        print('Refine: ' + skill)
+        print('Output: ' + output_path)
     if not os.path.isfile(output_path):
         unchecked('output not found')
     with open(output_path, 'rb') as f:
@@ -309,6 +377,8 @@ def run_check():
             print('Next: decide-candidates')
             sys.exit(2)
     print('Next: continue')
+    if is_tasks:
+        sys.exit(0)
     print('Text:')
     print(raw.decode('utf-8').rstrip(chr(13) + chr(10)))
     sys.exit(0)

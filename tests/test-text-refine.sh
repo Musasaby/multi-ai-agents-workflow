@@ -219,6 +219,75 @@ t_check_latest_record() {
     cleanup_home
 }
 
+t_tasks_request() {
+    new_home
+    set_refine yomiyasu '["tasks"]'
+    mkdir -p "$PROJ/.agents/workflow/runs/refine"
+    echo "# タスク" > "$PROJ/.agents/workflow/runs/refine/tasks.md"
+    HOME="$TEST_HOME" run_script text-refine.sh tasks .agents/workflow/runs/refine/tasks.md
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_contains "$OUT" "タスク定義です" "場面"
+    assert_contains "$OUT" "グループの区切り行" "変えない物"
+    assert_contains "$OUT" "Next: refine" "次の操作"
+    cleanup_home
+}
+
+t_tasks_check_changed() {
+    new_home
+    set_refine other '["tasks"]'
+    mkdir -p "$PROJ/.agents/workflow/runs/refine"
+    printf '# タスク
+
+## T1: a
+
+- **依存**: なし
+' > "$PROJ/.agents/workflow/runs/refine/tasks.md"
+    printf '# タスク
+
+## T1: a
+
+- **依存**: T2
+' > "$PROJ/.agents/workflow/runs/refine/tasks.refined.md"
+    HOME="$TEST_HOME" run_script text-refine.sh tasks .agents/workflow/runs/refine/tasks.md --check
+    assert_eq 4 "$CODE" "exit 4: $ERR"
+    assert_contains "$OUT" "Changed: L5 - **依存**: なし" "推敲前"
+    assert_contains "$OUT" "Refined: L5 - **依存**: T2" "推敲後"
+    assert_contains "$OUT" "Next: escalate reason=refine-structure-changed" "エスカレーション"
+    cleanup_home
+}
+
+t_tasks_check_same() {
+    new_home
+    set_refine yomiyasu '["tasks"]'
+    mkdir -p "$PROJ/.agents/workflow/runs/refine"
+    printf '# タスク
+
+- R1: 元の本文
+
+## T1: a
+
+- **目的**: 元の目的
+- **依存**: なし
+' > "$PROJ/.agents/workflow/runs/refine/tasks.md"
+    printf '# タスク
+
+- R1: 直した本文
+
+## T1: a
+
+- **目的**: 直した目的
+- **依存**: なし
+' > "$PROJ/.agents/workflow/runs/refine/tasks.refined.md"
+    write_record r1 2026-01-01T00:00:00Z "$PROJ/.agents/workflow/runs/refine/tasks.refined.md" '[]' '[]'
+    HOME="$TEST_HOME" run_script text-refine.sh tasks .agents/workflow/runs/refine/tasks.md --check
+    assert_eq 0 "$CODE" "exit 0: $ERR"
+    assert_contains "$OUT" "Structure: same" "構造は同じ"
+    assert_contains "$OUT" "Candidates: 0" "候補なし"
+    assert_contains "$OUT" "Next: continue" "続行"
+    assert_not_contains "$OUT" "Text:" "本文を出さない"
+    cleanup_home
+}
+
 echo "test-text-refine.sh"
 test_case "text-refine: skill が null なら Refine: off と Next: continue" t_off_when_null
 test_case "text-refine: 未設定ならエージェントを問わず導入を見つけて知らせる" t_detect_installed
@@ -230,4 +299,7 @@ test_case "text-refine: チェックは記録が無いか最終稿のハッシ�
 test_case "text-refine: チェックは候補の判断が無ければ判断を求める" t_check_undecided
 test_case "text-refine: チェックは全候補の判断があれば本文を出して続ける" t_check_decided
 test_case "text-refine: チェックは同じ最終稿の最新の記録を使う" t_check_latest_record
+test_case "text-refine: tasks の場面は機械パースする行を変えないよう依頼する" t_tasks_request
+test_case "text-refine: tasks のチェックは機械パースする行が変わったら止める" t_tasks_check_changed
+test_case "text-refine: tasks のチェックは機械パースする行が同じなら本文を出さずに続ける" t_tasks_check_same
 summary
