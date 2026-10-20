@@ -21,3 +21,10 @@ test-tasks.sh: __pycache__ を作らない
 
 # test-exitcode.sh は存在しない(sh 側では各テストが直接 exit code を断言する)
 test-exitcode.ps1: *
+
+# text-refine の --check は T2 で ps1 に足すまで sh だけ
+test-text-refine.sh: text-refine: チェックは推敲しないときと yomiyasu 以外のとき確かめずに続ける
+test-text-refine.sh: text-refine: チェックは記録が無いか最終稿のハッシュが合わなければ止める
+test-text-refine.sh: text-refine: チェックは候補の判断が無ければ判断を求める
+test-text-refine.sh: text-refine: チェックは全候補の判断があれば本文を出して続ける
+test-text-refine.sh: text-refine: チェックは同じ最終稿の最新の記録を使う
