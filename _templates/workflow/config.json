@@ -26,7 +26,7 @@
   },
   "text_refine": {
     "skill": null,
-    "targets": ["summary", "confirm", "commit", "pr_body", "task_done"],
+    "targets": ["summary", "confirm", "commit", "pr_body", "task_done", "tasks"],
     "reader": "informed"
   },
   "upstream": {

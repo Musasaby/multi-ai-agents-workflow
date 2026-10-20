@@ -73,6 +73,9 @@ yomiyasu は同梱しない。利用者が導入し、config.json の `text_refi
      yomiyasu の検査をもう一度実行してから、`--check` を実行し直す
    - `Next: escalate reason=refine-unchecked` のときは、下書きを使わずに止め、理由(`Unchecked:` 行)を
      利用者に伝える
+   - `Next: escalate reason=refine-structure-changed` のとき(場面 `tasks` で、機械パースする行が推敲で
+     変わったとき)は、下書きを使わずに止め、`Changed:`・`Refined:` 行を利用者に示して判断を仰ぐ。
+     `tasks` の手順の詳細は agent-task-plan の SKILL.md にある
    - `Next: continue` のときは、`Text:` の節の本文を一字も変えずに、報告・コミット・PR 本文に使う
      (返答を書くときに組み立て直さない)。`Text:` が無いときは、今までどおり下書きか `Output:` のファイルを使う
 6. yomiyasu を呼べなかったとき(Unknown skill 等)、`Output:` のファイルができなかったとき、
@@ -82,7 +85,7 @@ yomiyasu は同梱しない。利用者が導入し、config.json の `text_refi
 推敲の対象外:
 
 - 子へのプロンプト(prompt.md・fix-notes.md)
-- tasks.md・state.json などの管理ファイル
+- state.json などの管理ファイル
 - スクリプトの出力
 - コード
 - 途中経過の報告

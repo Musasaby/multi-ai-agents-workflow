@@ -153,6 +153,34 @@ description: GitHub IssueのIDまたは計画ドキュメントのパスを引�
 
 - `.agents/workflow/tasks.md` — タスク定義の正本(子エージェントも参照する)。**LLMが
   生成するのはこのファイルのみ**
+- **tasks.md の推敲(yomiyasu、任意)** — tasks.md を書いた後、state-sync の前に行う。
+  `text_refine.skill` が未設定なら `Next: continue` が返るので、そのまま state-sync に進む。
+  `Hint:` の扱い、`Next: refine` の依頼文の実行、`--check` の候補の判断、yomiyasu を呼べなかったときは
+  `../agent-workflow/references/report-template.md` の「日本語の推敲」に従う(ここには書き写さない)
+
+  1. tasks.md を `.agents/workflow/runs/refine/tasks.md` にコピーする
+  2. 場面 `tasks` で `text-refine` を実行する
+
+     ```powershell
+     .agents/workflow/scripts/text-refine.ps1 tasks .agents/workflow/runs/refine/tasks.md
+     ```
+     ```bash
+     .agents/workflow/scripts/text-refine.sh tasks .agents/workflow/runs/refine/tasks.md
+     ```
+  3. `Next: continue` のときは、そのまま state-sync に進む(tasks.md は書き換えない)
+  4. `Next: refine` のときは、`Request:` の依頼文で推敲し、`--check` を実行する
+
+     ```powershell
+     .agents/workflow/scripts/text-refine.ps1 tasks .agents/workflow/runs/refine/tasks.md -Check
+     ```
+     ```bash
+     .agents/workflow/scripts/text-refine.sh tasks .agents/workflow/runs/refine/tasks.md --check
+     ```
+     - `Next: continue` のときは、`Output:` のファイル(`.agents/workflow/runs/refine/tasks.refined.md`)で
+       `.agents/workflow/tasks.md` を置き換えてから、state-sync に進む
+     - `Next: escalate reason=refine-structure-changed` のとき(機械パースする行が推敲で変わった)は、
+       **state-sync に進まずに止める**。`Changed:`・`Refined:` 行を利用者に示し、推敲前の tasks.md を使うか、
+       推敲後の文を直すかを決めてもらう
 - `.agents/workflow/state.json` — LLMは生成しない。tasks.md を書き終えたら
   `scripts/state-sync`(PowerShell: `.agents/workflow/scripts/state-sync.ps1` / POSIX:
   `state-sync.sh`)を `--init` オプションで実行し、機械生成する。`--source` には
@@ -197,6 +225,7 @@ stdout の `Requirement` 行(`Requirement R1: T1, T3` / `Requirement なし: T5`
 
 対応表と分解結果(タスク一覧と受け入れ基準)を提示し、承認を得る。修正を求められた場合は
 tasks.md を直し、`state-sync`(`--init` なし)で state.json を同期してから再提示する。
+この修正では推敲し直さなくてよい(利用者が承認の場で文を直すため)。
 タスクの見出し(タイトル)を修正した場合も同期対象で、tasks.md に合わせて state.json の
 `title` が更新される(変更があったタスクごとに `Updated title: <ID>` が出力される)。
 
@@ -246,6 +275,13 @@ git commit -m "chore: <計画ソース> のタスク計画を作成"
 3. **依存**: 既存タスク(`done` 済みタスクも含む)を依存先にしてよい。`done`
    タスクへの依存は、引き継ぎガードが `report.md` の存在を保証しているため
    問題なく解決できる
+3a. **追記セクションの推敲(yomiyasu、任意)**: 手順2で追記するセクションは、tasks.md に書く前に
+   `.agents/workflow/runs/refine/tasks.md` に書く。§3 の「tasks.md の推敲」と同じ手順
+   (`text-refine tasks .agents/workflow/runs/refine/tasks.md` → `Next: refine` なら依頼文で推敲して `--check`)で
+   推敲・確認し、`Next: continue` になったら `Output:` のファイルの内容を tasks.md の末尾に足す
+   (推敲しないとき、`Next: continue` が最初に返ったときは、下書きを足す)。
+   `refine-structure-changed` のときは tasks.md に足さず、state-sync に進まずに止めて利用者に判断を仰ぐ。
+   既存のセクションは推敲に渡さない
 4. **state.json への反映**: `state-sync` を `--init` なしで実行し、追加分のみを
    `pending` として追記する(既存タスクの `status` / `retries` / `commit` は
    一切変更されない)

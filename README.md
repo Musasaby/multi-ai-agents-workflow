@@ -173,15 +173,16 @@ bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --overw
 
 それ以外のエージェントは、親の skill 一覧で名前を確かめてください。
 
-推敲される場面は、次の5つです(`targets` の値)。
+推敲される場面は、次の6つです(`targets` の値)。
 
 - `commit`: コミットメッセージの説明
 - `task_done`: タスク1件が done になったときの報告
 - `pr_body`: PR の説明
 - `confirm`: 停止して判断を仰ぐときの報告
 - `summary`: 完了時のサマリー
+- `tasks`: agent-task-plan で書く tasks.md(要件・前提・解釈・対象外・目的欄・受け入れ基準の文)
 
-次のものは推敲されません: 子へのプロンプト(prompt.md・fix-notes.md)、tasks.md・state.json などの管理ファイル、スクリプトの出力、コード、途中経過の報告。
+次のものは推敲されません: 子へのプロンプト(prompt.md・fix-notes.md)、state.json などの管理ファイル、スクリプトの出力、コード、途中経過の報告。
 
 `text_refine.skill` が未設定のまま yomiyasu を導入していると、推敲の場面で知らせが出ます。どのエージェント用に入れた場合も対象です(プロジェクトとホームの `*/skills/yomiyasu/`、Claude Code のプラグイン)。
 
