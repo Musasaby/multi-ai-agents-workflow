@@ -152,6 +152,9 @@
 (assistantのテキスト・使用ツール名と入力要約・`result` の要旨等)に変換して `output.log` へ逐次書き出す
 (パース不能行はそのまま `output.log` に通す)。`output.log` は実行中に随時更新されるため
 `tail -f` / `Get-Content -Wait` で閲覧できる。
+`[tool_use]` 行の入力の要約は 300 文字で切り詰める。ツールが `Edit`・`Write`・`MultiEdit`・`NotebookEdit` のときは、
+本文(`old_string`・`new_string`・`content`・`edits`・`new_source`)を外して `file_path` 等だけを載せる
+(本文に書かれたパスの文字列をプロジェクト外アクセスと誤検知しないため。#87)。本文を含む全文は `output.jsonl` に残る。
 
 **注意**: `--output-format text`(デフォルト)は子CLI側の出力がバッファリングされ、
 プロセス終了までの実行中の逐次閲覧ができない。実行中の途中経過を見たい場合は
@@ -535,7 +538,9 @@ nohup .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1 &
   1) `/tmp`・`/var/tmp` の参照、2) ホームディレクトリの参照(`~/`・`$HOME`・`${HOME}`・
   `$env:HOME`・`$env:USERPROFILE`・`%USERPROFILE%`)、3) Windows のユーザー一時ディレクトリの参照
   (`AppData\Local\Temp`・`AppData/Local/Temp`)。2 と 3 は大文字小文字を区別しない。`$env:TEMP`・`%TEMP%`・
-  `$TMPDIR` は `dispatch-run` がプロジェクト内の `tmp/` を指させるため検出しない
+  `$TMPDIR` は `dispatch-run` がプロジェクト内の `tmp/` を指させるため検出しない。
+  stream-json の `[tool_use]` 行には Edit・Write 等の本文が載らないため、ファイル本文中の `~/` 等には反応しない
+  (上記「stream-json の逐次変換」を参照)
 - **完了報告の保存**: ok(exit 0)と no-changes(exit 7)のとき、最後の完了報告のブロックを
   `runs/<ID>-<N>/report.md` に保存する(既存は上書きしない)。出力の `Report:` 行にパスを出す
 - **完了報告**: `output.log` で**最後に出現する** `## 完了報告` 行だけを対象にする。
