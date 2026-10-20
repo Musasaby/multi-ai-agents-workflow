@@ -232,18 +232,36 @@ PR 作成の前に、要件が満たされているかを親が確かめる。�
 4. **PR の検証**: `gh pr view <作業ブランチ> --json url,state,baseRefName` を実行し、
    PR が存在し、`baseRefName` が `main` であることを確認する。確認できなければ、
    `output.log` の末尾を添えてユーザーに報告する
-5. PR URL をユーザーに報告して停止する(マージはユーザーが行う)
+5. **PR 本文の推敲**: `text-refine pr_body .agents/workflow/runs/pr-<N>-1/pr-body.md` を実行する
+   (PowerShell: `.agents/workflow/scripts/text-refine.ps1` / bash: `.agents/workflow/scripts/text-refine.sh`)。
+   `Next: refine` なら、`Request:` の依頼文どおりに推敲させる。`gh pr view <作業ブランチ> --json number` で
+   PR 番号を取り、`gh api -X PATCH "repos/{owner}/{repo}/pulls/<number>" -F body=@<Output: のパス>` で
+   本文を更新する。`Next: continue` なら、この手順は飛ばす
+6. PR URL をユーザーに報告して停止する(マージはユーザーが行う)
 
 ## 完了時のサマリー報告
 
-- タスクごとの結果(done/failed、コミットハッシュ、リトライ回数)
-- 残課題・子エージェントの報告にあった備考
-- 要件ごとの充足状況(`req-status` の一覧と判断)
+先に `workflow-status --summary` を実行する。
+
+```powershell
+.agents/workflow/scripts/workflow-status.ps1 -Summary
+```
+```bash
+.agents/workflow/scripts/workflow-status.sh --summary
+```
+
+出力(Task 行・Requirement 行・Comprehension 行・Worktree 行・PR 行)をもとに、
+`references/report-template.md` の「完了時のサマリー」の形で `.agents/workflow/runs/refine/summary.md` に
+下書きする。テンプレートの「日本語の推敲」の手順(場面 `summary`)を通してから、ユーザーに示す。
+項目と、作るときに使う行は次のとおり。
+
+- タスクごとの結果(done/failed、コミットハッシュ、リトライ回数): Task 行
+- 残課題・子エージェントの報告にあった備考: 各タスクの完了報告
+- 要件ごとの充足状況(判断を含む): Requirement 行
 - 次のアクション提案(PR が未作成なら「PR作成(子への単発依頼)」を実行し、PR URL を報告する。
-  マージはユーザーが行う)
-- **理解確認**: `.agents/workflow/comprehension/` に未回答の質問ファイル(`**あなたの回答**:` がコメントアウトのままのファイル)がある場合、その一覧を提示する
-- **git status のクリーン確認**: `git status --porcelain` を実行し、出力が空であることを確認する。
-  空でない場合(コミット漏れ・想定外の untracked ファイルが残っている等)は、その内容を
+  マージはユーザーが行う): PR 行
+- **理解確認**: 未回答の質問ファイルの一覧を提示する: Comprehension 行
+- **git status のクリーン確認**: Worktree 行で確かめる。dirty の場合は、その内容を
   ユーザーに報告する(勝手にコミット・削除はしない)
 
 ## ユーザーへの報告
@@ -252,10 +270,15 @@ PR 作成の前に、要件が満たされているかを親が確かめる。�
   読み込まれるため、ここに明記しておくことで日本語指定の効きを強くする)。委譲先の
   `/agent-dispatch` `/agent-review-commit` 等のサブskillが返す報告も、親がユーザーに
   向けて中継・要約する際は日本語で行うこと
-- **タスクごとのループを1周するたび**に最低限報告する項目:
-  - タスクID・結果(done / failed)
+- 報告の形は `references/report-template.md` に従う
+- **タスク1件が done になったとき**(リトライの途中では報告しない)に最低限報告する項目:
+  - タスクID・結果(done)
   - コミットハッシュ(コミット済みの場合)
   - リトライ回数
-- 出力の極端な減少や英語化が疑われる兆候(サブskillからの報告が要約されずそのまま
-  省略される、日本語での言い換えが行われない等)に気づいた場合は、報告を省略せず
-  「完了時のサマリー報告」の形式で改めて明示すること
+
+  テンプレートの該当場面に従って `.agents/workflow/runs/refine/task_done.md` に下書きし、
+  場面 `task_done` の推敲を通してから報告する
+- ユーザーに判断を求めて停止するときは、場面 `confirm`(`.agents/workflow/runs/refine/confirm.md`)の
+  推敲を通してから報告する
+- 報告が短くなりすぎた・状況が分からなくなったときは `workflow-status` を実行し、その出力から
+  テンプレートの形で報告し直す
