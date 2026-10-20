@@ -259,7 +259,7 @@ pwsh -NoProfile -File tests/skill-size.ps1
 
 - ワークフローのループで読み込まれる 3 つの skill の `SKILL.md` の合計が 30,000 バイトを超えたら失敗にする
 - 各 `SKILL.md` が 18,000 バイトを超えたら失敗にする
-- `SKILL.md` から `references/*.md` へのリンク先が存在しなければ失敗にする
+- `SKILL.md` から `references/*.md` へのリンク先が存在しなければ失敗にする(バッククォートの `references/x.md` と Markdown リンク `[説明](references/x.md#見出し)` の両方。見出しは検査しない)
 
 ### CI
 

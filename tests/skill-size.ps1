@@ -48,6 +48,7 @@ foreach ($f in $skillFiles) {
     }
 }
 $pattern = '`(?:([\w-]+)/)?references/([\w.-]+\.md)'
+$linkPattern = '\]\(([^)\s#]*references/[\w.-]+\.md)(?:#[^)]*)?\)'
 foreach ($f in $mdFiles) {
     $dir = Split-Path -Parent $f
     $skillDir = if ((Split-Path -Leaf $dir) -eq 'references') { Split-Path -Parent $dir } else { $dir }
@@ -56,6 +57,15 @@ foreach ($f in $mdFiles) {
     foreach ($m in [regex]::Matches($text, $pattern)) {
         $base = if ($m.Groups[1].Success) { Join-Path $root $m.Groups[1].Value } else { $skillDir }
         $target = Join-Path (Join-Path $base 'references') $m.Groups[2].Value
+        if (-not (Test-Path -LiteralPath $target -PathType Leaf)) {
+            $shown = $target.Substring($root.Length).TrimStart('\', '/') -replace '\\', '/'
+            Write-Host "FAIL: broken reference $rel -> $shown"
+            $failed = $true
+        }
+    }
+    # Markdown リンク [説明](相対パス/references/x.md#見出し)。リンクを含むファイルのディレクトリからの相対パスで解決する
+    foreach ($m in [regex]::Matches($text, $linkPattern)) {
+        $target = [System.IO.Path]::GetFullPath((Join-Path $dir $m.Groups[1].Value))
         if (-not (Test-Path -LiteralPath $target -PathType Leaf)) {
             $shown = $target.Substring($root.Length).TrimStart('\', '/') -replace '\\', '/'
             Write-Host "FAIL: broken reference $rel -> $shown"
