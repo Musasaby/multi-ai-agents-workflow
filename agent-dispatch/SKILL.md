@@ -57,7 +57,7 @@ stdout の最後の `Next:` 行で分岐する(exit code と reason は `.agents
 ```
 
 `--max-wait` は親ツールのコマンド実行上限より短くする(上限10分なら 480)。`Next: wait` なら、
-`references/report-template.md` の「子の実行待ち」の1行を伝えてから同じコマンドを再実行する。
+`agent-workflow/references/report-template.md` の「子の実行待ち」の1行を伝えてから同じコマンドを再実行する。
 `Disabled checks:` が `none` 以外なら、報告に添えて `output.log` の末尾を目で確かめる
 ([無効な検査の扱い](references/troubleshooting.md#無効な検査の扱い))。
 ハングや `idle-timeout` は `cli_log` の ERROR 行を見る
