@@ -5,251 +5,119 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
 
 # 子エージェントへの実装dispatch
 
+前提・解釈: コード例は `.sh` 版だけを示す。PowerShell では `.agents/workflow/scripts/<名>.ps1` を使い、位置引数を `-TaskId` `-Attempt` `-MaxWait` の名前付き引数に読み替える。報告・説明はすべて日本語で行う(子の出力が英語でも同じ)。
+
 タスクを子エージェントCLIに依頼し、完了(プロセス終了)を検知して結果を検証する。
 
 ## 引数
 
-- 第1引数: タスクID(例: `T1`)。省略時は `next-task`(PowerShell:
-  `.agents/workflow/scripts/next-task.ps1` / POSIX: `next-task.sh`)が出力するタスク
-  (state.json の並び順ではなく、依存がすべて `done` の最初の `pending` タスク)
+- 第1引数: タスクID(例: `T1`)。省略時は `next-task` が出力するタスク
+  (依存がすべて `done` の最初の `pending` タスク)
 - `--agent-cmd "<テンプレート>"`: 子エージェントCLIのコマンドテンプレート。省略時は
-  `.agents/workflow/config.json` の `child_agent.command_template` を使う。
-  テンプレート内の `{prompt}` がタスクプロンプトに展開される
+  `.agents/workflow/config.json` の `child_agent.command_template`。`{prompt}` がタスクプロンプトに展開される
 
 エージェント名をこのskill内に固定しないこと。テンプレートが正本である。
+子CLIの種類は `child_agent.profile` で指定する(`.agents/workflow/README.md` の「子CLIのプロファイル」)。
+子CLI固有の確かめ方は `references/<CLI>.md`(opencode: `references/opencode.md`)。
 
 ## 手順
 
 ### 1. 起動(dispatch-start)
 
-`dispatch-start`(PowerShell: `.agents/workflow/scripts/dispatch-start.ps1 -TaskId <ID> [-Attempt <n>]` /
-POSIX: `dispatch-start.sh <ID> [<n>]`)を1回実行する。事前チェック(`branch-check --state`・作業ツリーの
-クリーン確認・タスクの状態・疎通確認・初回のウォームアップ)、プロンプト生成、`task-state start`、
+`dispatch-start.sh <ID> [<試行回数>]` を1回実行する。事前チェック・プロンプト生成・`task-state start`・
 デタッチ起動をスクリプトが順に行う。
 
-```powershell
-.agents/workflow/scripts/dispatch-start.ps1 -TaskId T3
-```
 ```bash
 .agents/workflow/scripts/dispatch-start.sh T3
 ```
 
-stdout の最後の `Next:` 行で機械的に分岐する(exit code の帯と reason は
-`.agents/workflow/README.md` の dispatch-start の節):
+stdout の最後の `Next:` 行で分岐する(exit code と reason は `.agents/workflow/README.md` の dispatch-start の節):
 
-- **`Next: wait`**: 起動できた。ユーザーに Run ID・`Log:`・`Watch:` の行を報告して §2 へ進む
-- **`Next: switch-branch` / `Next: escalate`**: 起動していない。reason と stderr の内容をユーザーに
-  説明して中断する。`reason=launch`(`dispatch-run` の起動を確認できない)の場合は、state.json が
-  `in_progress` のままなので、原因を直した後に同じ引数で `dispatch-start` を再実行できる
+- **`Next: wait`**: 起動できた。Run ID・`Log:`・`Watch:` の行をユーザーに報告して §2 へ
+- **`Next: switch-branch` / `Next: escalate`**: 起動していない。reason と stderr をユーザーに説明して中断する。
+  `reason=launch` は state.json が `in_progress` のままなので、原因を直して同じ引数で再実行できる
 
-**親は生成された prompt.md の全文を会話に読み込まない**(読み込むとスクリプト化によるトークン節約が
-無意味になる)。異常が疑われる場合のみ、先頭数十行を確認するにとどめる。
+**親は生成された prompt.md の全文を読み込まない**(異常が疑われる場合のみ先頭数十行)。
 
 **リトライ(試行回数 2 以上)**: 先に、レビュー指摘事項を `runs/<タスクID>-<試行回数>/fix-notes.md` に
-親が保存する(ここだけは親の LLM 出力)。生成スクリプトがそれをプロンプト冒頭に結合する。
-`fix-notes.md` が無いと `dispatch-start` が止まる(前の試行の変更が作業ツリーに残っていれば
-exit 20 `reason=dirty-tree` で stderr に `fix-notes.md not found` を出し、作業ツリーがクリーンなら
-exit 43 `reason=prompt-gen`)。
+親が保存する(生成スクリプトがプロンプト冒頭に結合する)。無いと `dispatch-start` が止まる。
+指摘が複雑で収まらない場合は
+[手動プロンプト作成](references/troubleshooting.md#手動プロンプト作成)。
 
-**フォールバック(手動プロンプト作成)**: 指摘事項が複雑で fix-notes に収まらない場合のみ、
-`dispatch-prompt-gen` を使わず、親が `runs/<タスクID>-<試行回数>/prompt.md` を直接書く。
-`## 実装ルール`・テスト検証指示・完了報告フォーマットは `dispatch-prompt-template.md` に準じる。
-書いたら `task-state <ID> start` の後、`dispatch-run` を直接デタッチ起動する
-(`run_in_background` での直接起動は行わない):
-
-```powershell
-Start-Process pwsh -ArgumentList "-NoProfile -File .agents/workflow/scripts/dispatch-run.ps1 -TaskId T1 -Attempt 2"
-```
-```bash
-nohup .agents/workflow/scripts/dispatch-run.sh T1 2 > /dev/null 2>&1 &
-```
-
-子CLIの種類は `child_agent.profile` で指定する(`.agents/workflow/README.md` の「子CLIのプロファイル」)。
-子CLI固有の確かめ方は `references/<CLI>.md`(opencode: `references/opencode.md`)に書く。
-
-`config.json` の `child_agent.timeout_seconds` は `dispatch-wait`(§2)が判定する。
-タイムアウトを超えた場合はタスクを `in_progress` のままユーザーに報告する。
+`child_agent.timeout_seconds` は `dispatch-wait`(§2)が判定する。超えたらタスクを `in_progress` のまま報告する。
 
 ### 2. 完了検知と結果検証
 
-- **完了検知は `dispatch-wait` で行う**。`dispatch-wait` は `done` マーカーを待ち、
-  `config.json` の `child_agent.timeout_seconds` を超えたかを判定し、done を検知したら
-  `dispatch-check` を実行してその結果をそのまま返す
-  ```powershell
-  .agents/workflow/scripts/dispatch-wait.ps1 -TaskId T1 -Attempt 1 -MaxWait 480
-  ```
-  ```bash
-  .agents/workflow/scripts/dispatch-wait.sh T1 1 --max-wait 480
-  ```
-  `--max-wait`(`-MaxWait`)は親ツールのコマンド実行上限より短くする(例: 上限10分なら 480)。
-  出力の最後の `Next:` 行が `wait` なら、再実行の前に、`references/report-template.md` の
-  「子の実行待ち」の1行(経過時間とログの最終更新)を利用者に伝え、そのあと同じコマンドを再実行する
-  (累計経過時間は `dispatch-wait` が判定する)
-- **子のエラーの切り分け**: `child_agent.idle_timeout_seconds` が設定されている場合、その時間
-  `output.log` が更新されずに経過すると `dispatch-run` が子を止め、`done` マーカーが
-  `EXIT:idle-timeout` で書き出される。ハングや `idle-timeout` では、
-  `child_agent.cli_log`(子CLI自身のログ。未設定なら子CLIのデフォルトのログ先。
-  子CLI固有の場所は `references/<CLI>.md`。opencode: `references/opencode.md`)の末尾の
-  ERROR 行を確認する(`dispatch-check` も `CLI log:` 欄に出力する)。利用上限(usage/rate limit)・
-  プロバイダー障害(エンドポイントの 429・unavailable 等)を表す行があれば、
-  子の作業の失敗ではなくプロバイダー側の問題が原因である可能性が高い(`Provider error: yes`)
-- **無効な検査の扱い**: `dispatch-check` の `Disabled checks:` が `none` 以外なら、無効な検査
-  (その子CLIでは検知できないこと)をユーザーへの報告に添え、検証では `output.log` の末尾を目で確かめる
-- **出力の最後の `Next:` 行で機械的に分岐する**(`EXIT` の値を親が目視で解釈しない。
-  非0終了の見落としを防ぐため)。`dispatch-check` は終了状態の区分・管理ファイルの改ざん検知(Guard)・
-  権限拒否の有無・完了報告の判定・変更件数・`git status --porcelain`・`git diff --stat`・
-  `output.log` の末尾30行をまとめて出力し、完了報告を `report.md` に保存する(出力の `Report:` 行)。
-  完了報告は「`output.log` の最後の `## 完了報告`」だけを対象にし、
-  その後にツール実行の記録が続く場合や、必須項目(`- 変更ファイル:` / `- テスト結果:`。
-  PR 作成の run は `- PR URL:`。区切りは全角 `：` も可)が無い・テンプレートのままの場合は無効とする
-  (子がテンプレートを表示しただけの行を完了報告と誤認しないため)。`dispatch-check` 単体でも実行できる
-  (`dispatch-check.ps1 -TaskId T1 -Attempt 1` / `dispatch-check.sh T1 1`)
+完了検知は `dispatch-wait` で行う。`done` マーカーを待ち、タイムアウトを判定し、done を検知したら
+`dispatch-check` を実行してその結果を返す(`dispatch-check` の出力項目と完了報告の有効条件は
+[dispatch-check の判定](references/troubleshooting.md#dispatch-check-の判定))。
 
-#### `Next: review <ID>`
+```bash
+.agents/workflow/scripts/dispatch-wait.sh T1 1 --max-wait 480
+```
 
-正常終了かつ完了報告あり: 下記の検証に進む。
+`--max-wait` は親ツールのコマンド実行上限より短くする(上限10分なら 480)。`Next: wait` なら、
+`references/report-template.md` の「子の実行待ち」の1行を伝えてから同じコマンドを再実行する。
+`Disabled checks:` が `none` 以外なら、報告に添えて `output.log` の末尾を目で確かめる
+([無効な検査の扱い](references/troubleshooting.md#無効な検査の扱い))。
+ハングや `idle-timeout` は `cli_log` の ERROR 行を見る
+([子のエラーの切り分け](references/troubleshooting.md#子のエラーの切り分け))。
 
-#### `Next: escalate reason=timeout`
+出力の最後の `Next:` 行で機械的に分岐する(`EXIT` の値を目視で解釈しない)。
+各 reason の詳細は [reason ごとの詳細](references/troubleshooting.md#reason-ごとの詳細) の同名の見出し。
 
-経過が `child_agent.timeout_seconds` を超えた(`dispatch-wait` の exit 3)。タスクを
-`in_progress` のままユーザーに報告する。ハングの可能性があるため、`output.log` の末尾と
-`cli_log` の ERROR 行も添える。
-
-#### `Next: escalate reason=provider-error` / `reason=idle-timeout`
-
-子CLIが無応答になった・利用上限やプロバイダー障害に当たった。子の作業の失敗ではないため
-`task-state <タスクID> retry` は使わない(retries は増やさない。state.json は
-`in_progress` のまま)。ユーザーに状況(利用上限・プロバイダー障害で中断した旨と
-成果物の有無)を報告し、モデル(`config.json` の `child_agent.command_template`)の
-切り替えの承認を得てから、`task-state <タスクID> start` のまま次の試行番号で
-再dispatch する。試行番号 2 以上の再dispatch には `fix-notes.md` が要るため、
-「前回はプロバイダーの利用上限(または障害)で中断した。作業ツリーの変更は無い」等の
-事実を書く(レビュー指摘事項ではないが、テンプレート経由で子に引き継がれる)。
-
-#### `Next: escalate reason=abnormal-exit`
-
-異常終了(非0・`signal:*`・`crashed:*`): レビューには進まない。
-出力された成果物の有無(`git status` / `git diff --stat` に変更があるか、
-`output.log` の末尾で作業がどこまで進んだか、完了報告があるか)をユーザーに報告し、
-再dispatch するか、成果物を引き取るかの判断を仰ぐ。`signal:*` の場合は、外部から
-強制終了された(メモリ逼迫・監督プロセス等)可能性が高いことも添える。
-
-#### `Next: escalate reason=tampered`
-
-管理ファイルの改ざん・git 状態の変化(`prompt.md`・`state.json`・`tasks.md`・
-`config.json` が `dispatch-run` の起動時から変わった・消えた、`guard.sha256`・`output.log`・
-`git-state.txt` が無い、`output.log` が実行中に切り詰められた): レビューには進まない。
-`Guard:` 欄の内容を添えてユーザーに報告する。`state.json` / `tasks.md` が変わっている場合は、
-子の変更を戻すか(`git diff` / アーカイブとの比較)をユーザーに確認する。
-
-`Guard:` 欄に `git changed:` がある場合(本物のリポジトリの git 状態が変わった:
-`git-state.txt` の記録と現在の git 状態の比較で検出): レビューには進まない。
-`git log` / `git reflog` / `git config --local --list` で変化の内容(どのコミット・参照・設定が
-変わったか)を確かめ、ユーザーに報告して復旧の要否を確認する。
-
-#### `Next: escalate reason=permission-denied`
-
-権限拒否で中断(子CLIがプロジェクト外へのアクセス等を拒否されて終わった): レビューには進まない。
-`Permission denied:` 欄の拒否されたコマンドを添えてユーザーに報告する。
-再dispatch する場合は、拒否された操作をしなくて済むよう fix-notes に方針を書く。
-
-#### `Next: escalate reason=outside-access`
-
-プロジェクト外アクセスの検出(`Outside access: yes`): レビューには進まない。
-`Outside access:` 欄の該当行を添えてユーザーに報告する。再dispatch する場合は、
-fix-notes に一時ファイルの置き場所(`$TMPDIR`)を書く(dispatch-run が
-`$TMPDIR`・`$TEMP`・`$TMP` をプロジェクト内の `runs/<タスクID>-<試行回数>/tmp/` に
-設定済みなので、子はそこに置くことで検出を避けられる)。
-
-#### `Next: escalate reason=token-limit`
-
-子は最後のツール実行の後に応答を出力しきれずに打ち切られた(出力トークン上限に達した)
-可能性が高い。確認方法は子CLIごとに異なる(セッションの記録で最後の assistant メッセージが
-出力トークン上限で打ち切られていないかを見る。opencode: `references/opencode.md`)。
-親が確かめられない場合は、ユーザーに確認を依頼する。
-この原因が濃厚な場合は、retries を消費する通常の再 dispatch の前に、次の対処のどれかを
-ユーザーに提案する:
-1. タスクを細かく分ける(`agent-task-plan` の追加モードでタスクを分割する)
-2. 実装方法・設計判断を計画(`tasks.md`)に具体的に書き、子の調査・推論量を減らす
-3. 子のモデルの推論量(思考モード・reasoning トークン上限等)を下げる
-
-#### `Next: escalate reason=no-report`
-
-完了報告が無い・無効: `Completion report:` 欄の理由と成果物の有無を添えて
-ユーザーに報告する(子が途中で応答を終えた可能性がある)。
-
-#### `Next: escalate reason=no-changes`
-
-変更0件(完了報告はあるが作業ツリーに変更が無い): タスクの受け入れ基準が
-ファイルの変更を求めているなら失敗として扱い、ユーザーに報告する。調査だけのタスクなど
-変更が無いのが正しい場合に限り、下記の検証に進んでよい。
-
-#### `Next:` 行が無い
-
-exit 1(使い方の誤り): stderr の内容をユーザーに伝える。
+- **`Next: review <ID>`**: 正常終了かつ完了報告あり。下記の検証へ
+- **`reason=timeout`**: 経過が `timeout_seconds` を超えた。`in_progress` のまま `output.log` 末尾を添えて報告
+  ([詳細](references/troubleshooting.md#timeout))
+- **`reason=provider-error` / `idle-timeout`**: 利用上限・障害・無応答。`retry` は使わず、ユーザーの承認を得て
+  モデルを替え、fix-notes に事実を書いて次の試行番号で再dispatch
+  ([詳細](references/troubleshooting.md#provider-error--idle-timeout))
+- **`reason=abnormal-exit`**: レビューに進まない。成果物の有無を報告し、再dispatch か引き取りかを仰ぐ
+  ([詳細](references/troubleshooting.md#abnormal-exit))
+- **`reason=tampered`**: レビューに進まない。`Guard:` 欄を添えて報告し、`git changed:` があれば git の変化を調べて復旧の要否を確認
+  ([詳細](references/troubleshooting.md#tampered))
+- **`reason=permission-denied`**: 拒否されたコマンドを添えて報告。再dispatch は fix-notes に方針を書く
+  ([詳細](references/troubleshooting.md#permission-denied))
+- **`reason=outside-access`**: 該当行を添えて報告。再dispatch は fix-notes に `$TMPDIR` の使用を書く
+  ([詳細](references/troubleshooting.md#outside-access))
+- **`reason=token-limit`**: 出力上限で打ち切られた可能性。通常の再dispatch の前に、タスク分割・計画の具体化・
+  推論量の低減のどれかをユーザーに提案
+  ([詳細](references/troubleshooting.md#token-limit))
+- **`reason=no-report`**: 完了報告が無い・無効。`Completion report:` 欄の理由を添えて報告
+  ([詳細](references/troubleshooting.md#no-report))
+- **`reason=no-changes`**: 変更0件。受け入れ基準が変更を求めるなら失敗として報告。変更が無いのが正しい
+  調査タスクに限り検証へ進んでよい([詳細](references/troubleshooting.md#no-changes))
+- **`Next:` 行が無い**: exit 1(使い方の誤り)。stderr をユーザーに伝える
 
 #### 検証
 
-- 完了確認後、子エージェントの出力(`output.log`)と `git status` / `git diff --stat` を突き合わせる:
-  - 完了報告フォーマットが出力に含まれているか
-  - テスト結果が「全件パス」か。失敗が残っている・テスト結果の記載がない場合は
-    **レビューに進まず**、その旨を指示に含めて再dispatchする(`max_fix_retries` の範囲内)
-  - 変更ファイル一覧と実際の diff が大きく食い違う場合は異常としてユーザーに報告
+`output.log` と `git status` / `git diff --stat` を突き合わせる:
+
+- 完了報告フォーマットが出力に含まれているか
+- テスト結果が「全件パス」か。失敗が残る・記載が無い場合は**レビューに進まず**、その旨を指示に含めて
+  再dispatchする(`max_fix_retries` の範囲内)
+- 変更ファイル一覧と実際の diff が大きく食い違う場合は異常としてユーザーに報告
 
 ### 3. 状態更新
 
-検証を通過したら `task-state <タスクID> review` で state.json を `in_review` に更新し、レビューフェーズ
-(`/agent-review-commit`)に引き継ぐ。子エージェントの完了報告は `dispatch-check` が
-`.agents/workflow/runs/<タスクID>-<試行回数>/report.md` に保存済み(出力の `Report:` 行。手で保存しない)。
-この `report.md` は後続タスクの `dispatch-prompt-gen`
-実行時に引き継ぎ資料として機械結合されるため、削除しないこと(`runs/` は `.gitignore`
-済みでコミットはされない)。`output.log` も同様に残す(リトライ時の比較や事後調査に使えるため)。
+検証を通過したら `task-state <タスクID> review` で `in_review` に更新し、`/agent-review-commit` に引き継ぐ。
+完了報告は `dispatch-check` が `runs/<タスクID>-<試行回数>/report.md` に保存済み(手で保存しない)。
+`report.md` は後続タスクの `dispatch-prompt-gen` が引き継ぎ資料として結合するため削除しない。
+`output.log` も残す(リトライ時の比較や事後調査用)。
 
 ## ユーザーへの報告
 
-- **報告・説明はすべて日本語で行うこと**(AGENTS.md の再掲。このskillは実行のたびに
-  読み込まれるため、ここに明記しておくことで日本語指定の効きを強くする)。子エージェントの
-  出力が英語であっても、親がユーザーに向けて要約・報告する内容は日本語にすること
-- 報告の書き方は `agent-workflow/references/report-template.md` に従う(状況・起きたこと・次にすること。
-  内部語は言葉に直し、必要なら括弧で補足してよい)。この skill では次の場面を使う
-- **デタッチ起動直後**(§1完了時。テンプレートの「子の起動直後」)に入れる事実:
-  - タスクID・試行回数(例: `T3-1`)
-  - ログファイルパス(`output.log` の絶対/相対パス)
-  - 実行中ログをリアルタイム閲覧するコマンド(§1の `Watch:` 行)
-- **実行待ち**(§2。テンプレートの「子の実行待ち」): 待ちが続く間は1行で経過を伝える
-- **完了検知後**(§2完了時。テンプレートの「子の完了検知後」)に入れる事実:
-  - 子の作業が正常に終わったか(終了の状態は括弧で補足してよい)と、`dispatch-check` の検証結果
-  - テスト結果の検証結果(全件パスか、失敗があればその概要)
-  - 次のフェーズ(レビューへ進む/再dispatchする/ユーザーへエスカレーションする)のどれになったか
-  - `Disabled checks:` が `none` 以外なら、無効な検査の内容
+報告は `agent-workflow/references/report-template.md` に従う(状況・起きたこと・次にすること)。
+この skill で使う場面:
+
+- **デタッチ起動直後**(「子の起動直後」): タスクID・試行回数(例: `T3-1`)、`output.log` のパス、`Watch:` 行
+- **実行待ち**(「子の実行待ち」): 待ちが続く間は1行で経過を伝える
+- **完了検知後**(「子の完了検知後」): 子が正常に終わったかと `dispatch-check` の検証結果、テスト結果、
+  次のフェーズ(レビュー/再dispatch/エスカレーション)、`Disabled checks:` が `none` 以外ならその内容
 
 ## トラブルシューティング
 
-### `.agents/workflow/.config` 配下のディレクトリ作成が拒否される
-
-(`child_agent.isolate_xdg: true` で使っている場合)`sandbox` 環境で `.agents/workflow/.config` 配下のディレクトリの作成が権限不足等で拒否される場合は、以下のいずれかで対処する。
-
-- **昇格実行**: ディレクトリ作成コマンドを管理者権限または昇格したコンテキストで実行する
-- **事前作成**: `/agents-md-setup` 等のセットアップ時に、リポジトリのセットアップ権限で必要なディレクトリを事前に作成しておく(子CLI固有のディレクトリは `references/<CLI>.md`。opencode: `references/opencode.md`)
-
-上記の対処後、事前チェックと実行の `XDG_CONFIG_HOME` / `XDG_DATA_HOME` 設定が正常に機能するようになる。
-
-### 子エージェントCLIが認証エラー・`Unexpected server error` で失敗する
-
-`child_agent.isolate_xdg` が `true` だと、ホーム配下の認証情報が見えなくなる。
-sandbox 環境でなければ `isolate_xdg` を `false`(既定)にする。sandbox 環境で
-`true` が必要な場合は、`.agents/workflow/.config` 配下で CLI のログインを行う
-(コマンド例は `references/<CLI>.md`。opencode: `references/opencode.md`)。
-
-### それでも `EEXIST` 等のエラーが出る場合
-
-`XDG_CONFIG_HOME` / `XDG_DATA_HOME` を設定した上で、子エージェントCLI起動時に `EEXIST: file already exists, mkdir '~/.config/...'` 等のエラーが出る場合、テンプレートのエスケープや環境変数の引き渡しに問題がある可能性がある。テンプレート内で `{prompt}` 以外の部分に `~` (チルダ)が展開される等、意図しないパス解釈が起きていないか確認する。
-子CLI固有の原因は `references/<CLI>.md`(opencode: `references/opencode.md`)を見る。
-
-### 旧レイアウト(`.dispatch-prompt-<タスクID>.md` / `logs/` / `reports/`)が残っている場合
-
-移行前の環境では `.agents/workflow/` 直下に `.dispatch-run.ps1` 等のスクリプトや
-`logs/`・`reports/` ディレクトリが残っていることがある。これらは新レイアウト
-(`scripts/` 配下のスクリプト、`runs/<タスクID>-<試行回数>/` 配下の生成物)には
-自動移行されない。`/agents-md-setup` または `/workflow-update` を実行し、旧レイアウトの
-検出・更新提案に従うこと。
+[`.config` の作成拒否](references/troubleshooting.md#config-の作成拒否)・
+[認証エラー](references/troubleshooting.md#認証エラー)・
+[EEXIST](references/troubleshooting.md#eexist)・
+[旧レイアウト](references/troubleshooting.md#旧レイアウト)は `references/troubleshooting.md` を見る。
