@@ -302,8 +302,9 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 | `create-pr` | PR を作成する | group-advance(exit 7)・workflow-status(PR が無いとき) |
 | `wait-merge` | PR のマージを待つ(報告して停止) | group-advance(exit 8)・dispatch-check(exit 0、PR 作成の run `pr-*`。PR を検証してから報告する)・workflow-status(PR が `OPEN` のとき) |
 | `update-pr` | 既存の PR に未 push のコミットを push し、本文を作り直す(PR作成の単発依頼を再実行する) | group-advance(exit 10) |
-| `continue` | そのまま作業を続ける | branch-check(exit 0)・group-advance(exit 0)・task-commit(exit 0)・quality-gate(exit 0)・text-refine(推敲しないとき) |
+| `continue` | そのまま作業を続ける | branch-check(exit 0)・group-advance(exit 0)・task-commit(exit 0)・quality-gate(exit 0)・text-refine(推敲しないとき)・text-refine --check(exit 0) |
 | `refine` | `Request:` の依頼文で yomiyasu に推敲させ、`Output:` のファイルを使う | text-refine(推敲するとき) |
+| `decide-candidates` | 候補ごとの判断を `Decisions:` のファイルに書いてから `--check` を実行し直す | text-refine --check(exit 2) |
 | `confirm` | `DECIDE` 行や差分をユーザーに確認する | workflow-setup(exit 3)・workflow-update(exit 3) |
 | `switch-branch` | 専用ブランチを作る(`reason=main` / `merged`) | branch-check(exit 2 / 3) |
 | `escalate` | ユーザーに理由を説明し判断を仰ぐ | 下の reason 一覧 |
@@ -322,6 +323,7 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 - `token-limit` / `no-report` — dispatch-check の exit 5
 - `no-changes` — dispatch-check の exit 7(変更が無いのが正しいタスクなら review に進んでよい)・task-commit の exit 20(コミットする変更が無い)
 - `quality-gate` — quality-gate の exit 2(blocking のステップが失敗)
+- `refine-unchecked` — text-refine --check の exit 3(推敲済みファイルか yomiyasu の記録が無く、確かめられない)
 - `no-steps` — quality-gate の exit 3(実行するステップが0件)
 - `conflict` / `subtree-failed` / `dirty-tree` / `sync-failed` — workflow-update の exit 2 / 21 / 20 / 22(コンフリクト / コンフリクト以外の subtree pull の失敗 / 作業ツリーが汚れている / 配置済みスクリプトとの差分確認の失敗)
 
@@ -801,10 +803,10 @@ exit code: `0`=出力あり、`1`=使い方不備・tasks.md/state.json 不在�
 サマリー報告・確認依頼・コミットメッセージ・PR説明・タスク完了報告を、利用者に見せる前に整えるために使う。
 
 ```powershell
-.agents/workflow/scripts/text-refine.ps1 <summary|confirm|commit|pr_body|task_done> <入力ファイル>
+.agents/workflow/scripts/text-refine.ps1 <summary|confirm|commit|pr_body|task_done> <入力ファイル> [-Check]
 ```
 ```bash
-.agents/workflow/scripts/text-refine.sh <summary|confirm|commit|pr_body|task_done> <入力ファイル>
+.agents/workflow/scripts/text-refine.sh <summary|confirm|commit|pr_body|task_done> <入力ファイル> [--check]
 ```
 
 - 第1引数は推敲する場面(`text_refine.targets` と同じ5つの値)、第2引数は推敲前の文章のファイル
@@ -832,9 +834,44 @@ Next: refine
 
 - 親は `Request:` の依頼文で yomiyasu に推敲させ、`Output:` のファイルを使う
 - 出力パスは入力ファイルの拡張子の前に `.refined` を足したもの(`report.md` → `report.refined.md`)。
-  同名のファイルが既にあれば先に削除する
+  同名のファイルが既にあれば先に削除する(`.decisions` のファイルも削除する)
 - 依頼文には、場面ごとの文章の種類、読み手(`text_refine.reader`)、変えてはいけないもの
   (コマンド・パス・タスクID・コミットハッシュ・URL・括弧書きの補足、場面によって構成や改行)を入れる
+
+推敲の後のチェック(`--check`。ps1 は `-Check`):
+
+```
+Refine: <skill>
+Output: <出力パス>
+Record: <記録>
+Candidates: <件数>
+Candidate: <キー> <抜粋>
+Decisions: <判断のファイル>
+Next: continue
+Text:
+<推敲済みの本文>
+```
+
+判断が足りないときは、`Undecided:` を出して `Next: decide-candidates` で終わる(`Text:` は出ない):
+
+```
+Decisions: <判断のファイル>
+Undecided: <キー>
+Next: decide-candidates
+```
+
+- 対象は `text_refine.skill` が `yomiyasu` / `yomiyasu:yomiyasu` のときだけ。推敲しないときは `Refine: off`、
+  それ以外の skill は `Refine: <skill>` と `Check: skipped` を出し、どちらも `Next: continue`
+- 推敲済みファイル(`Output:`)の SHA-256 を計算し、状態ディレクトリ(`YOMIYASU_STATE_DIR`、無ければ `.yomiyasu`)の
+  記録のうち、最終稿の SHA-256 が一致する最新のものを使う。`Record:` は状態ディレクトリからの相対パス
+- 候補は yomiyasu の lint の指摘と diff の `meaning_risks` から作る。キーは lint が `L<行> <rule>`、
+  meaning_risks が `L<行> meaning_risk:<subkind>`(行が無ければ `-`)。`Candidate:` の抜粋は40字まで
+- 判断のファイルは入力ファイルの拡張子の前に `.decisions` を足したもの(`report.md` → `report.decisions.md`)。
+  各候補のキーが含まれていれば判断済みとみなす。判断が無い候補は `Undecided:` で出し、`Next: decide-candidates`
+- 確かめられないとき(推敲済みファイル・記録・lint の報告が無い等)は `Unchecked: <理由>` と
+  `Next: escalate reason=refine-unchecked`
+- `Candidates: 0` または全候補が判断済みなら `Next: continue` の後に `Text:` を出す。
+  `Text:` の次の行から出力の終わりまでが推敲済みの本文
 
 検出する範囲(`Found:` の元。エージェントを問わず `*/skills/yomiyasu/SKILL.md` で、frontmatter の `name` が `yomiyasu` のもの):
 
@@ -846,7 +883,8 @@ Next: refine
 skill の名前は入れ方(プラグイン・skill 単体・エージェントごとの配置)で変わるため、スクリプトは推測しない。
 検出して `Hint:` を出すだけで、`text_refine.skill` は利用者が設定する。
 
-exit code: `0`=出力あり、`1`=使い方不備(引数の数・場面の値)・推敲するときに入力ファイルが無い。
+exit code: `0`=出力あり、`1`=使い方不備(引数の数・場面の値・`--check` 以外のオプション)・推敲するときに入力ファイルが無い、
+`2`=判断が無い候補がある(`--check`)、`3`=推敲済みファイルか記録が無い(`--check`)。
 
 ### task-state — タスクの状態遷移
 

@@ -234,7 +234,8 @@ PR 作成の前に、要件が満たされているかを親が確かめる。�
    `output.log` の末尾を添えてユーザーに報告する
 5. **PR 本文の推敲**: `text-refine pr_body .agents/workflow/runs/pr-<N>-1/pr-body.md` を実行する
    (PowerShell: `.agents/workflow/scripts/text-refine.ps1` / bash: `.agents/workflow/scripts/text-refine.sh`)。
-   `Next: refine` なら、`Request:` の依頼文どおりに推敲させる。`gh pr view <作業ブランチ> --json number` で
+   `Next: refine` なら、`Request:` の依頼文どおりに推敲させ、テンプレートの「日本語の推敲」の
+   `--check` の手順を通す。そのあと `gh pr view <作業ブランチ> --json number` で
    PR 番号を取り、`gh api -X PATCH "repos/{owner}/{repo}/pulls/<number>" -F body=@<Output: のパス>` で
    本文を更新する。`Next: continue` なら、この手順は飛ばす
 6. PR URL をユーザーに報告して停止する(マージはユーザーが行う)
