@@ -249,6 +249,17 @@ pwsh -NoProfile -File tests/syntax-check.ps1
 - `_templates/workflow/scripts/` と `tests/` の `.ps1` をパースし、`.sh` を `bash -n` で検査する
 - git 管理下と未追跡(`.gitignore` 対象外)のテキストファイルについて、CRLF を含むもの・
   非 ASCII 文字を含むのに BOM が無い `.ps1`・BOM 付きの `.ps1` 以外のファイル(`.sh`・`.py`・`.md` 等)を失敗にする
+- `tests/skill-size.ps1` を呼び出す(単体でも実行できる)
+
+skill のサイズは `tests/skill-size.ps1` で検査します:
+
+```powershell
+pwsh -NoProfile -File tests/skill-size.ps1
+```
+
+- ワークフローのループで読み込まれる 3 つの skill の `SKILL.md` の合計が 30,000 バイトを超えたら失敗にする
+- 各 `SKILL.md` が 18,000 バイトを超えたら失敗にする
+- `SKILL.md` から `references/*.md` へのリンク先が存在しなければ失敗にする
 
 ### CI
 
