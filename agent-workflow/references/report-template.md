@@ -65,7 +65,17 @@ yomiyasu は同梱しない。利用者が導入し、config.json の `text_refi
    config.json は、利用者の承認なしに書き換えない
 4. `Next: refine` のときは、`Request:` 行の依頼文を**一字も変えずに**そのまま自分への依頼として実行する
    (依頼文に skill 名が入っている)。そのあと `Output:` のファイルを読んで使う
-5. yomiyasu を呼べなかったとき(Unknown skill 等)、`Output:` のファイルができなかったとき、
+5. 推敲の後に `text-refine <場面> <下書き> --check`(PowerShell は `-Check`)を、出力を切らずに実行する
+   (`head`・`sed -n`・`Select-Object -First` 等で切らない)。対象は yomiyasu だけで、`text_refine.skill` が
+   `yomiyasu` / `yomiyasu:yomiyasu` 以外のときは、確かめずに `Next: continue` が返る
+   - `Next: decide-candidates` のときは、`Candidate:` 行ごとに直すか残すかを決め、`Decisions:` のファイルに
+     `- <キー>: 直した` / `- <キー>: 残した(<理由>)` の形で書く。直したときは、推敲済みファイルを直し、
+     yomiyasu の検査をもう一度実行してから、`--check` を実行し直す
+   - `Next: escalate reason=refine-unchecked` のときは、下書きを使わずに止め、理由(`Unchecked:` 行)を
+     利用者に伝える
+   - `Next: continue` のときは、`Text:` の節の本文を一字も変えずに、報告・コミット・PR 本文に使う
+     (返答を書くときに組み立て直さない)。`Text:` が無いときは、今までどおり下書きか `Output:` のファイルを使う
+6. yomiyasu を呼べなかったとき(Unknown skill 等)、`Output:` のファイルができなかったとき、
    `commit` の結果が1行でないときは、下書きを使う。そのうえで、`text_refine.skill` の名前が入れ方と
    合っているかを確かめるよう、利用者に1回伝える
 
