@@ -75,6 +75,9 @@
 | `quality_gate.child_dispatch_command` | 子エージェントへの検証指示に使う統合コマンド。空文字列でなければ blocking ステップの個別列挙に代えてこの1コマンドを子に指示する。Gradle 等のデーモンの多重コールドスタート回避に有効。子にも同じ判定をさせる場合は `bash .agents/workflow/scripts/quality-gate.sh`(Windows の子は `pwsh -NoProfile -File .agents/workflow/scripts/quality-gate.ps1`)を指定できる | `""` |
 | `upstream.url` | upstream リポジトリの URL。`workflow-update` skill で使用 | `https://github.com/Musasaby/multi-ai-agents-workflow.git` |
 | `upstream.branch` | upstream 追従ブランチ名 | `main` |
+| `text_refine.skill` | 推敲に使う yomiyasu を呼ぶ名前(入れ方ごとに違う。プラグインなら `yomiyasu:yomiyasu`、skill 単体なら `yomiyasu` など)。`null`・空なら推敲しない。名前は推測せず、`text-refine` の `Found:` 行を見て利用者が決める | `null` |
+| `text_refine.targets` | 推敲する場面。`summary`(完了サマリー報告)・`confirm`(ユーザーへの確認依頼)・`commit`(コミットメッセージの説明の1行)・`pr_body`(PR説明)・`task_done`(タスク1件の完了報告)から選ぶ配列 | 5つすべて |
+| `text_refine.reader` | 推敲後の文章の読み手。`expert`(同じ分野の専門家)・`informed`(分野は違うが技術に詳しい人)・`general`(専門知識のない人)。他の値は `informed` 扱い | `informed` |
 
 ### 子CLIのプロファイル
 
@@ -296,7 +299,8 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 | `create-pr` | PR を作成する | group-advance(exit 7)・workflow-status(PR が無いとき) |
 | `wait-merge` | PR のマージを待つ(報告して停止) | group-advance(exit 8)・dispatch-check(exit 0、PR 作成の run `pr-*`。PR を検証してから報告する)・workflow-status(PR が `OPEN` のとき) |
 | `update-pr` | 既存の PR に未 push のコミットを push し、本文を作り直す(PR作成の単発依頼を再実行する) | group-advance(exit 10) |
-| `continue` | そのまま作業を続ける | branch-check(exit 0)・group-advance(exit 0)・task-commit(exit 0)・quality-gate(exit 0) |
+| `continue` | そのまま作業を続ける | branch-check(exit 0)・group-advance(exit 0)・task-commit(exit 0)・quality-gate(exit 0)・text-refine(推敲しないとき) |
+| `refine` | `Request:` の依頼文で yomiyasu に推敲させ、`Output:` のファイルを使う | text-refine(推敲するとき) |
 | `confirm` | `DECIDE` 行や差分をユーザーに確認する | workflow-setup(exit 3)・workflow-update(exit 3) |
 | `switch-branch` | 専用ブランチを作る(`reason=main` / `merged`) | branch-check(exit 2 / 3) |
 | `escalate` | ユーザーに理由を説明し判断を仰ぐ | 下の reason 一覧 |
@@ -784,6 +788,60 @@ Worktree: clean | dirty <n>
 
 exit code: `0`=出力あり、`1`=使い方不備・tasks.md/state.json 不在・`next-task` の失敗(exit 1)・
 `--summary` 時の要件の検査エラー。
+
+### text-refine — yomiyasu への推敲の依頼文
+
+`config.json` の `text_refine` から、yomiyasu(日本語の推敲 skill)への依頼文を機械的に作る。
+推敲そのものは親が行い、このスクリプトは文章を書き換えない(入力ファイルは変更しない)。
+サマリー報告・確認依頼・コミットメッセージ・PR説明・タスク完了報告を、利用者に見せる前に整えるために使う。
+
+```powershell
+.agents/workflow/scripts/text-refine.ps1 <summary|confirm|commit|pr_body|task_done> <入力ファイル>
+```
+```bash
+.agents/workflow/scripts/text-refine.sh <summary|confirm|commit|pr_body|task_done> <入力ファイル>
+```
+
+- 第1引数は推敲する場面(`text_refine.targets` と同じ5つの値)、第2引数は推敲前の文章のファイル
+
+推敲しないとき(`text_refine.skill` が `null`・空、または場面が `targets` に無い):
+
+```
+Refine: off
+Found: <場所>
+Hint: yomiyasu is installed but text_refine.skill is not set
+Next: continue
+```
+
+- `Found:` と `Hint:` は `skill` が未設定のときだけ。yomiyasu が見つかった場所ごとに `Found:` を出し、
+  1件以上あれば `Hint:` を出す(入力ファイルの存在は確かめない)
+
+推敲するとき:
+
+```
+Refine: <skill>
+Output: <出力パス>
+Request: <依頼文>
+Next: refine
+```
+
+- 親は `Request:` の依頼文で yomiyasu に推敲させ、`Output:` のファイルを使う
+- 出力パスは入力ファイルの拡張子の前に `.refined` を足したもの(`report.md` → `report.refined.md`)。
+  同名のファイルが既にあれば先に削除する
+- 依頼文には、場面ごとの文章の種類、読み手(`text_refine.reader`)、変えてはいけないもの
+  (コマンド・パス・タスクID・コミットハッシュ・URL・括弧書きの補足、場面によって構成や改行)を入れる
+
+検出する範囲(`Found:` の元。エージェントを問わず `*/skills/yomiyasu/SKILL.md` で、frontmatter の `name` が `yomiyasu` のもの):
+
+- プロジェクト: ルート直下と、ルート直下の各ディレクトリ(`.git`・`node_modules` を除く)の直下。
+  ドットで始まるディレクトリ(`.claude`・`.agents` 等)はもう1段下まで
+- ホーム: ドットで始まる各ディレクトリ(`~/.claude` 等)の下を3段まで
+- Claude Code のプラグイン: `~/.claude/plugins/installed_plugins.json` に `yomiyasu@...` があれば検出
+
+skill の名前は入れ方(プラグイン・skill 単体・エージェントごとの配置)で変わるため、スクリプトは推測しない。
+検出して `Hint:` を出すだけで、`text_refine.skill` は利用者が設定する。
+
+exit code: `0`=出力あり、`1`=使い方不備(引数の数・場面の値)・推敲するときに入力ファイルが無い。
 
 ### task-state — タスクの状態遷移
 
