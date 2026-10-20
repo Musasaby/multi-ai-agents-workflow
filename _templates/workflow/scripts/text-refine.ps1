@@ -1,12 +1,17 @@
 ﻿# yomiyasu(文章推敲 skill)への依頼文を config.json の text_refine から機械生成する(推敲そのものは親が行う)。
-# 引数: <target> <input>
+# 引数: <target> <input> [-Check]
 #       target は summary / confirm / commit / pr_body / task_done のいずれか
+#       -Check は推敲済みファイルに対する yomiyasu の記録を探し、判断が要る候補を出す
 # stdout: 推敲しないとき "Refine: off"、(skill 未設定なら導入検出の "Found: <場所>" と "Hint: ..."、)"Next: continue"。
 #       推敲するとき "Refine: <skill>"、"Output: <出力パス>"、"Request: <依頼文>"、"Next: refine"
-# exit: 0=出力あり / 1=使い方・入力不備
-param([string]$Target, [string]$InputPath)
+#       -Check のとき: 推敲しない/yomiyasu 以外なら "Refine: off"/"Refine: <skill>"+"Check: skipped"、"Next: continue"。
+#       yomiyasu なら "Refine: <skill>"、"Output: <出力パス>"、"Record: <記録>"、"Candidates: N"、"Candidate: <キー> <抜粋>"...。
+#       判断が全部あれば "Next: continue" と "Text:" 以降に推敲済みの本文、足りなければ "Undecided: <キー>" と "Next: decide-candidates"、
+#       確かめられなければ "Unchecked: <理由>" と "Next: escalate reason=refine-unchecked"
+# exit: 0=出力あり / 1=使い方・入力不備 / 2=-Check で判断待ちの候補あり / 3=-Check で確かめられない
+param([string]$Target, [string]$InputPath, [switch]$Check)
 
-$Usage = 'Usage: text-refine.ps1 <summary|confirm|commit|pr_body|task_done> <input>'
+$Usage = 'Usage: text-refine.ps1 <summary|confirm|commit|pr_body|task_done> <input> [-Check]'
 
 if ($args.Count -gt 0 -or -not $PSBoundParameters.ContainsKey('Target') -or -not $PSBoundParameters.ContainsKey('InputPath')) {
     [Console]::Error.WriteLine($Usage)
@@ -149,7 +154,7 @@ function Find-Yomiyasu {
 
 if (-not $skillSet -or ($targets -cnotcontains $Target)) {
     Write-Output 'Refine: off'
-    if (-not $skillSet) {
+    if (-not $skillSet -and -not $Check) {
         $foundList = @(Find-Yomiyasu)
         foreach ($place in $foundList) { Write-Output "Found: $place" }
         if ($foundList.Count -gt 0) {
@@ -160,12 +165,7 @@ if (-not $skillSet -or ($targets -cnotcontains $Target)) {
     exit 0
 }
 
-if (-not $InputPath -or -not (Test-Path -LiteralPath $InputPath)) {
-    [Console]::Error.WriteLine("not found: $InputPath")
-    exit 1
-}
-
-# 拡張子の手前に .refined を入れる(os.path.splitext と同じ規則: 先頭のドットだけの名前は拡張子なし)
+# 拡張子の手前に .refined / .decisions を入れる(os.path.splitext と同じ規則: 先頭のドットだけの名前は拡張子なし)
 $sepIdx = [Math]::Max($InputPath.LastIndexOf('/'), $InputPath.LastIndexOf('\'))
 $fileName = $InputPath.Substring($sepIdx + 1)
 $dotIdx = $fileName.LastIndexOf('.')
@@ -175,8 +175,158 @@ if ($dotIdx -gt 0 -and $fileName.Substring(0, $dotIdx).Trim('.') -ne '') {
     $splitAt = $InputPath.Length
 }
 $OutputPath = $InputPath.Substring(0, $splitAt) + '.refined' + $InputPath.Substring($splitAt)
-if (Test-Path -LiteralPath $OutputPath) {
-    Remove-Item -LiteralPath $OutputPath -Force
+$DecisionsPath = $InputPath.Substring(0, $splitAt) + '.decisions' + $InputPath.Substring($splitAt)
+
+function Exit-Unchecked([string]$Reason) {
+    Write-Output "Unchecked: $Reason"
+    Write-Output 'Next: escalate reason=refine-unchecked'
+    exit 3
+}
+
+function Test-Int($v) { return (($v -is [int]) -or ($v -is [long])) }
+
+function Get-Prop($Obj, [string]$Name) {
+    if ($Obj -is [System.Management.Automation.PSCustomObject]) {
+        $p = $Obj.PSObject.Properties[$Name]
+        if ($p) { return , $p.Value }
+    }
+    return , $null
+}
+
+function Get-Excerpt($s) {
+    $t = if ($s -is [string]) { $s } else { '' }
+    $t = ($t -replace '\s+', ' ').Trim()
+    $runes = @($t.EnumerateRunes())
+    if ($runes.Count -ge 41) {
+        return (-join ($runes[0..39] | ForEach-Object { $_.ToString() })) + '…'
+    }
+    return $t
+}
+
+function Test-Truthy($v) { return ($null -ne $v -and "$v" -ne '') }
+
+# checks から name が一致し status が ran のものの report を読む。無ければ $null、読めなければ @{ Data = $null }
+function Find-Report($Rec, [string]$Name) {
+    $checks = Get-Prop $Rec 'checks'
+    if (-not ($checks -is [array])) { return $null }
+    foreach ($c in $checks) {
+        if ($c -is [System.Management.Automation.PSCustomObject] -and
+            (Get-Prop $c 'name') -ceq $Name -and (Get-Prop $c 'status') -ceq 'ran') {
+            $rp = Get-Prop $c 'report'
+            if (-not ($rp -is [string])) { return @{ Data = $null } }
+            $data = Read-JsonFile (Join-Path $StateDir $rp)
+            if ($data -is [System.Management.Automation.PSCustomObject]) { return @{ Data = $data } }
+            return @{ Data = $null }
+        }
+    }
+    return $null
+}
+
+function Invoke-Check {
+    if (@('yomiyasu', 'yomiyasu:yomiyasu') -cnotcontains $skill.Trim()) {
+        Write-Output "Refine: $skill"
+        Write-Output 'Check: skipped'
+        Write-Output 'Next: continue'
+        exit 0
+    }
+    Write-Output "Refine: $skill"
+    Write-Output "Output: $OutputPath"
+    if (-not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) { Exit-Unchecked 'output not found' }
+    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $OutputPath).Hash.ToLowerInvariant()
+
+    $best = $null
+    $bestFile = $null
+    $bestCreated = $null
+    $bestAttempt = 0
+    $recFiles = @(Get-ChildItem -Path "$StateDir/runs/*/attempt-*.json" -File -ErrorAction SilentlyContinue)
+    foreach ($file in $recFiles) {
+        $rec = Read-JsonFile $file.FullName
+        if ((Get-Prop $rec 'format') -cne 'yomiyasu-check-record') { continue }
+        $final = Get-Prop (Get-Prop $rec 'inputs') 'final'
+        if ((Get-Prop $final 'sha256') -cne $hash) { continue }
+        $created = Get-Prop $rec 'created_at'
+        $attempt = Get-Prop $rec 'attempt'
+        if ($created -is [datetime]) { $created = $created.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') }
+        if (-not ($created -is [string]) -or -not (Test-Int $attempt)) { continue }
+        $newer = $false
+        if ($null -eq $best) {
+            $newer = $true
+        } else {
+            $cmp = [string]::CompareOrdinal($created, $bestCreated)
+            $newer = ($cmp -gt 0) -or ($cmp -eq 0 -and $attempt -gt $bestAttempt)
+        }
+        if ($newer) {
+            $best = $rec; $bestFile = $file; $bestCreated = $created; $bestAttempt = $attempt
+        }
+    }
+    if ($null -eq $best) { Exit-Unchecked ('no record for sha256:' + $hash.Substring(0, 12)) }
+    Write-Output ('Record: runs/' + $bestFile.Directory.Name + '/' + $bestFile.Name)
+
+    $lint = Find-Report $best 'lint'
+    if ($null -eq $lint -or $null -eq $lint.Data -or -not ((Get-Prop $lint.Data 'findings') -is [array])) {
+        Exit-Unchecked 'lint report missing'
+    }
+    $candidates = New-Object System.Collections.Generic.List[object]
+    foreach ($fd in (Get-Prop $lint.Data 'findings')) {
+        if (-not ($fd -is [System.Management.Automation.PSCustomObject])) { continue }
+        $line = Get-Prop $fd 'line'
+        $lineText = if (Test-Int $line) { "$line" } else { '-' }
+        $rule = Get-Prop $fd 'rule'
+        $ruleText = if ($null -eq $rule) { 'None' } else { "$rule" }
+        $candidates.Add(@{ Key = "L$lineText $ruleText"; Excerpt = (Get-Excerpt (Get-Prop $fd 'snippet')) })
+    }
+    $diff = Find-Report $best 'diff'
+    if ($null -ne $diff -and $null -eq $diff.Data) { Exit-Unchecked 'diff report missing' }
+    if ($null -ne $diff) {
+        $risks = Get-Prop $diff.Data 'meaning_risks'
+        if ($risks -is [array]) {
+            foreach ($r in $risks) {
+                if (-not ($r -is [System.Management.Automation.PSCustomObject])) { continue }
+                $line = Get-Prop $r 'new_line'
+                if (-not (Test-Int $line)) { $line = Get-Prop $r 'old_line' }
+                $lineText = if (Test-Int $line) { "$line" } else { '-' }
+                $sub = Get-Prop $r 'subkind'
+                if (-not (Test-Truthy $sub)) { $sub = Get-Prop $r 'kind' }
+                $subText = if ($null -eq $sub) { 'None' } else { "$sub" }
+                $text = Get-Prop $r 'new'
+                if (-not (Test-Truthy $text)) { $text = Get-Prop $r 'old' }
+                $candidates.Add(@{ Key = "L$lineText meaning_risk:$subText"; Excerpt = (Get-Excerpt $text) })
+            }
+        }
+    }
+    Write-Output "Candidates: $($candidates.Count)"
+    foreach ($c in $candidates) { Write-Output ("Candidate: $($c.Key) $($c.Excerpt)") }
+    if ($candidates.Count -gt 0) {
+        Write-Output "Decisions: $DecisionsPath"
+        $decided = ''
+        try { $decided = [System.IO.File]::ReadAllText($DecisionsPath, [System.Text.Encoding]::UTF8) } catch { $decided = '' }
+        $undecided = @($candidates | Where-Object { -not $decided.Contains($_.Key) })
+        foreach ($u in $undecided) { Write-Output "Undecided: $($u.Key)" }
+        if ($undecided.Count -gt 0) {
+            Write-Output 'Next: decide-candidates'
+            exit 2
+        }
+    }
+    Write-Output 'Next: continue'
+    Write-Output 'Text:'
+    $body = [System.IO.File]::ReadAllText($OutputPath, [System.Text.Encoding]::UTF8)
+    Write-Output $body.TrimEnd([char[]]@("`r", "`n"))
+    exit 0
+}
+
+$StateDir = if ($env:YOMIYASU_STATE_DIR) { $env:YOMIYASU_STATE_DIR } else { "$Root/.yomiyasu" }
+
+if ($Check) { Invoke-Check }
+
+if (-not $InputPath -or -not (Test-Path -LiteralPath $InputPath)) {
+    [Console]::Error.WriteLine("not found: $InputPath")
+    exit 1
+}
+
+foreach ($stale in @($OutputPath, $DecisionsPath)) {
+    if (Test-Path -LiteralPath $stale) {
+        Remove-Item -LiteralPath $stale -Force
+    }
 }
 
 $keep = $KeepBase + $KeepExtra[$Target]

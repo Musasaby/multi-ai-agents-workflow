@@ -2,25 +2,38 @@
 set -euo pipefail
 
 # yomiyasu(文章推敲 skill)への依頼文を config.json の text_refine から機械生成する(推敲そのものは親が行う)。
-# 引数: <target> <input>
+# 引数: <target> <input> [--check]
 #       target は summary / confirm / commit / pr_body / task_done のいずれか
+#       --check は推敲済みファイルに対する yomiyasu の記録を探し、判断が要る候補を出す
 # stdout: 推敲しないとき "Refine: off"、(skill 未設定なら導入検出の "Found: <場所>" と "Hint: ..."、)"Next: continue"。
 #       推敲するとき "Refine: <skill>"、"Output: <出力パス>"、"Request: <依頼文>"、"Next: refine"
-# exit: 0=出力あり / 1=使い方・入力不備
+#       --check のとき: 推敲しない/yomiyasu 以外なら "Refine: off"/"Refine: <skill>"+"Check: skipped"、"Next: continue"。
+#       yomiyasu なら "Refine: <skill>"、"Output: <出力パス>"、"Record: <記録>"、"Candidates: N"、"Candidate: <キー> <抜粋>"...。
+#       判断が全部あれば "Next: continue" と "Text:" 以降に推敲済みの本文、足りなければ "Undecided: <キー>" と "Next: decide-candidates"、
+#       確かめられなければ "Unchecked: <理由>" と "Next: escalate reason=refine-unchecked"
+# exit: 0=出力あり / 1=使い方・入力不備 / 2=--check で判断待ちの候補あり / 3=--check で確かめられない
 
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
 export PYTHONDONTWRITEBYTECODE=1
 
-USAGE="Usage: text-refine.sh <summary|confirm|commit|pr_body|task_done> <input>"
+USAGE="Usage: text-refine.sh <summary|confirm|commit|pr_body|task_done> <input> [--check]"
 
-if [ "$#" -ne 2 ]; then
+if [ "$#" -ne 2 ] && [ "$#" -ne 3 ]; then
     echo "$USAGE" >&2
     exit 1
 fi
 
 TARGET="$1"
 INPUT="$2"
+CHECK=0
+if [ "$#" -eq 3 ]; then
+    if [ "$3" != "--check" ]; then
+        echo "$USAGE" >&2
+        exit 1
+    fi
+    CHECK=1
+fi
 
 case "$TARGET" in
     summary|confirm|commit|pr_body|task_done) ;;
@@ -44,12 +57,13 @@ to_py_path() {
     fi
 }
 
-python3 - "$TARGET" "$INPUT" "$(to_py_path "$ROOT")" "$(to_py_path "$CONFIG_PATH")" "$(to_py_path "$HOME")" <<'PY'
-import json, os, re, sys
+python3 - "$TARGET" "$INPUT" "$(to_py_path "$ROOT")" "$(to_py_path "$CONFIG_PATH")" "$(to_py_path "$HOME")" "$CHECK" <<'PY'
+import glob, hashlib, json, os, re, sys
 
 sys.stdout.reconfigure(newline='\n')
 
 target, input_path, root, config_path, home = sys.argv[1:6]
+check = sys.argv[6] == '1'
 
 DEFAULT_TARGETS = ['summary', 'confirm', 'commit', 'pr_body', 'task_done']
 READERS = {
@@ -169,7 +183,7 @@ def detect():
 
 if not skill_set or target not in targets:
     print('Refine: off')
-    if not skill_set:
+    if not skill_set and not check:
         found = detect()
         for place in found:
             print('Found: ' + place)
@@ -178,14 +192,139 @@ if not skill_set or target not in targets:
     print('Next: continue')
     sys.exit(0)
 
+base, ext = os.path.splitext(input_path)
+output_path = base + '.refined' + ext
+decisions_path = base + '.decisions' + ext
+
+
+def unchecked(reason):
+    print('Unchecked: ' + reason)
+    print('Next: escalate reason=refine-unchecked')
+    sys.exit(3)
+
+
+def load_json(path):
+    try:
+        with open(path, encoding='utf-8-sig') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def excerpt(s):
+    s = re.sub(r'\s+', ' ', s if isinstance(s, str) else '').strip()
+    return s[:40] + '…' if len(s) >= 41 else s
+
+
+def is_int(v):
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def run_check():
+    if skill.strip() not in ('yomiyasu', 'yomiyasu:yomiyasu'):
+        print('Refine: ' + skill)
+        print('Check: skipped')
+        print('Next: continue')
+        sys.exit(0)
+    print('Refine: ' + skill)
+    print('Output: ' + output_path)
+    if not os.path.isfile(output_path):
+        unchecked('output not found')
+    with open(output_path, 'rb') as f:
+        raw = f.read()
+    h = hashlib.sha256(raw).hexdigest()
+    state = os.environ.get('YOMIYASU_STATE_DIR') or os.path.join(root, '.yomiyasu')
+    best = None
+    best_key = None
+    for rec_path in glob.glob(os.path.join(state, 'runs', '*', 'attempt-*.json')):
+        rec = load_json(rec_path)
+        if not isinstance(rec, dict) or rec.get('format') != 'yomiyasu-check-record':
+            continue
+        inputs = rec.get('inputs')
+        final = inputs.get('final') if isinstance(inputs, dict) else None
+        if not isinstance(final, dict) or final.get('sha256') != h:
+            continue
+        created = rec.get('created_at')
+        attempt = rec.get('attempt')
+        if not isinstance(created, str) or not is_int(attempt):
+            continue
+        key = (created, attempt)
+        if best_key is None or key > best_key:
+            best, best_key, best_path = rec, key, rec_path
+    if best is None:
+        unchecked('no record for sha256:' + h[:12])
+    print('Record: ' + os.path.relpath(best_path, state).replace(os.sep, '/'))
+
+    def find_report(name):
+        checks = best.get('checks')
+        if not isinstance(checks, list):
+            return None
+        for c in checks:
+            if isinstance(c, dict) and c.get('name') == name and c.get('status') == 'ran':
+                rp = c.get('report')
+                if not isinstance(rp, str):
+                    return False
+                data = load_json(os.path.join(state, rp))
+                return data if isinstance(data, dict) else False
+        return None
+
+    lint = find_report('lint')
+    if not lint or not isinstance(lint.get('findings'), list):
+        unchecked('lint report missing')
+    candidates = []
+    for fd in lint['findings']:
+        if not isinstance(fd, dict):
+            continue
+        line = fd.get('line')
+        key = 'L%s %s' % (line if is_int(line) else '-', fd.get('rule'))
+        candidates.append((key, excerpt(fd.get('snippet'))))
+    diff = find_report('diff')
+    if diff is False:
+        unchecked('diff report missing')
+    if diff is not None:
+        risks = diff.get('meaning_risks')
+        for r in risks if isinstance(risks, list) else []:
+            if not isinstance(r, dict):
+                continue
+            line = r.get('new_line')
+            if not is_int(line):
+                line = r.get('old_line')
+            sub = r.get('subkind') or r.get('kind')
+            key = 'L%s meaning_risk:%s' % (line if is_int(line) else '-', sub)
+            candidates.append((key, excerpt(r.get('new') or r.get('old'))))
+    print('Candidates: %d' % len(candidates))
+    for key, ex in candidates:
+        print('Candidate: ' + key + ' ' + ex)
+    if candidates:
+        print('Decisions: ' + decisions_path)
+        try:
+            with open(decisions_path, encoding='utf-8-sig') as f:
+                decided = f.read()
+        except OSError:
+            decided = ''
+        undecided = [k for k, _ in candidates if k not in decided]
+        for k in undecided:
+            print('Undecided: ' + k)
+        if undecided:
+            print('Next: decide-candidates')
+            sys.exit(2)
+    print('Next: continue')
+    print('Text:')
+    print(raw.decode('utf-8').rstrip(chr(13) + chr(10)))
+    sys.exit(0)
+
+
+if check:
+    run_check()
+
 if not os.path.exists(input_path):
     print('not found: ' + input_path, file=sys.stderr)
     sys.exit(1)
 
-base, ext = os.path.splitext(input_path)
-output_path = base + '.refined' + ext
 if os.path.exists(output_path):
     os.remove(output_path)
+if os.path.exists(decisions_path):
+    os.remove(decisions_path)
 
 request = (
     '{inp} を {skill} で推敲し、本文だけを {out} に書いてください。{kind}。読者は{reader}です。'
