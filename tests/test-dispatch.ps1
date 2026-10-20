@@ -293,6 +293,27 @@ Invoke-TestCase "run: stream-json で stdin に大きいプロンプトを渡し
     Assert-Contains ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.jsonl")) "LEN=200000" "stdin length"
 }
 
+Invoke-TestCase "run: stream-json の [tool_use] 行は Edit・Write の本文を載せず、ほかのツールの入力は載せる" {
+    Set-PyChild "import json`nprint(json.dumps({'type': 'assistant', 'message': {'content': [{'type': 'tool_use', 'name': 'Edit', 'input': {'file_path': 'README.md', 'old_string': 'see ~/.config', 'new_string': 'x'}}]}}))`nprint(json.dumps({'type': 'assistant', 'message': {'content': [{'type': 'tool_use', 'name': 'Write', 'input': {'file_path': 'doc.md', 'content': 'path /tmp/x'}}]}}))`nprint(json.dumps({'type': 'assistant', 'message': {'content': [{'type': 'tool_use', 'name': 'Bash', 'input': {'command': 'cat ~/x.log'}}]}}))"
+    Set-Profile claude-stream-json
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    $log = [System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.log")
+    $jsonl = [System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.jsonl")
+    Assert-Contains $log "[tool_use] Edit: " "Edit line"
+    Assert-Contains $log "README.md" "Edit file_path kept"
+    Assert-Contains $log "[tool_use] Write: " "Write line"
+    Assert-Contains $log "doc.md" "Write file_path kept"
+    Assert-Contains $log "[tool_use] Bash: " "Bash line"
+    Assert-Contains $log "cat ~/x.log" "Bash command kept"
+    Assert-NotContains $log "~/.config" "old_string value omitted"
+    Assert-NotContains $log "/tmp/x" "content value omitted"
+    Assert-NotContains $log "old_string" "old_string key omitted"
+    Assert-NotContains $log "new_string" "new_string key omitted"
+    Assert-NotContains $log "content" "content key omitted"
+    Assert-Contains $jsonl "~/.config" "jsonl keeps old_string value"
+    Assert-Contains $jsonl "/tmp/x" "jsonl keeps content value"
+}
+
 Invoke-TestCase "run: 利用先の child-profiles.json を guard.sha256 に記録する" {
     Set-Child 'Write-Output hello'
     Write-Utf8File "$script:Proj/.agents/workflow/child-profiles.json" "{}`n"

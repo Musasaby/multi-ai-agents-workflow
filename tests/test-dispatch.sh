@@ -373,6 +373,31 @@ print('{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"LEN=' + str(len
     assert_contains "$(cat "$PROJ/.agents/workflow/runs/T1-1/output.jsonl")" "LEN=200000" "stdin length"
 }
 
+t_run_stream_json_tool_use_omits_file_edit_body() {
+    set_py_child "import json
+print(json.dumps({'type': 'assistant', 'message': {'content': [{'type': 'tool_use', 'name': 'Edit', 'input': {'file_path': 'README.md', 'old_string': 'see ~/.config', 'new_string': 'x'}}]}}))
+print(json.dumps({'type': 'assistant', 'message': {'content': [{'type': 'tool_use', 'name': 'Write', 'input': {'file_path': 'doc.md', 'content': 'path /tmp/x'}}]}}))
+print(json.dumps({'type': 'assistant', 'message': {'content': [{'type': 'tool_use', 'name': 'Bash', 'input': {'command': 'cat ~/x.log'}}]}}))"
+    set_profile claude-stream-json
+    run_script dispatch-run.sh T1 1
+    local log jsonl
+    log="$(cat "$PROJ/.agents/workflow/runs/T1-1/output.log")"
+    jsonl="$(cat "$PROJ/.agents/workflow/runs/T1-1/output.jsonl")"
+    assert_contains "$log" "[tool_use] Edit: " "Edit line"
+    assert_contains "$log" "README.md" "Edit file_path kept"
+    assert_contains "$log" "[tool_use] Write: " "Write line"
+    assert_contains "$log" "doc.md" "Write file_path kept"
+    assert_contains "$log" "[tool_use] Bash: " "Bash line"
+    assert_contains "$log" "cat ~/x.log" "Bash command kept"
+    assert_not_contains "$log" "~/.config" "old_string value omitted"
+    assert_not_contains "$log" "/tmp/x" "content value omitted"
+    assert_not_contains "$log" "old_string" "old_string key omitted"
+    assert_not_contains "$log" "new_string" "new_string key omitted"
+    assert_not_contains "$log" "content" "content key omitted"
+    assert_contains "$jsonl" "~/.config" "jsonl keeps old_string value"
+    assert_contains "$jsonl" "/tmp/x" "jsonl keeps content value"
+}
+
 t_run_guard_records_child_profiles() {
     set_child 'echo hello'
     printf '{}\n' > "$PROJ/.agents/workflow/child-profiles.json"
@@ -999,6 +1024,7 @@ test_case "run: {prompt_file} で 40000 文字のプロンプトをファイル�
 test_case "run: プレースホルダが無いテンプレートは stdin でプロンプトを渡す" t_run_no_placeholder_passes_prompt_via_stdin
 test_case "run: profile claude-stream-json は command_template に stream-json が無くても output.jsonl を書く" t_run_profile_stream_json_writes_jsonl_without_template_keyword
 test_case "run: stream-json で stdin に大きいプロンプトを渡しても、子が先に stderr に大量に書くと止まらない" t_run_stream_json_large_stdin_does_not_deadlock
+test_case "run: stream-json の [tool_use] 行は Edit・Write の本文を載せず、ほかのツールの入力は載せる" t_run_stream_json_tool_use_omits_file_edit_body
 test_case "run: 利用先の child-profiles.json を guard.sha256 に記録する" t_run_guard_records_child_profiles
 test_case "check: 正常" t_check_ok
 test_case "check: signalはexit 4" t_check_signal

@@ -60,6 +60,11 @@ function Split-CommandLine {
     return $tokens
 }
 
+# ファイル編集ツールの本文(書き込む内容)は [tool_use] 行から外す。本文に書かれたパスの文字列を
+# dispatch-check が誤検知するため。全文は output.jsonl に残る
+$script:FileEditTools = @('Edit', 'Write', 'MultiEdit', 'NotebookEdit')
+$script:FileEditBodyKeys = @('old_string', 'new_string', 'content', 'edits', 'new_source')
+
 function ConvertTo-HumanLine {
     param($obj)
     switch ($obj.type) {
@@ -69,7 +74,11 @@ function ConvertTo-HumanLine {
                 switch ($block.type) {
                     'text' { $lines += $block.text }
                     'tool_use' {
-                        $inputJson = ($block.input | ConvertTo-Json -Compress -Depth 5)
+                        $toolInput = $block.input
+                        if (($script:FileEditTools -ccontains $block.name) -and ($toolInput -is [System.Management.Automation.PSCustomObject])) {
+                            $toolInput = $toolInput | Select-Object -Property * -ExcludeProperty $script:FileEditBodyKeys
+                        }
+                        $inputJson = ($toolInput | ConvertTo-Json -Compress -Depth 5)
                         if ($inputJson.Length -gt 300) { $inputJson = $inputJson.Substring(0, 300) + "...(truncated)" }
                         $lines += "[tool_use] $($block.name): $inputJson"
                     }
