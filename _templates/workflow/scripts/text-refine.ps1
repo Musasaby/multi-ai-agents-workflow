@@ -1,6 +1,6 @@
 ﻿# yomiyasu(文章推敲 skill)への依頼文を config.json の text_refine から機械生成する(推敲そのものは親が行う)。
 # 引数: <target> <input> [-Check]
-#       target は summary / confirm / commit / pr_body / task_done のいずれか
+#       target は summary / confirm / commit / pr_body / task_done / tasks のいずれか
 #       -Check は推敲済みファイルに対する yomiyasu の記録を探し、判断が要る候補を出す
 # stdout: 推敲しないとき "Refine: off"、(skill 未設定なら導入検出の "Found: <場所>" と "Hint: ..."、)"Next: continue"。
 #       推敲するとき "Refine: <skill>"、"Output: <出力パス>"、"Request: <依頼文>"、"Next: refine"
@@ -8,16 +8,19 @@
 #       yomiyasu なら "Refine: <skill>"、"Output: <出力パス>"、"Record: <記録>"、"Candidates: N"、"Candidate: <キー> <抜粋>"...。
 #       判断が全部あれば "Next: continue" と "Text:" 以降に推敲済みの本文、足りなければ "Undecided: <キー>" と "Next: decide-candidates"、
 #       確かめられなければ "Unchecked: <理由>" と "Next: escalate reason=refine-unchecked"
-# exit: 0=出力あり / 1=使い方・入力不備 / 2=-Check で判断待ちの候補あり / 3=-Check で確かめられない
+#       tasks の -Check は先に推敲前後の構造(見出し・依存・要件ID 等の機械パースする行)を比べ、
+#       同じなら "Structure: same"(yomiyasu なら続けて記録を確かめ、候補が全部判断済みのとき "Next: continue" だけで "Text:" は出さない)、
+#       違えば "Changed: L<行> <抜粋>"、"Refined: L<行> <抜粋>"、"Next: escalate reason=refine-structure-changed"
+# exit: 0=出力あり / 1=使い方・入力不備 / 2=-Check で判断待ちの候補あり / 3=-Check で確かめられない / 4=-Check で tasks の構造が変わった
 param([string]$Target, [string]$InputPath, [switch]$Check)
 
-$Usage = 'Usage: text-refine.ps1 <summary|confirm|commit|pr_body|task_done> <input> [-Check]'
+$Usage = 'Usage: text-refine.ps1 <summary|confirm|commit|pr_body|task_done|tasks> <input> [-Check]'
 
 if ($args.Count -gt 0 -or -not $PSBoundParameters.ContainsKey('Target') -or -not $PSBoundParameters.ContainsKey('InputPath')) {
     [Console]::Error.WriteLine($Usage)
     exit 1
 }
-if (@('summary', 'confirm', 'commit', 'pr_body', 'task_done') -cnotcontains $Target) {
+if (@('summary', 'confirm', 'commit', 'pr_body', 'task_done', 'tasks') -cnotcontains $Target) {
     [Console]::Error.WriteLine($Usage)
     exit 1
 }
@@ -30,7 +33,7 @@ $Root = (Get-Location).Path
 $ConfigPath = "$Root/.agents/workflow/config.json"
 $HomeDir = if ($env:HOME) { $env:HOME } else { $HOME }
 
-$DefaultTargets = @('summary', 'confirm', 'commit', 'pr_body', 'task_done')
+$DefaultTargets = @('summary', 'confirm', 'commit', 'pr_body', 'task_done', 'tasks')
 $Readers = @{
     'expert'   = '同じ分野の専門家'
     'informed' = '分野は違うが技術に詳しい人'
@@ -42,6 +45,7 @@ $Kinds = @{
     'confirm'   = 'ユーザーに判断を求める確認の依頼です'
     'commit'    = 'コミットメッセージの説明の1行です'
     'pr_body'   = 'PR説明です'
+    'tasks'     = '子エージェントへの実装依頼と利用者の承認に使うタスク定義です。推敲するのは、要件の本文・前提・解釈・対象外と、各タスクの目的欄・受け入れ基準の文です'
 }
 $KeepBase = 'コマンド・パス・タスクID・コミットハッシュ・URL・括弧書きの補足'
 $ThreeParts = '、「状況・起きたこと・次にすること」の3つのまとまりとその順番'
@@ -51,6 +55,7 @@ $KeepExtra = @{
     'confirm'   = $ThreeParts
     'commit'    = '、1行のまま改行しないこと'
     'pr_body'   = '、見出しと節の順番、要件一覧とテスト計画の項目'
+    'tasks'     = '、見出し・グループの区切り行・依存・要件・グループ・参照ファイルの行と参照ファイルの箇条・要件ID(R1: 等)・コードブロックの中身・識別子'
 }
 
 function Read-JsonFile([string]$Path) {
@@ -222,15 +227,88 @@ function Find-Report($Rec, [string]$Name) {
     return $null
 }
 
+# 機械パースする行(見出し・依存・要件ID 等)を @{ Line; Key } の配列で返す
+function Get-Structure([string]$Text) {
+    $keys = New-Object System.Collections.Generic.List[object]
+    $lines = @($Text -split "\r?\n")
+    if ($lines.Count -gt 0 -and $lines[$lines.Count - 1] -eq '') { $lines = @($lines | Select-Object -SkipLast 1) }
+    $inCode = $false
+    $inBullets = $false
+    $no = 0
+    foreach ($raw in $lines) {
+        $no++
+        $line = $raw.TrimEnd()
+        if ($line.TrimStart().StartsWith('```', [StringComparison]::Ordinal)) {
+            $keys.Add(@{ Line = $no; Key = $line })
+            $inCode = -not $inCode
+            $inBullets = $false
+            continue
+        }
+        if ($inCode) {
+            $keys.Add(@{ Line = $no; Key = $line })
+            continue
+        }
+        if ($inBullets) {
+            if ($line -cmatch '^\s*-\s+(?!\*\*)') {
+                $keys.Add(@{ Line = $no; Key = $line })
+                continue
+            }
+            $inBullets = $false
+        }
+        if ($line.StartsWith('#', [StringComparison]::Ordinal) -or $line.StartsWith('<!--', [StringComparison]::Ordinal)) {
+            $keys.Add(@{ Line = $no; Key = $line })
+            continue
+        }
+        if ($line -cmatch '^\s*-\s+\*\*(依存|要件|グループ|参照ファイル)\*\*:') {
+            $keys.Add(@{ Line = $no; Key = $line })
+            $inBullets = $Matches[1] -ceq '参照ファイル'
+            continue
+        }
+        if ($line -cmatch '^- R\d+:') {
+            $keys.Add(@{ Line = $no; Key = $Matches[0] })
+        }
+    }
+    return , $keys.ToArray()
+}
+
+function Test-Structure {
+    if (-not (Test-Path -LiteralPath $InputPath -PathType Leaf)) { Exit-Unchecked 'input not found' }
+    if (-not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) { Exit-Unchecked 'output not found' }
+    $before = Get-Structure ([System.IO.File]::ReadAllText($InputPath, [System.Text.Encoding]::UTF8))
+    $after = Get-Structure ([System.IO.File]::ReadAllText($OutputPath, [System.Text.Encoding]::UTF8))
+    $n = [Math]::Max($before.Count, $after.Count)
+    for ($i = 0; $i -lt $n; $i++) {
+        $b = if ($i -lt $before.Count) { $before[$i] } else { $null }
+        $a = if ($i -lt $after.Count) { $after[$i] } else { $null }
+        if ($null -eq $b -or $null -eq $a -or $b.Key -cne $a.Key) {
+            $bl = if ($b) { "$($b.Line)" } else { '-' }
+            $al = if ($a) { "$($a.Line)" } else { '-' }
+            Write-Output ("Changed: L$bl " + (Get-Excerpt $(if ($b) { $b.Key } else { '' })))
+            Write-Output ("Refined: L$al " + (Get-Excerpt $(if ($a) { $a.Key } else { '' })))
+            Write-Output 'Next: escalate reason=refine-structure-changed'
+            exit 4
+        }
+    }
+    Write-Output 'Structure: same'
+}
+
 function Invoke-Check {
-    if (@('yomiyasu', 'yomiyasu:yomiyasu') -cnotcontains $skill.Trim()) {
+    $isTasks = ($Target -ceq 'tasks')
+    if ($isTasks) {
         Write-Output "Refine: $skill"
+        Write-Output "Output: $OutputPath"
+        Test-Structure
+    }
+    if (@('yomiyasu', 'yomiyasu:yomiyasu') -cnotcontains $skill.Trim()) {
+        if (-not $isTasks) { Write-Output "Refine: $skill" }
         Write-Output 'Check: skipped'
         Write-Output 'Next: continue'
         exit 0
     }
-    Write-Output "Refine: $skill"
-    Write-Output "Output: $OutputPath"
+    if (-not $isTasks) {
+        Write-Output "Refine: $skill"
+        Write-Output "Output: $OutputPath"
+    }
     if (-not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) { Exit-Unchecked 'output not found' }
     $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $OutputPath).Hash.ToLowerInvariant()
 
@@ -308,6 +386,7 @@ function Invoke-Check {
         }
     }
     Write-Output 'Next: continue'
+    if ($isTasks) { exit 0 }
     Write-Output 'Text:'
     $body = [System.IO.File]::ReadAllText($OutputPath, [System.Text.Encoding]::UTF8)
     Write-Output $body.TrimEnd([char[]]@("`r", "`n"))

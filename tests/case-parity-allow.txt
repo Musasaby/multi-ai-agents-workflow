@@ -21,8 +21,3 @@ test-tasks.sh: __pycache__ を作らない
 
 # test-exitcode.sh は存在しない(sh 側では各テストが直接 exit code を断言する)
 test-exitcode.ps1: *
-
-# T2 で ps1 に足すまでの一時的な許可
-test-text-refine.sh: text-refine: tasks の場面は機械パースする行を変えないよう依頼する
-test-text-refine.sh: text-refine: tasks のチェックは機械パースする行が変わったら止める
-test-text-refine.sh: text-refine: tasks のチェックは機械パースする行が同じなら本文を出さずに続ける

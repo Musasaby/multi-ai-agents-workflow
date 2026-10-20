@@ -219,4 +219,48 @@ Invoke-TestCase "text-refine: チェックは同じ最終稿の最新の記録�
     } finally { Remove-TestHome }
 }
 
+Invoke-TestCase "text-refine: tasks の場面は機械パースする行を変えないよう依頼する" {
+    New-TestHome
+    try {
+        Set-Refine 'yomiyasu' @('tasks')
+        Write-Utf8File "$script:Proj/.agents/workflow/runs/refine/tasks.md" "# タスク`n"
+        Invoke-Script text-refine.ps1 tasks .agents/workflow/runs/refine/tasks.md
+        Assert-Eq 0 $script:Code "exit: $($script:Err)"
+        Assert-Contains $script:Out "タスク定義です" "場面"
+        Assert-Contains $script:Out "グループの区切り行" "変えない物"
+        Assert-Contains $script:Out "Next: refine" "次の操作"
+    } finally { Remove-TestHome }
+}
+
+Invoke-TestCase "text-refine: tasks のチェックは機械パースする行が変わったら止める" {
+    New-TestHome
+    try {
+        Set-Refine 'other' @('tasks')
+        Write-Utf8File "$script:Proj/.agents/workflow/runs/refine/tasks.md" "# タスク`n`n## T1: a`n`n- **依存**: なし`n"
+        Write-Utf8File "$script:Proj/.agents/workflow/runs/refine/tasks.refined.md" "# タスク`n`n## T1: a`n`n- **依存**: T2`n"
+        Invoke-Script text-refine.ps1 tasks .agents/workflow/runs/refine/tasks.md -Check
+        Assert-Eq 4 $script:Code "exit 4: $($script:Err)"
+        Assert-Contains $script:Out "Changed: L5 - **依存**: なし" "推敲前"
+        Assert-Contains $script:Out "Refined: L5 - **依存**: T2" "推敲後"
+        Assert-Contains $script:Out "Next: escalate reason=refine-structure-changed" "エスカレーション"
+    } finally { Remove-TestHome }
+}
+
+Invoke-TestCase "text-refine: tasks のチェックは機械パースする行が同じなら本文を出さずに続ける" {
+    New-TestHome
+    try {
+        Set-Refine 'yomiyasu' @('tasks')
+        $refined = "$script:Proj/.agents/workflow/runs/refine/tasks.refined.md"
+        Write-Utf8File "$script:Proj/.agents/workflow/runs/refine/tasks.md" "# タスク`n`n- R1: 元の本文`n`n## T1: a`n`n- **目的**: 元の目的`n- **依存**: なし`n"
+        Write-Utf8File $refined "# タスク`n`n- R1: 直した本文`n`n## T1: a`n`n- **目的**: 直した目的`n- **依存**: なし`n"
+        Write-Record r1 '2026-01-01T00:00:00Z' $refined @() @()
+        Invoke-Script text-refine.ps1 tasks .agents/workflow/runs/refine/tasks.md -Check
+        Assert-Eq 0 $script:Code "exit 0: $($script:Err)"
+        Assert-Contains $script:Out "Structure: same" "構造は同じ"
+        Assert-Contains $script:Out "Candidates: 0" "候補なし"
+        Assert-Contains $script:Out "Next: continue" "続行"
+        Assert-NotContains $script:Out "Text:" "本文を出さない"
+    } finally { Remove-TestHome }
+}
+
 Show-Summary
