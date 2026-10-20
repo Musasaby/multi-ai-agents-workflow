@@ -160,6 +160,11 @@ stdin_mode = subprocess.PIPE if use_stdin else subprocess.DEVNULL
 if is_stream:
     jsonl_path = '$JSONL_PATH'
 
+    # ファイル編集ツールの本文(書き込む内容)は [tool_use] 行から外す。本文に書かれたパスの文字列を
+    # dispatch-check が誤検知するため。全文は output.jsonl に残る
+    FILE_EDIT_TOOLS = ('Edit', 'Write', 'MultiEdit', 'NotebookEdit')
+    FILE_EDIT_BODY_KEYS = ('old_string', 'new_string', 'content', 'edits', 'new_source')
+
     def human_line(obj):
         t = obj.get('type')
         if t == 'assistant':
@@ -169,7 +174,10 @@ if is_stream:
                 if bt == 'text':
                     lines.append(block.get('text', ''))
                 elif bt == 'tool_use':
-                    inp = json.dumps(block.get('input', {}), ensure_ascii=False)
+                    tool_input = block.get('input', {})
+                    if block.get('name') in FILE_EDIT_TOOLS and isinstance(tool_input, dict):
+                        tool_input = {k: v for k, v in tool_input.items() if k not in FILE_EDIT_BODY_KEYS}
+                    inp = json.dumps(tool_input, ensure_ascii=False)
                     if len(inp) > 300:
                         inp = inp[:300] + '...(truncated)'
                     lines.append('[tool_use] ' + str(block.get('name')) + ': ' + inp)
