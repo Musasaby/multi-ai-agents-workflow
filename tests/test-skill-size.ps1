@@ -63,4 +63,20 @@ Invoke-TestCase "frontmatter の description を二重引用符で囲めば成�
     Assert-Contains $r.Out 'SKILL SIZE OK' "OK を出す"
 }
 
+foreach ($v in @('`x`', '@x', '[x]')) {
+    Invoke-TestCase "frontmatter の description が予約文字 $($v.Substring(0, 1)) で始まり引用符が無いと失敗する" {
+        New-DummySkill "---`nname: agent-x`ndescription: $v`n---`n`n# x`n"
+        $r = Invoke-SkillSize
+        Assert-Eq 1 $r.Code "exit code"
+        Assert-Contains $r.Out 'FAIL: frontmatter description of agent-x/SKILL.md must be quoted' "引用符の欠落を報告する"
+    }.GetNewClosure()
+}
+
+Invoke-TestCase "frontmatter の description が予約文字を途中に含むだけなら成功する" {
+    New-DummySkill "---`nname: agent-x`ndescription: x @y`n---`n`n# x`n"
+    $r = Invoke-SkillSize
+    Assert-Eq 0 $r.Code "exit code"
+    Assert-Contains $r.Out 'SKILL SIZE OK' "OK を出す"
+}
+
 Show-Summary
