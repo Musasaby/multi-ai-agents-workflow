@@ -1041,7 +1041,42 @@ t_gen_workload_no_warn_5ac_3files() {
     assert_not_contains "$ERR" "WARN" "no warning"
 }
 
+set_task_sizing() { # $1 = task_sizing の JSON
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" "$1" <<'PY'
+import json, sys
+p, ts = sys.argv[1:3]
+with open(p, encoding='utf-8') as f:
+    cfg = json.load(f)
+cfg['task_sizing'] = json.loads(ts)
+with open(p, 'w', encoding='utf-8') as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+PY
+}
+
+t_gen_task_sizing_thresholds() {
+    for f in a b c; do printf 'x\n' > "$PROJ/$f.txt"; done
+    set_task_sizing '{"max_acceptance_criteria": 2, "max_changed_files": 1, "max_reference_files": 2}'
+    ref_tasks $'- **受け入れ基準**:\n  - [ ] c1\n  - [ ] c2\n  - [ ] c3\n- **参照ファイル**:\n  - `a.txt`(変更対象)\n  - `b.txt`(変更対象)\n  - `c.txt`(全体)'
+    run_script dispatch-prompt-gen.sh T1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$ERR" "3 acceptance criteria (more than 2; consider splitting the task)" "ac warning"
+    assert_contains "$ERR" "2 reference files marked 変更対象 (more than 1; consider splitting the task)" "changed warning"
+    assert_contains "$ERR" "3 reference files (keep it to a few)" "refs warning"
+}
+
+t_gen_task_sizing_invalid_uses_default() {
+    printf 'x\n' > "$PROJ/a.txt"
+    set_task_sizing '{"max_acceptance_criteria": "x"}'
+    ref_tasks $'- **受け入れ基準**:\n  - [ ] c1\n  - [ ] c2\n  - [ ] c3\n  - [ ] c4\n  - [ ] c5\n  - [ ] c6\n- **参照ファイル**:\n  - `a.txt`(全体)'
+    run_script dispatch-prompt-gen.sh T1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$ERR" "WARN: config task_sizing.max_acceptance_criteria is not a positive integer (using 5)" "invalid warning"
+    assert_contains "$ERR" "6 acceptance criteria (more than 5;" "default threshold"
+}
+
 echo "test-tasks.sh"
+test_case "gen: task_sizing の値で作業量の警告のしきい値が変わる" t_gen_task_sizing_thresholds
+test_case "gen: task_sizing が不正値なら警告して既定値を使う" t_gen_task_sizing_invalid_uses_default
 test_case "gen: 注記付き依存はexit 1" t_gen_annotation_rejected
 test_case "gen: 正しい形式は通る" t_gen_valid_forms_pass
 test_case "gen: 存在しないIDはexit 1" t_gen_unknown_id_rejected

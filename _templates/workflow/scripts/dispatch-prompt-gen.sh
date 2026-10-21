@@ -208,13 +208,37 @@ print(','.join(deps))
 PY
 ) || exit 1
 
+# --- 作業量のしきい値(config.json の task_sizing。値が無ければ既定値、不正値は警告して既定値) ---
+SIZING=$(python3 - "$CONFIG_PATH_PY" <<'PY' | tr -d '\r'
+import json, sys
+defaults = [('max_acceptance_criteria', 5), ('max_changed_files', 3), ('max_reference_files', 5)]
+try:
+    with open(sys.argv[1], encoding='utf-8') as f:
+        ts = json.load(f).get('task_sizing') or {}
+except Exception:
+    ts = {}
+if not isinstance(ts, dict):
+    ts = {}
+vals = []
+for key, d in defaults:
+    v = ts.get(key)
+    if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v < 1):
+        print('WARN: config task_sizing.' + key + ' is not a positive integer (using ' + str(d) + ')', file=sys.stderr)
+        v = None
+    vals.append(d if v is None else v)
+print(' '.join(str(v) for v in vals))
+PY
+)
+read -r MAX_AC MAX_CHANGED MAX_REFS <<< "$SIZING"
+
 # --- 参照ファイル欄の検証 ---
 # `- **参照ファイル**:` の下の箇条書き(`` - `<パス>` `` + 任意の説明。`<パス>:10-40` のような
 # 行範囲は可)を、子が最初に読むファイルとして扱う。存在しないパスはエラー、欄が無い・
-# 6件以上ある場合は警告のみ。値に `なし` と書いた場合は検証しない。
-python3 - "$TASK_ID" "$TASK_SECTION" <<'PY' || exit 1
+# しきい値(max_reference_files)を超える場合は警告のみ。値に `なし` と書いた場合は検証しない。
+python3 - "$TASK_ID" "$TASK_SECTION" "$MAX_REFS" <<'PY' || exit 1
 import os, re, sys
 task_id, section = sys.argv[1:3]
+max_refs = int(sys.argv[3])
 lines = section.split('\n')
 field_re = re.compile(r'^(\s*)-\s+\*\*参照ファイル\*\*:\s*(.*?)\s*$')
 start = None
@@ -245,15 +269,17 @@ missing = [p for p in paths if not os.path.exists(p)]
 if missing:
     print(task_id + ': reference file(s) not found: ' + ', '.join(missing), file=sys.stderr)
     sys.exit(1)
-if len(paths) > 5:
+if len(paths) > max_refs:
     print('WARN: ' + task_id + ': ' + str(len(paths)) + ' reference files (keep it to a few)', file=sys.stderr)
 PY
 
 # --- 作業量の警告(タスクが1応答で処理しきれなそうなら計画の段階で気付けるようにする) ---
-# 1) 受け入れ基準が6件以上、2) (変更対象)の参照ファイルが4件以上。どちらも警告のみで生成は続ける。
-python3 - "$TASK_ID" "$TASK_SECTION" <<'PY' || exit 1
+# 1) 受け入れ基準がしきい値(max_acceptance_criteria)を超える、2) (変更対象)の参照ファイルが
+# しきい値(max_changed_files)を超える。どちらも警告のみで生成は続ける。
+python3 - "$TASK_ID" "$TASK_SECTION" "$MAX_AC" "$MAX_CHANGED" <<'PY' || exit 1
 import re, sys
 task_id, section = sys.argv[1:3]
+max_ac, max_changed = int(sys.argv[3]), int(sys.argv[4])
 lines = section.split('\n')
 
 def field_start(field):
@@ -276,8 +302,8 @@ if fs is not None:
             break
         if re.match(r'^\s*-\s+\[[ xX]\]', line):
             count += 1
-    if count > 5:
-        print('WARN: ' + task_id + ': ' + str(count) + ' acceptance criteria (more than 5; consider splitting the task)', file=sys.stderr)
+    if count > max_ac:
+        print('WARN: ' + task_id + ': ' + str(count) + ' acceptance criteria (more than ' + str(max_ac) + '; consider splitting the task)', file=sys.stderr)
 
 def field_body(field):
     fs = field_start(field)
@@ -295,8 +321,8 @@ def field_body(field):
 count = 0
 for line in field_body('参照ファイル'):
     count += len(re.findall(r'[(（]変更対象', line))
-if count > 3:
-    print('WARN: ' + task_id + ': ' + str(count) + ' reference files marked 変更対象 (more than 3; consider splitting the task)', file=sys.stderr)
+if count > max_changed:
+    print('WARN: ' + task_id + ': ' + str(count) + ' reference files marked 変更対象 (more than ' + str(max_changed) + '; consider splitting the task)', file=sys.stderr)
 PY
 
 # --- AGENTS.md が @ 参照だけのファイルなら警告する(プロファイルの agents_md_imports が false の子CLIは @ を展開しないため、子にルールが届かない) ---
