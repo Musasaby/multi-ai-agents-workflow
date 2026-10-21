@@ -1,0 +1,27 @@
+name: dist
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dist
+  cancel-in-progress: false
+
+jobs:
+  build-dist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: 前回の dist を取得する(初回は無い)
+        run: git fetch --no-tags origin +refs/heads/dist:refs/heads/dist || true
+      - name: dist を作る
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          bash tools/build-dist.sh
+      - name: dist を push する
+        run: git push origin refs/heads/dist:refs/heads/dist
