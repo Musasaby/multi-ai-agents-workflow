@@ -7,12 +7,14 @@
 ## プロジェクト概要
 
 - 複数エージェント協調の実装ワークフロー(skill 群とスクリプト)の配布元リポジトリ。
-  利用先は `git subtree` でリポジトリ全体を `.agents/skills/` に取り込む
+  利用先は `git subtree` で `dist` ブランチ(`.distignore` のパスを除いたもの。`main` への push ごとに CI が作る)を `.agents/skills/` に取り込む
 - 主要ディレクトリ:
   - `agent-*/SKILL.md`・`agents-md-setup/`・`workflow-update/` — skill(正本)
   - `_templates/workflow/scripts/` — 利用先に配布するスクリプト(`.sh` と `.ps1` を対で持つ)
   - `_templates/workflow/README.md` — スクリプトと tasks.md / state.json の仕様
   - `tests/` — スクリプトのシナリオテスト(`test-*.sh` / `test-*.ps1`)と品質ゲート
+  - `tools/` — `dist` ブランチを作るスクリプト
+  - `.distignore` — `dist` から除くパスの一覧
 
 ## 共通ルール
 

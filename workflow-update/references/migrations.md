@@ -25,3 +25,10 @@ tasks.md が旧形式(例: `- **依存**: T30(完了済み)`、依存行の無�
 更新すると `state-sync` / `next-task` が exit 1 で止まる。更新後に `next-task` を1回実行し、
 exit 1 になった場合は stderr に列挙されたタスクの依存欄を `なし` / `T1, T2` 形式に直す
 (注記は目的欄へ移す)ようユーザーに提案する
+
+## 配布ブランチの `dist` への移行
+
+配布は `dist` ブランチ(`main` から `tests/`・`docs/`・`AGENTS.md` 等を除いたもの)に移った。
+`workflow-update` が `WARN: upstream.branch is main` を出したら、`config.json` の
+`upstream.branch` を `"dist"` に変えて再実行するようユーザーに提案する。
+その pull で `.agents/skills/` から `tests/`・`docs/`・`AGENTS.md` 等が消えるのは正常
