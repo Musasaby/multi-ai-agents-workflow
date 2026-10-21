@@ -93,13 +93,16 @@ subtree 時代の `workflow-update` が `escalate reason=sync-failed`
 subtree で取り込んだ配布物を `.agents/skills/` から消してコミットし、`npx skills add` で導入し直し、
 配置済みスクリプトとの差分を反映してコミットします。コマンドは bash と PowerShell で同じものが使えます。
 利用先固有の skill は `.agents/skills/` に残ります。
+`--overwrite` には、`workflow-update.sh` の `differs` 行に出た名前をカンマ区切りで渡します(`differs` が無ければその行は飛ばします)。
 
 ```bash
 git -C .agents/skills rm -r -q --ignore-unmatch agent-branch-guard agent-comprehension-check agent-dispatch agent-quality-gate agent-review-commit agent-task-plan agent-workflow agents-md-setup workflow-update _templates tests docs AGENTS.md README.md .gitignore .gitattributes .github
 git commit -m "chore: subtree で取り込んだ配布物を削除する(npx skills へ移行)"
 npx skills add Musasaby/multi-ai-agents-workflow --skill '*' -a universal -y
 bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-update.sh
-git add .agents/skills skills-lock.json
+bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.sh --copy-missing
+bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.sh --overwrite <workflow-update が differs と出した名前,...>
+git add .agents/skills skills-lock.json .agents/workflow/scripts .agents/workflow/README.md
 git commit -m "chore: npx skills で配布物を導入する"
 ```
 
