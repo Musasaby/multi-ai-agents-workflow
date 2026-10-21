@@ -7,6 +7,8 @@ description: GitHub IssueのIDまたは計画ドキュメントのパスを引�
 
 引数で与えられた計画ソースを読み、子エージェントに依頼可能な粒度のタスクに分解する。
 
+前提・解釈: コード例は `.sh` 版だけを示す。PowerShell では `.agents/workflow/scripts/<名>.ps1` を使い、`--init` `--source` のようなオプションを `-Init` `-Source` の形の名前付き引数に読み替える。
+
 ## 引数
 
 - 数値(例: `42`)または `#42` 形式 → GitHub Issue とみなし `gh issue view <ID> --comments` で取得
@@ -27,12 +29,8 @@ description: GitHub IssueのIDまたは計画ドキュメントのパスを引�
 
 - **state.json が無い** → 通常モード(§1〜§5)で新規作成する
 - **state.json があり、全タスクが `done`** → まず、確認なしで
-  `scripts/workflow-archive`(PowerShell: `.agents/workflow/scripts/workflow-archive.ps1`
-  / POSIX: `workflow-archive.sh`)にスラッグを渡して実行する。スクリプトが作業ブランチの
+  `workflow-archive` にスラッグを渡して実行する。スクリプトが作業ブランチの
   PR の状態を確かめ、マージ済みのときだけアーカイブする
-  ```powershell
-  .agents/workflow/scripts/workflow-archive.ps1 <スラッグ>
-  ```
   ```bash
   .agents/workflow/scripts/workflow-archive.sh <スラッグ>
   ```
@@ -44,7 +42,7 @@ description: GitHub IssueのIDまたは計画ドキュメントのパスを引�
     - 計画ソースがその PR のレビューで見つかった残課題なら、**追加モード**で今のサイクルに追記する。
       state.json の `group` が空でなければ、追記するタスクに `- **グループ**: <group>` を付けて
       今の PR のグループに入れる
-    - 別件なら、PR のマージを待つか、`--force`(PowerShell: `-Force`)でアーカイブして
+    - 別件なら、PR のマージを待つか、`--force` でアーカイブして
       新規作成するかを利用者に確認する
   - **exit 3**(`pr-closed`)・**exit 5**(`pr-not-created`)・**exit 4**(`gh-unavailable`)→
     利用者に状況を伝え、追加モードにするか、`--force` でアーカイブして新規作成するかを確認する
@@ -52,14 +50,10 @@ description: GitHub IssueのIDまたは計画ドキュメントのパスを引�
   破棄してよいか」をユーザーに確認する。破棄する場合も削除ではなく
   `workflow-archive` でアーカイブする(履歴が残るため安全に「破棄」できる)。
   利用者が破棄を承認しているので、`--force` を付けて PR の状態の判定を飛ばす
-  ```powershell
-  .agents/workflow/scripts/workflow-archive.ps1 <スラッグ> -Force
-  ```
   ```bash
   .agents/workflow/scripts/workflow-archive.sh <スラッグ> --force
   ```
-  破棄しない場合は §「追加モード」に進む(ユーザーが途中追加を意図している場合)か、
-  作業を中断する。
+  破棄しない場合は「追加モード」に進むか、作業を中断する。
 
 ### 1. 計画の読解
 
@@ -149,53 +143,23 @@ description: GitHub IssueのIDまたは計画ドキュメントのパスを引�
 
 ### 3. ファイル生成
 
-`.agents/workflow/README.md` に記載のフォーマットに従って生成する(`.agents/workflow/README.md` が存在しない場合は `.agents/skills/_templates/workflow/README.md`（配布元リポジトリではルートの `_templates/workflow/README.md`）を参照する。本来は `/agents-md-setup` の再実行で `.agents/workflow/README.md` が配置されるため、利用先で欠落している場合はセットアップ手順を見直すこと):
+`.agents/workflow/README.md` の「tasks.md」の節に記載のフォーマットに従って生成する(無い場合は `.agents/skills/_templates/workflow/README.md`、配布元リポジトリではルートの `_templates/workflow/README.md` の同じ節を参照する。利用先で欠落している場合は `/agents-md-setup` を再実行する):
 
 - `.agents/workflow/tasks.md` — タスク定義の正本(子エージェントも参照する)。**LLMが
   生成するのはこのファイルのみ**
-- **tasks.md の推敲(yomiyasu、任意)** — tasks.md を書いた後、state-sync の前に行う。
-  `text_refine.skill` が未設定なら `Next: continue` が返るので、そのまま state-sync に進む。
-  `Hint:` の扱い、`Next: refine` の依頼文の実行、`--check` の候補の判断、yomiyasu を呼べなかったときは
-  `../agent-workflow/references/report-template.md` の「日本語の推敲」に従う(ここには書き写さない)
-
-  1. tasks.md を `.agents/workflow/runs/refine/tasks.md` にコピーする
-  2. 場面 `tasks` で `text-refine` を実行する
-
-     ```powershell
-     .agents/workflow/scripts/text-refine.ps1 tasks .agents/workflow/runs/refine/tasks.md
-     ```
-     ```bash
-     .agents/workflow/scripts/text-refine.sh tasks .agents/workflow/runs/refine/tasks.md
-     ```
-  3. `Next: continue` のときは、そのまま state-sync に進む(tasks.md は書き換えない)
-  4. `Next: refine` のときは、`Request:` の依頼文で推敲し、`--check` を実行する
-
-     ```powershell
-     .agents/workflow/scripts/text-refine.ps1 tasks .agents/workflow/runs/refine/tasks.md -Check
-     ```
-     ```bash
-     .agents/workflow/scripts/text-refine.sh tasks .agents/workflow/runs/refine/tasks.md --check
-     ```
-     - `Next: continue` のときは、`Output:` のファイル(`.agents/workflow/runs/refine/tasks.refined.md`)で
-       `.agents/workflow/tasks.md` を置き換えてから、state-sync に進む
-     - `Next: escalate reason=refine-structure-changed` のとき(機械パースする行が推敲で変わった)は、
-       **state-sync に進まずに止める**。`Changed:`・`Refined:` 行を利用者に示し、推敲前の tasks.md を使うか、
-       推敲後の文を直すかを決めてもらう
+- **tasks.md の推敲(yomiyasu、任意)** — tasks.md を書いた後、state-sync の前に
+  [references/tasks-refine.md](references/tasks-refine.md) の手順で行う
+  (`text_refine.skill` が未設定なら `Next: continue` が返るので、そのまま state-sync に進む)
 - `.agents/workflow/state.json` — LLMは生成しない。tasks.md を書き終えたら
-  `scripts/state-sync`(PowerShell: `.agents/workflow/scripts/state-sync.ps1` / POSIX:
-  `state-sync.sh`)を `--init` オプションで実行し、機械生成する。`--source` には
+  `state-sync` を `--init` オプションで実行し、機械生成する。`--source` には
   計画ソース(Issue URL やドキュメントパス)を渡す。branch は git から自動取得される
 
-  ```powershell
-  .agents/workflow/scripts/state-sync.ps1 -Init -Source "<計画ソース>"
-  ```
   ```bash
   .agents/workflow/scripts/state-sync.sh --init --source "<計画ソース>"
   ```
 
-  実行後、全タスクが `"status": "pending"`, `"retries": 0`, `"commit": null` で
-  初期化された state.json が生成される。state.json が既に存在する場合はエラー
-  終了する(§0 の分岐で新規作成が確定している状態でのみ実行すること)。
+  全タスクが `pending`・`retries: 0`・`commit: null` の state.json が生成される。
+  既に存在する場合はエラー終了する(§0 で新規作成が確定しているときだけ実行する)。
 
 ### 4. 進捗表示への登録(任意)
 
@@ -247,78 +211,6 @@ git commit -m "chore: <計画ソース> のタスク計画を作成"
 
 ## 追加モード(タスクの途中追加)
 
-サイクル途中でレビューにより派生タスクが見つかった場合や、ユーザーが要件を
-追加した場合に使う。**LLM は既存タスクを一切書き換えず、追記のみで完結させる**
-(既存タスクの間に挿入する場合も、既存タスクの依存欄の書き換えはスクリプトが行う)。
-
-追加モードの作業自体もファイル変更・コミットを伴うため、まず
-`agent-branch-guard` skill の手順でブランチを確かめる
-(main 上やマージ済みブランチなら専用ブランチを作ってから進む)。
-専用ブランチを作った場合は、`state-sync --set-branch` で state.json の `branch` を
-更新してから追記を始める。
-
-1. **新IDの採番**: `.agents/workflow/state.json` から既存の最大タスクID
-   (例: 既存最大が `T7` なら次は `T8`)を取得する。**tasks.md 全文は読み直さない**
-   (state.json だけで採番が完結する)
-2. **追記専用**: `.agents/workflow/tasks.md` の末尾に、新IDのセクションのみを
-   §2 と同じ基準(検証可能な受け入れ基準・依存欄の厳密フォーマット・グループ間依存の
-   制約・要件欄)で追記する。既存セクションには一切触れない
-   (例外: 新しい要件が出た場合は、`## 要件` 節の末尾に次の番号(既存の最大が `R4` なら `R5`)で
-   `- R5: ...` を追記してよい。既存の要件行は書き換えない。追記するタスクにも要件欄を書く。
-   また、要件の充足確認で合意した対象外は、`## 対象外` 節の末尾に追記してよい。既存行は書き換えない)
-   追記タスクの所属グループは記述位置で決まる(tasks.md 上の最後の区切りのグループ)。
-   現在の作業グループ(state.json の `group`)など別のグループに属させたい場合は、
-   タスク欄に `- **グループ**: <名前>`(区切り行で宣言済みのグループ名)を書く
-   (この欄が位置より優先される)。既定グループは名前が空文字列のためこの欄では
-   参照できない(空欄は `state-sync` がエラーにする)。未宣言の名前もエラーになる。
-   挿入モードで tasks.md 末尾に追記したセクションも同じ扱いである
-3. **依存**: 既存タスク(`done` 済みタスクも含む)を依存先にしてよい。`done`
-   タスクへの依存は、引き継ぎガードが `report.md` の存在を保証しているため
-   問題なく解決できる
-3a. **追記セクションの推敲(yomiyasu、任意)**: 手順2で追記するセクションは、tasks.md に書く前に
-   `.agents/workflow/runs/refine/tasks.md` に書く。§3 の「tasks.md の推敲」と同じ手順
-   (`text-refine tasks .agents/workflow/runs/refine/tasks.md` → `Next: refine` なら依頼文で推敲して `--check`)で
-   推敲・確認し、`Next: continue` になったら `Output:` のファイルの内容を tasks.md の末尾に足す
-   (推敲しないとき、`Next: continue` が最初に返ったときは、下書きを足す)。
-   `refine-structure-changed` のときは tasks.md に足さず、state-sync に進まずに止めて利用者に判断を仰ぐ。
-   既存のセクションは推敲に渡さない
-4. **state.json への反映**: `state-sync` を `--init` なしで実行し、追加分のみを
-   `pending` として追記する(既存タスクの `status` / `retries` / `commit` は
-   一切変更されない)
-
-   ```powershell
-   .agents/workflow/scripts/state-sync.ps1
-   ```
-   ```bash
-   .agents/workflow/scripts/state-sync.sh
-   ```
-
-   **既存タスクの間に挿入する場合**(例: T3 → T4 の間に T8 を挟み、T4 を T8 の完了後に
-   実行したい場合)は、`--insert <新ID> --before <後続ID>` を付けて実行する。
-   スクリプトが後続タスクの依存欄に新IDを追加する(例: T4 の `T3` → `T3, T8`)。
-   新タスク自身の依存欄(例: `T3`)は手順2で LLM が書く。`--before` にはカンマ区切りで
-   複数の後続タスクを指定できる
-
-   ```powershell
-   .agents/workflow/scripts/state-sync.ps1 -Insert T8 -Before T4
-   ```
-   ```bash
-   .agents/workflow/scripts/state-sync.sh --insert T8 --before T4
-   ```
-
-   - 書き換えてよいのは `pending` の後続タスクだけ。`done` / `in_progress` /
-     `in_review` / `failed` のタスクを `--before` に指定すると拒否される(exit 1)
-   - 循環依存になる挿入(例: T8 が T4 に依存しているのに T4 の前に挿入する)も拒否される。
-     拒否された場合、tasks.md と state.json は変更されない
-   - タスクの実行順は tasks.md の記述順や ID 順ではなく依存関係で決まる。挿入した T8 は
-     state.json の末尾に追加されるが、`next-task` が依存関係に従って T4 より先に選ぶ
-
-5. 進捗表示への登録(§4。任意)も追加分のみ行う(既存タスクの再登録はしない)
-6. **ユーザー承認も追加分のみ**提示する(既存タスク一覧の再提示はしない)。§5 と同様に、
-   追加分の「要件 → タスク」の対応表(追加した要件と追加したタスクの行だけ)を中心に示す
-7. **コミット**: 承認後、§6 と同様に tasks.md と state.json をコミットする
-   (`chore: <追加したタスクID> を追加`。挿入した場合は `chore: <新ID> を <後続ID> の前に挿入`)。
-   dispatch 前に作業ツリーをクリーンにするため
-
-このモードでの親のLLM出力は「追加するタスクのセクション」だけに限る。既存部分の
-再読・再出力・state.json の手書き編集は行わない。
+サイクル途中でレビューにより派生タスクが見つかった場合や、ユーザーが要件を追加した場合に使う。
+手順(採番・追記・`state-sync --insert`・承認・コミット)は
+[references/add-mode.md](references/add-mode.md) に従う。既存タスクを書き換えず、追記だけで済ませる。

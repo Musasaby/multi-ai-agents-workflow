@@ -83,4 +83,12 @@ if ($LASTEXITCODE -ne 0) {
     $failed = $true
 }
 
+# skill のサイズ上限と references のリンク先の検査。結果(skill-size.ps1 自身の出力)を含めて合否を反映する
+$sizeOut = & pwsh -NoProfile -File "$PSScriptRoot/skill-size.ps1"
+$sizeOut | ForEach-Object { Write-Host $_ }
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "SKILL SIZE ERROR: tests/skill-size.ps1 が失敗"
+    $failed = $true
+}
+
 if ($failed) { exit 1 } else { Write-Host "ALL CHECKS PASSED"; exit 0 }

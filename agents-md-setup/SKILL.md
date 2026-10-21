@@ -18,11 +18,14 @@ Claude Code 固有のパス(`CLAUDE.md`, `.claude/`)からはリンク経由で�
 
 `workflow-setup` を**テンプレート側のコピーから**実行する(配置先の `.agents/workflow/scripts/` にはまだ無い場合があるため):
 
-- PowerShell: `.agents/skills/_templates/workflow/scripts/workflow-setup.ps1`
-- POSIX: `bash .agents/skills/_templates/workflow/scripts/workflow-setup.sh`
-- 配布元リポジトリでは `_templates/workflow/scripts/` 配下のものを使う
+前提・解釈: `workflow-setup` の実行例は `.sh` 版だけを示す。PowerShell では `.sh` を `.ps1` にし、`--check` を `-Check` の形の名前付き引数に読み替える(手順2・3の PowerShell の例はそのまま使う)。
 
-変更せずに検証だけ行う場合は、`-Check`(PowerShell)/ `--check`(POSIX)を付ける。
+```bash
+bash .agents/skills/_templates/workflow/scripts/workflow-setup.sh
+```
+
+配布元リポジトリでは `_templates/workflow/scripts/` 配下のものを使う。
+変更せずに検証だけ行う場合は、`--check` を付ける。
 
 出力末尾の `Next:` 行で次の動作を決める:
 

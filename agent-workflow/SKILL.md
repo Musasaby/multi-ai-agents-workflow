@@ -8,21 +8,23 @@ description: マルチエージェント実装ワークフローのオーケス�
 親エージェント(このskillの実行者)が計画とレビューを担い、実装とテスト実行を
 子エージェント(CLI経由、エージェント名は引数/configで指定)に委譲する。
 
+前提・解釈: コード例は `.sh` 版だけを示す。PowerShell では `.agents/workflow/scripts/<名>.ps1` を使い、`--branch` のようなオプションを `-Branch` の形の名前付き引数に読み替える。報告・説明はすべて日本語で行う(委譲先 skill の報告を中継・要約するときも同じ)。
+
 ## 引数
 
 - 第1引数(任意): GitHub Issue ID または計画ドキュメントのパス。
   省略時は `.agents/workflow/state.json` の `source` を計画ソースとして再開する。
   state.json も無い場合はユーザーに計画ソースを質問する
-- `--agent-cmd "<テンプレート>"`(任意): 子エージェントCLIのコマンドテンプレート。
-  `{prompt}` 展開。省略時は `.agents/workflow/config.json` の値
+- `--agent-cmd "<テンプレート>"`(任意): 子CLIのコマンドテンプレート(`{prompt}` 展開)。
+  省略時は `.agents/workflow/config.json` の値
 - タスク範囲(`T1~T3` 等)は引数で渡さない。次に処理するタスクは `next-task` スクリプトが、
   PR 作成・停止の範囲は tasks.md のグループ区切り(`<!-- グループ <名前> -->` 行、
-  詳細は `agent-task-plan` skill)が決める
+  詳細は `agent-task-plan`)が決める
 
 ## 前提
 
 - `agents-md-setup` 済みであること(`AGENTS.md` が正本、`.claude` リンク有効)。
-  未了なら先に `/agents-md-setup` を実行する
+  未了なら先に `/agents-md-setup` を実行
 - 作業は `develop/*` ブランチで行う。`main` 上で開始された場合は
   `develop/<計画に基づく作業名>` ブランチを作成してから進める
 - tasks.md のタスク実行**以外**の依頼(タスクの追加・計画の変更・ドキュメントや設定の
@@ -34,36 +36,28 @@ description: マルチエージェント実装ワークフローのオーケス�
 tasks.md にグループ区切りがあり、config の `branch_per_group` が有効(既定)の場合、
 グループが PR 作成・ブランチ切替の機械的な単位になる。次のタスクを選ぶ `next-task` が
 `Next: group-advance`(作業グループ完了)を出したら、以下の手順に**必ず**従う。**グループ途中で
-次のグループのタスクに進んではならない**(next-task は現在の作業グループのタスクしか
-選ばないため、この手順のループを守れば自然に防げる)。
+次のグループのタスクに進んではならない**。
 
-1. `group-advance`(PowerShell: `.agents/workflow/scripts/group-advance.ps1` /
-   POSIX: `group-advance.sh`)を実行する。`--branch`(PowerShell: `-Branch`)には
-   次のグループ用の新ブランチ名(`develop/` 始まり。MERGED 時のみ使用)を渡す。
-   ブランチ名は親が計画・グループ名から決める(例: `develop/<作業名>-<グループ名>`)
-   ```powershell
-   .agents/workflow/scripts/group-advance.ps1 -Branch "develop/<作業名>-<グループ名>"
-   ```
+1. `group-advance` を実行する。`--branch` には次のグループ用の新ブランチ名(`develop/` 始まり。
+   MERGED 時のみ使用)を渡す。名前は親が計画・グループ名から決める(例: `develop/<作業名>-<グループ名>`)
    ```bash
    .agents/workflow/scripts/group-advance.sh --branch "develop/<作業名>-<グループ名>"
    ```
 2. 出力の最後の `Next:` 行で分岐する:
-   - **`Next: create-pr`**(exit 7。PR 未作成): 先に「要件の充足確認」を行い、問題が無ければ
+   - **`Next: create-pr`**(PR 未作成): 先に「要件の充足確認」を行い、問題が無ければ
      「PR作成(子への単発依頼)」を必ず実行し、PR URL をユーザーに報告して停止する(マージはユーザーが行う)
-   - **`Next: update-pr`**(exit 10。PR はオープンだが、PR を作ったあとに足したコミットが未 push。
-     stdout に `OPEN <PR URL>`): 先に「要件の充足確認」を行ってから「PR作成(子への単発依頼)」を実行する(子が push と PR 本文の
-     作り直しを行う)。完了後に PR URL をユーザーに報告して停止する。親は自分で `git push` や
-     PR 本文の更新をしない。レビュー指摘への対応タスクを追加モードで同じグループに足して
-     完了させたときに、この分岐になる
-   - **`Next: wait-merge`**(exit 8。マージ待ち。stdout に `OPEN <PR URL>`): PR がオープンのため
-     「マージ待ち」であることを PR URL とともに報告して停止する。マージ完了の連絡を
-     受けて group-advance を再実行する
-   - **`Next: escalate reason=pr-closed`**(exit 9。PR が未マージのまま閉鎖):
-     エスカレーションする(PR が閉じられた理由と再作成の要否をユーザーに確認する)
-   - **`Next: continue`**(exit 0。次グループへの切替完了): stdout の
-     `ADVANCED <新ブランチ名> <新グループ名>` を確認する(state.json の `branch` / `group` は
-     group-advance が更新済み)。state.json のコミットは group-advance が行う
-     (stdout の `State commit:` 行)。親がコミットする必要はない。新グループのタスクのループに進む
+   - **`Next: update-pr`**(PR はオープンだが、PR を作ったあとに足したコミットが未 push。
+     stdout に `OPEN <PR URL>`): 先に「要件の充足確認」を行ってから「PR作成(子への単発依頼)」を実行する
+     (子が push と PR 本文の作り直しを行う)。完了後に PR URL を報告して停止する。親は自分で
+     `git push` や PR 本文の更新をしない。レビュー指摘への対応タスクを追加モードで同じグループに
+     足して完了させたときに、この分岐になる
+   - **`Next: wait-merge`**(マージ待ち。stdout に `OPEN <PR URL>`): 「マージ待ち」であることを
+     PR URL とともに報告して停止する。マージ完了の連絡を受けて group-advance を再実行する
+   - **`Next: escalate reason=pr-closed`**(PR が未マージのまま閉鎖): エスカレーションする
+     (PR が閉じられた理由と再作成の要否をユーザーに確認する)
+   - **`Next: continue`**(次グループへの切替完了): stdout の `ADVANCED <新ブランチ名> <新グループ名>` を
+     確認する。state.json の更新とコミットは group-advance が行うので、親はコミットしない。
+     新グループのタスクのループに進む
 
 ## フロー
 
@@ -82,12 +76,12 @@ tasks.md にグループ区切りがあり、config の `branch_per_group` が�
 
 ### 次のタスクの選び方
 
-ループの各周回の先頭で `next-task`(PowerShell: `.agents/workflow/scripts/next-task.ps1`
-/ POSIX: `next-task.sh`)を実行し、stdout の最後の `Next:` 行に従う: `dispatch <ID>` →
-`/agent-dispatch <ID>`、`review <ID>` → `/agent-review-commit <ID>`、`finish` →
-手順3、`group-advance` → 「グループ単位の PR とブランチ切替」、`escalate` →
-reason と stderr をユーザーに説明する。`Next:` 行が無ければ stderr を添えて報告する。
-語彙の一覧は `.agents/workflow/README.md` の「Next: 行」の節。
+ループの各周回の先頭で `next-task`(`.agents/workflow/scripts/next-task.sh`)を実行し、
+stdout の最後の `Next:` 行に従う: `dispatch <ID>` → `/agent-dispatch <ID>`、
+`review <ID>` → `/agent-review-commit <ID>`、`finish` → 手順3、
+`group-advance` → 「グループ単位の PR とブランチ切替」、`escalate` → reason と stderr を
+ユーザーに説明する。`Next:` 行が無ければ stderr を添えて報告する。
+語彙は `.agents/workflow/README.md` の「Next: 行」の節。
 tasks.md の記述順や ID 順、state.json の並び順で次のタスクを決めない
 (挿入したタスクの順序が崩れるため)。
 
@@ -101,74 +95,25 @@ tasks.md の記述順や ID 順、state.json の並び順で次のタスクを�
 
 ## 一巡後の再実行
 
-全タスクが `done` になった状態で `/agent-task-plan` を再度実行すると、作業ブランチの PR が
-マージ済みの場合に限り、既存の tasks.md / state.json / runs/ / comprehension/ は
-`archive/<日時-スラッグ>/` へアーカイブされ、新サイクルは空の状態から始まる(ユーザー確認は不要)。
-PR が未マージ(OPEN)の場合や、PR が未作成で未マージのコミットがある場合などは、
-`workflow-archive` がアーカイブせずに止まる。その場合、PR のレビューで出た残課題は
-追加モードで今のサイクルに足す(詳細は `agent-task-plan` skill の §0)。
-旧サイクルの完了報告が新サイクルの同名タスクIDに誤って引き継がれることはない。
+全タスク `done` で `/agent-task-plan` を再実行すると、作業ブランチの PR がマージ済みの
+場合に限り、旧サイクルのファイルが `archive/` へ移され、新サイクルが空の状態から始まる。
+PR が未マージなどで `workflow-archive` が止まった場合、残課題は追加モードで今のサイクルに足す
+(詳細は `agent-task-plan` skill の §0)。
 
 ## 再開(レジューム)
 
-開始時に `.agents/workflow/state.json` を確認する:
-
-- 引数がある場合: 未完了タスク(`pending` / `in_progress` / `in_review`)が残っていて
-  `source` が引数と一致するなら、**手順1をスキップ**し、状態に応じたフェーズから再開する
-  (`in_progress` → dispatch からやり直し、`in_review` → レビューから)。`source` が
-  引数と異なる場合は、進行中ワークフローの破棄可否をユーザーに確認する
-- 引数がない場合: state.json が存在すればその `source` を計画ソースとみなして上記と同じ
-  再開判定を行う。state.json が無ければユーザーに計画ソースを質問する
+開始時に `.agents/workflow/state.json` を確認する。未完了タスク(`pending` / `in_progress` /
+`in_review`)が残っていて `source` が引数(省略時は state.json 自身の `source`)と一致するなら、
+**手順1をスキップ**し、状態に応じたフェーズから再開する(`in_progress` → dispatch からやり直し、
+`in_review` → レビューから)。`source` が引数と異なる場合は、進行中ワークフローの破棄可否を
+ユーザーに確認する。state.json が無く引数も無ければ、ユーザーに計画ソースを質問する。
 
 ## 問題発生時の対応順序
 
-ワークフロー実行中に問題(タスク失敗、子エージェントの異常終了、想定外の挙動等)が
-発生した場合、以下の順序で対応を検討する。上位の段階で解決できなければ次の段階に進む:
-
-1. **切り分け**: その問題が `multi-ai-agents-workflow` 由来(オーケストレーション・
-   skill・スクリプトの不備)か、それ以外(子エージェント側の実装ミス、対象プロジェクト
-   固有の問題等)かを切り分ける
-2. **機械的改善を最優先で検討**: スクリプトによる自動化・検証強化など、AIの性能に
-   依存しない機械的な改善で恒久対処できないかをまず検討する(再現性・確実性が高いため)
-3. **ドキュメント改善で対処**: 2 が難しい場合のみ、`skills/` 配下の各SKILL.mdや
-   `AGENTS.md`、その他ドキュメントの記述改善で対処する
-4. **エスカレーション**: 1 の切り分けの結果 `multi-ai-agents-workflow` 由来と判明した
-   問題、または 2・3 でも解決が困難な問題は、ここで対応を打ち切りユーザーに報告して
-   中断する。ワークフロー由来の問題を子エージェントへの再依頼や場当たり的な回避で
-   押し通さないこと。利用先で skill・スクリプトを勝手に直すこともしない
-   (修正は配布元で行い、`workflow-update` で取り込む)
-5. **upstream への Issue 起票**(ワークフロー由来と判明した場合): 改善提案が会話の中で
-   消えないよう、配布元リポジトリに Issue として残す。下記「upstream への Issue 起票手順」に従う
-
-### upstream への Issue 起票手順
-
-起票は外部への公開を伴うため、**ユーザーの承認を得るまで `--create` を実行しない**。
-起票先は `.agents/workflow/config.json` の `upstream.url` から `upstream-issue` スクリプトが
-決める(利用先リポジトリに誤って起票しないよう、`gh issue create` を直接実行しない)。
-
-1. **重複確認**: 現象を表すキーワードで既存 Issue(open / closed)を検索する
-   ```powershell
-   .agents/workflow/scripts/upstream-issue.ps1 -Search "<キーワード>"
-   ```
-   ```bash
-   .agents/workflow/scripts/upstream-issue.sh --search "<キーワード>"
-   ```
-   同じ問題の Issue があれば、新規起票ではなく、その Issue の URL をユーザーに示す
-   (追加情報をコメントするかどうかもユーザーに確認する)
-2. **本文の作成**: `.agents/workflow/scripts/upstream-issue-template.md` をもとに本文を作り、
-   `.agents/workflow/runs/<タスクID>-<試行回数>/upstream-issue.md` に保存する
-   (現象 / 確定していること / 除外した原因 / 推定原因 / 改善提案 / 再現情報)。
-   利用先固有のコード・機密情報・個人情報は含めない
-3. **ユーザー承認**: 起票先リポジトリ(`--dry-run` の `Repository:` 行)・件名・本文をユーザーに
-   提示し、起票してよいか確認する
-   ```powershell
-   .agents/workflow/scripts/upstream-issue.ps1 -Create -Title "<件名>" -BodyFile <本文のパス> -DryRun
-   ```
-   ```bash
-   .agents/workflow/scripts/upstream-issue.sh --create --title "<件名>" --body-file <本文のパス> --dry-run
-   ```
-4. **起票**: 承認後、`-DryRun` / `--dry-run` を外して実行し、作成された Issue の URL を
-   ユーザーに報告する。ラベルは付けない
+問題(タスク失敗、子エージェントの異常終了、想定外の挙動等)が起きたら、切り分け → 機械的改善 →
+ドキュメント改善 → エスカレーション → upstream への Issue 起票の順で検討する。
+ワークフロー由来の問題を場当たり的な回避で押し通さず、利用先で skill・スクリプトを直さない。
+5段階の説明と Issue 起票手順(ユーザー承認が必要)は `references/escalation.md` を読む。
 
 ## エスカレーション基準(ループを止めてユーザーに判断を仰ぐ)
 
@@ -178,108 +123,29 @@ PR が未マージ(OPEN)の場合や、PR が未作成で未マージのコミ�
 
 ## 要件の充足確認
 
-PR 作成の前に、要件が満たされているかを親が確かめる。「PR作成(子への単発依頼)」の手順1の前に行う
-(グループ完了時の `Next: create-pr` / `Next: update-pr`、サイクル完了時の両方)。
-
-1. `req-status`(PowerShell: `.agents/workflow/scripts/req-status.ps1` / POSIX: `req-status.sh`)を実行する。
-   `No requirements section` と出たら、この確認は省略して PR 作成に進む
-   ```powershell
-   .agents/workflow/scripts/req-status.ps1
-   ```
-   ```bash
-   .agents/workflow/scripts/req-status.sh
-   ```
-2. 対象は、この PR のタスクを含む要件(グループ完了時)または全要件(サイクル完了時)。
-   要件ごとに、要件の本文を `git diff origin/main...HEAD` と対応タスクの完了報告に照らし、
-   「満たした / 部分 / 未対応」を判断する。`partial` の要件で未完了タスクが後のグループにあるものは、
-   このグループで担う分だけを判断する。`## 対象外` 節に記録済みの要件・要件の一部は除外する
-3. 部分・未対応があれば PR 作成に進まず停止する。要件と判断の根拠を報告し、追加モード
-   (`agent-task-plan`)でタスクを足すか、対象外にするかをユーザーに確認する。対象外にする場合は
-   `## 対象外` 節に `- R3 の〜: 〜のため対象外(充足確認で合意)` と追記してコミットする
-4. すべて満たしていれば PR 作成に進む。PR 本文には要件の一覧が機械的に載る(`dispatch-prompt-gen --pr`)
+PR 作成の前に、要件が満たされているかを親が確かめる(`req-status` と
+`git diff origin/main...HEAD` を使い、要件ごとに「満たした / 部分 / 未対応」を判断する。
+部分・未対応があれば PR 作成に進まず停止する)。手順は `references/pr.md` を読む。
 
 ## PR作成(子への単発依頼)
 
-グループ完了時(group-advance が `Next: create-pr`(PR 未作成)または `Next: update-pr`
-(既存 PR の更新)を出した場合。「グループ単位の PR とブランチ切替」を参照)とサイクル完了時に、PR 作成を子エージェントへ
-単発で依頼する。PR 作成はタスクではないため、tasks.md / state.json には載せない
-(タスクIDは採番しない)。親は PR のタイトル・本文を自分で書かず、gh コマンドも直接実行しない。
-
-0. 先に「要件の充足確認」を行い、満たしていなければここで停止する
-1. `git status --porcelain` が空であることを確認する
-2. `dispatch-start --pr` を実行する。対象タスク(state.json で `done` かつ commit が
-   `git log origin/main..HEAD` に含まれるもの)は自動で選ばれ、プロンプト生成・疎通確認・
-   デタッチ起動までが行われる。スクリプトが `git fetch origin main` を行い、ローカルの `main` ではなく
-   最新の `origin/main` と比べる(origin が無い・fetch に失敗した場合は失敗する)
-   ```powershell
-   .agents/workflow/scripts/dispatch-start.ps1 -Pr
-   ```
-   ```bash
-   .agents/workflow/scripts/dispatch-start.sh --pr
-   ```
-   `Next: wait` なら stdout の `Run: pr-<N>-1` を控える。それ以外は reason と stderr を
-   ユーザーに報告する(`main` 上で実行した、対象タスクが無い 等)。プロンプトには、
-   push(`git push -u`)、`gh pr create --base main`、日本語のタイトル・本文、既存 PR の
-   確認、既存 PR があれば push して本文を作り直し、`gh api -X PATCH` で更新すること、
-   マージ禁止が含まれている
-3. `dispatch-wait` で完了を待つ(`-TaskId pr-<N> -Attempt 1` / `pr-<N> 1`)。
-   出力の `Next:` 行で分岐する。
-   - `Next: wait-merge` → 手順4(PR の検証)に進む(レビュー・コミットは行わない)
-   - `Next: wait`(1回の呼び出しの待ち時間の上限に達しただけで、子はまだ実行中) → 同じ引数で
-     `dispatch-wait` を再度実行して待ちを続ける
-   - それ以外(`Next: escalate reason=...` 等) → reason と stderr、`output.log` の末尾を
-     ユーザーに報告して停止する
-4. **PR の検証**: `gh pr view <作業ブランチ> --json url,state,baseRefName` を実行し、
-   PR が存在し、`baseRefName` が `main` であることを確認する。確認できなければ、
-   `output.log` の末尾を添えてユーザーに報告する
-5. **PR 本文の推敲**: `text-refine pr_body .agents/workflow/runs/pr-<N>-1/pr-body.md` を実行する
-   (PowerShell: `.agents/workflow/scripts/text-refine.ps1` / bash: `.agents/workflow/scripts/text-refine.sh`)。
-   `Next: refine` なら、`Request:` の依頼文どおりに推敲させ、テンプレートの「日本語の推敲」の
-   `--check` の手順を通す。そのあと `gh pr view <作業ブランチ> --json number` で
-   PR 番号を取り、`gh api -X PATCH "repos/{owner}/{repo}/pulls/<number>" -F body=@<Output: のパス>` で
-   本文を更新する。`Next: continue` なら、この手順は飛ばす
-6. PR URL をユーザーに報告して停止する(マージはユーザーが行う)
+グループ完了時とサイクル完了時に、PR 作成を子エージェントへ単発で依頼する
+(`dispatch-start --pr`。タスクではないので tasks.md / state.json には載せない)。
+親は PR のタイトル・本文を自分で書かず、gh コマンドも直接実行しない。手順は `references/pr.md` を読む。
 
 ## 完了時のサマリー報告
 
-先に `workflow-status --summary` を実行する。
-
-```powershell
-.agents/workflow/scripts/workflow-status.ps1 -Summary
-```
-```bash
-.agents/workflow/scripts/workflow-status.sh --summary
-```
-
-出力(Task 行・Requirement 行・Comprehension 行・Worktree 行・PR 行)をもとに、
-`references/report-template.md` の「完了時のサマリー」の形で `.agents/workflow/runs/refine/summary.md` に
-下書きする。テンプレートの「日本語の推敲」の手順(場面 `summary`)を通してから、ユーザーに示す。
-項目と、作るときに使う行は次のとおり。
-
-- タスクごとの結果(done/failed、コミットハッシュ、リトライ回数): Task 行
-- 残課題・子エージェントの報告にあった備考: 各タスクの完了報告
-- 要件ごとの充足状況(判断を含む): Requirement 行
-- 次のアクション提案(PR が未作成なら「PR作成(子への単発依頼)」を実行し、PR URL を報告する。
-  マージはユーザーが行う): PR 行
-- **理解確認**: 未回答の質問ファイルの一覧を提示する: Comprehension 行
-- **git status のクリーン確認**: Worktree 行で確かめる。dirty の場合は、その内容を
-  ユーザーに報告する(勝手にコミット・削除はしない)
+先に `workflow-status --summary` を実行し、その出力をもとに
+`references/report-template.md` の「完了時のサマリー」の形で下書きし、推敲を通してから示す。
+項目と使う行は `references/pr.md` を読む。
 
 ## ユーザーへの報告
 
-- **報告・説明はすべて日本語で行うこと**(AGENTS.md の再掲。このskillは実行のたびに
-  読み込まれるため、ここに明記しておくことで日本語指定の効きを強くする)。委譲先の
-  `/agent-dispatch` `/agent-review-commit` 等のサブskillが返す報告も、親がユーザーに
-  向けて中継・要約する際は日本語で行うこと
 - 報告の形は `references/report-template.md` に従う
-- **タスク1件が done になったとき**(リトライの途中では報告しない)に最低限報告する項目:
-  - タスクID・結果(done)
-  - コミットハッシュ(コミット済みの場合)
-  - リトライ回数
-
+- **タスク1件が done になったとき**(リトライ途中は報告しない)に最低限報告する項目:
+  タスクID・結果(done)、コミットハッシュ(コミット済みの場合)、リトライ回数。
   テンプレートの該当場面に従って `.agents/workflow/runs/refine/task_done.md` に下書きし、
   場面 `task_done` の推敲を通してから報告する
 - ユーザーに判断を求めて停止するときは、場面 `confirm`(`.agents/workflow/runs/refine/confirm.md`)の
   推敲を通してから報告する
-- 報告が短くなりすぎた・状況が分からなくなったときは `workflow-status` を実行し、その出力から
-  テンプレートの形で報告し直す
+- 報告が短くなりすぎた・状況が分からなくなったときは `workflow-status` を実行し、その出力からテンプレートの形で報告し直す

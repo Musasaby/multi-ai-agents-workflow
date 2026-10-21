@@ -25,6 +25,9 @@
 - **編集するのはリポジトリルートのファイルだけ**(`_templates/...`、`agent-*/SKILL.md`、`tests/...`、
   `README.md` 等)。`.agents/` 配下は git 管理外のミラー(ローカル実行用のコピー)なので編集しない
 - スクリプトは `.sh` と `.ps1` で同じ動作にし、テストも両方に書く
+- skill のコマンド例は `.sh` 版だけを書き、冒頭に `.ps1` への読み替え規則の文を置く
+- めったに起きない場面の手順は `references/*.md` に置き、本文からリンクする(サイズ上限は `tests/skill-size.ps1` が検査する)
+- exit code の意味は `_templates/workflow/README.md` に書き、skill には次の行動だけを書く
 
 ## テスト・検証の注意(子エージェント向け)
 

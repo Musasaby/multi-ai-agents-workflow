@@ -21,3 +21,6 @@ test-tasks.sh: __pycache__ を作らない
 
 # test-exitcode.sh は存在しない(sh 側では各テストが直接 exit code を断言する)
 test-exitcode.ps1: *
+
+# skill-size.ps1 は PowerShell 版だけなので、そのテストも ps1 だけ
+test-skill-size.ps1: *

@@ -5,6 +5,8 @@ description: 利用先で .agents/skills/ の upstream 更新を1コマンドで
 
 # ワークフロー skill の upstream 更新
 
+前提・解釈: コード例は `.sh` 版だけを示す。PowerShell では `.sh` を `.ps1` にし、`--copy-missing` `--diff` `--overwrite` `--check` のようなオプションを `-CopyMissing` `-Diff` `-Overwrite` `-Check` の形の名前付き引数に読み替える。
+
 利用先リポジトリの `.agents/skills/` ディレクトリを `git subtree` で upstream から更新する。
 クリーン確認・upstream 設定の読み取り・subtree pull・コンフリクト検出は `workflow-update` スクリプトが行う。
 
@@ -19,9 +21,6 @@ description: 利用先で .agents/skills/ の upstream 更新を1コマンドで
 
 **テンプレート側のコピー**から実行する(配置先側の古いスクリプトを実行しないこと):
 
-```powershell
-.agents/skills/_templates/workflow/scripts/workflow-update.ps1
-```
 ```bash
 bash .agents/skills/_templates/workflow/scripts/workflow-update.sh
 ```
@@ -45,9 +44,6 @@ bash .agents/skills/_templates/workflow/scripts/workflow-update.sh
 
 1. **未配置ファイルのコピー**(`missing` がある場合。新しく追加されたスクリプト等なので、
    確認なしでコピーしてよい):
-   ```powershell
-   .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.ps1 -CopyMissing
-   ```
    ```bash
    bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --copy-missing
    ```
@@ -55,10 +51,6 @@ bash .agents/skills/_templates/workflow/scripts/workflow-update.sh
    可能性があるため、**ユーザーの承認なしに上書きしない**。`-Diff <名前>` / `--diff <名前>` で
    差分(配置先 → テンプレート)を確認し、ファイルごとの差分の要約(カスタマイズの痕跡が
    あるか等)をユーザーに提示する。承認されたファイルだけを上書きする
-   ```powershell
-   .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.ps1 -Diff scripts/dispatch-run.ps1
-   .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.ps1 -Overwrite scripts/dispatch-run.ps1,README.md
-   ```
    ```bash
    bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --diff scripts/dispatch-run.sh
    bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --overwrite scripts/dispatch-run.sh,README.md
@@ -67,30 +59,14 @@ bash .agents/skills/_templates/workflow/scripts/workflow-update.sh
 `.agents/workflow/scripts/` 等がコミット対象の利用先では、反映後の変更をユーザーに
 コミットしてもらう(この skill ではコミットしない)。
 
-**XDG 切り替えの既定変更に伴う移行**: `dispatch-run` は `child_agent.isolate_xdg` が `true` のときだけ
-子CLIの XDG をプロジェクト内(`.agents/workflow/.config`)に切り替える(以前は常に切り替えていた)。
-キーが無い既存の config.json では切り替えなくなる。sandbox 環境で切り替えが必要な利用先には、
-`config.json` の `child_agent` に `"isolate_xdg": true` を追加するよう提案する
-
-**子へのプロンプトからのプロジェクト固有指示の削除に伴う移行**: `dispatch-prompt-template.md` から
-Kotlin/Gradle 固有の指示(`-Pkotlin.incremental=false` での切り分け、Gradle 引数の引用符)を削除した。
-これらに依存していた利用先には、利用先の `AGENTS.md` の「テスト・検証の注意(子エージェント向け)」節
-(雛形は `_templates/AGENTS.md`)に同じ内容を書くよう提案する
-
-**依存欄の検証強化に伴う移行**: `state-sync` / `next-task` は全タスクの依存欄を厳密に検証する
-(依存行の欠落・注記付きの値・存在しないID・循環をエラーにする)。進行中のサイクルの
-tasks.md が旧形式(例: `- **依存**: T30(完了済み)`、依存行の無いタスク)の場合、スクリプトを
-更新すると `state-sync` / `next-task` が exit 1 で止まる。更新後に `next-task` を1回実行し、
-exit 1 になった場合は stderr に列挙されたタスクの依存欄を `なし` / `T1, T2` 形式に直す
-(注記は目的欄へ移す)ようユーザーに提案する
+更新後、`.agents/workflow/state.json` があれば `.agents/workflow/scripts/next-task.sh` を1回実行する。
+exit 1 になったとき(依存欄の旧形式の可能性)と、sandbox 環境で使っていて `config.json` の
+`child_agent` に `isolate_xdg` が無いときは、[references/migrations.md](references/migrations.md) を読んで対処する。
 
 ### 3. 配置状態の確認(旧レイアウト・.gitignore・.gitattributes)
 
 `workflow-setup --check` を**テンプレート側のコピー**から実行する(何も変更しない):
 
-```powershell
-.agents/skills/_templates/workflow/scripts/workflow-setup.ps1 -Check
-```
 ```bash
 bash .agents/skills/_templates/workflow/scripts/workflow-setup.sh --check
 ```
