@@ -6,6 +6,8 @@
 ## git subtree から npx skills への移行
 
 `workflow-update` が `escalate reason=not-npx` を出した利用先(`.agents/skills/` を `git subtree` で取り込んでいる)で行う。
+subtree 時代の `workflow-update` が `escalate reason=sync-failed`
+(`.agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh` が見つからない)で止まった場合も、この手順に進む。
 subtree で取り込んだ配布物を `.agents/skills/` から消してコミットし、`npx skills add` で導入し直し、
 `workflow-update` スクリプトで配置済みスクリプトとの差分を反映してコミットする。
 コマンドは bash と PowerShell で同じものが使える:

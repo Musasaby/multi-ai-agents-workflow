@@ -40,7 +40,8 @@ bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-update.s
 - `confirm` — `.agents/workflow/` への配置物に差分がある。手順3へ
 - `escalate reason=not-npx` — git subtree で導入した利用先。
   [references/migrations.md](references/migrations.md) の「git subtree から npx skills への移行」の手順をユーザーに示し、承認を得てから行う
-- `escalate reason=sync-failed` — 出力(stderr を含む)をユーザーに提示して判断を仰ぐ
+- `escalate reason=sync-failed` — stderr に `_templates/workflow/scripts/workflow-sync-scripts.sh` が無いと出ていれば、
+  `not-npx` と同じく [references/migrations.md](references/migrations.md) の移行の節を示す。それ以外は出力(stderr を含む)をユーザーに提示して判断を仰ぐ
 
 ### 3. 配置済みスクリプト・README の更新(`confirm` の場合)
 

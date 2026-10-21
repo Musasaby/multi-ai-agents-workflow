@@ -88,6 +88,8 @@ bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scr
 ## git subtree からの移行手順
 
 `.agents/skills/` を `git subtree` で取り込んでいる利用先で行います(`workflow-update` が `escalate reason=not-npx` を出した場合)。
+subtree 時代の `workflow-update` が `escalate reason=sync-failed`
+(`.agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh` が見つからない)で止まった場合も、この手順に進みます。
 subtree で取り込んだ配布物を `.agents/skills/` から消してコミットし、`npx skills add` で導入し直し、
 配置済みスクリプトとの差分を反映してコミットします。コマンドは bash と PowerShell で同じものが使えます。
 利用先固有の skill は `.agents/skills/` に残ります。
