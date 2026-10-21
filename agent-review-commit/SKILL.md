@@ -50,9 +50,9 @@ description: 子エージェントの実装をタスクの受け入れ基準に�
 
 - `retries < max_fix_retries`(config.json): 指摘事項をまとめて **子エージェントに再依頼**する。
   - 先に、指摘事項を `runs/<タスクID>-<現在の試行回数+1>/fix-notes.md` に親が保存する
-    (**ここだけは親のLLM出力**。要件の例外事項)。`/agent-dispatch <タスクID>` を `-Attempt` 付きで
+    (**ここだけは親のLLM出力**。要件の例外事項)。`/agent-dispatch <タスクID>` を次の試行回数で
     リトライ実行すると `dispatch-prompt-gen` がこれをプロンプト冒頭に結合する。
-    ファイルが無いまま `-Attempt 2` 以上を実行すると `dispatch-start` が止まる
+    ファイルが無いまま試行回数 2 以上で実行すると `dispatch-start` が止まる
   - `fix-notes.md` にはタスク固有の指摘だけを書き、「実装ルール」が定める事項は書かない
     (理由と、指摘がテンプレートに収まらないとき `prompt.md` を直接書く手順は
     [手動プロンプト作成](../agent-dispatch/references/troubleshooting.md#手動プロンプト作成))

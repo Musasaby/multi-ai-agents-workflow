@@ -42,7 +42,7 @@ description: GitHub IssueのIDまたは計画ドキュメントのパスを引�
     - 計画ソースがその PR のレビューで見つかった残課題なら、**追加モード**で今のサイクルに追記する。
       state.json の `group` が空でなければ、追記するタスクに `- **グループ**: <group>` を付けて
       今の PR のグループに入れる
-    - 別件なら、PR のマージを待つか、`--force`(PowerShell: `-Force`)でアーカイブして
+    - 別件なら、PR のマージを待つか、`--force` でアーカイブして
       新規作成するかを利用者に確認する
   - **exit 3**(`pr-closed`)・**exit 5**(`pr-not-created`)・**exit 4**(`gh-unavailable`)→
     利用者に状況を伝え、追加モードにするか、`--force` でアーカイブして新規作成するかを確認する
