@@ -145,7 +145,7 @@ description: GitHub IssueのIDまたは計画ドキュメントのパスを引�
 
 ### 3. ファイル生成
 
-`.agents/workflow/README.md` の「tasks.md」の節に記載のフォーマットに従って生成する(無い場合は `.agents/skills/_templates/workflow/README.md`、配布元リポジトリではルートの `_templates/workflow/README.md` の同じ節を参照する。利用先で欠落している場合は `/agents-md-setup` を再実行する):
+`.agents/workflow/README.md` の「tasks.md」の節に記載のフォーマットに従って生成する(無い場合は `.agents/skills/agents-md-setup/templates/workflow/README.md`、配布元リポジトリではルートの `agents-md-setup/templates/workflow/README.md` の同じ節を参照する。利用先で欠落している場合は `/agents-md-setup` を再実行する):
 
 - `.agents/workflow/tasks.md` — タスク定義の正本(子エージェントも参照する)。**LLMが
   生成するのはこのファイルのみ**

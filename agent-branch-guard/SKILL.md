@@ -23,7 +23,7 @@ skill 名の指定がなくても発動するように、AGENTS.md の「マル�
    ```bash
    .agents/workflow/scripts/branch-check.sh
    ```
-   exit code と stdout の仕様は `_templates/workflow/README.md` の `branch-check` の節を参照する。
+   exit code と stdout の仕様は `agents-md-setup/templates/workflow/README.md` の `branch-check` の節を参照する。
    **この skill では `--state` を付けないため、`Next: escalate reason=state-branch-mismatch` は出ない**(これは
    state.json の `branch` との不一致判定で、タスク実行側の `agent-dispatch` が対象)。
 
