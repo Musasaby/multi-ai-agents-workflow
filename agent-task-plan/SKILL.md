@@ -147,28 +147,9 @@ description: GitHub IssueのIDまたは計画ドキュメントのパスを引�
 
 - `.agents/workflow/tasks.md` — タスク定義の正本(子エージェントも参照する)。**LLMが
   生成するのはこのファイルのみ**
-- **tasks.md の推敲(yomiyasu、任意)** — tasks.md を書いた後、state-sync の前に行う。
-  `text_refine.skill` が未設定なら `Next: continue` が返るので、そのまま state-sync に進む。
-  `Hint:` の扱い、`Next: refine` の依頼文の実行、`--check` の候補の判断、yomiyasu を呼べなかったときは
-  `../agent-workflow/references/report-template.md` の「日本語の推敲」に従う(ここには書き写さない)
-
-  1. tasks.md を `.agents/workflow/runs/refine/tasks.md` にコピーする
-  2. 場面 `tasks` で `text-refine` を実行する
-
-     ```bash
-     .agents/workflow/scripts/text-refine.sh tasks .agents/workflow/runs/refine/tasks.md
-     ```
-  3. `Next: continue` のときは、そのまま state-sync に進む(tasks.md は書き換えない)
-  4. `Next: refine` のときは、`Request:` の依頼文で推敲し、`--check` を実行する
-
-     ```bash
-     .agents/workflow/scripts/text-refine.sh tasks .agents/workflow/runs/refine/tasks.md --check
-     ```
-     - `Next: continue` のときは、`Output:` のファイル(`.agents/workflow/runs/refine/tasks.refined.md`)で
-       `.agents/workflow/tasks.md` を置き換えてから、state-sync に進む
-     - `Next: escalate reason=refine-structure-changed` のとき(機械パースする行が推敲で変わった)は、
-       **state-sync に進まずに止める**。`Changed:`・`Refined:` 行を利用者に示し、推敲前の tasks.md を使うか、
-       推敲後の文を直すかを決めてもらう
+- **tasks.md の推敲(yomiyasu、任意)** — tasks.md を書いた後、state-sync の前に
+  [references/tasks-refine.md](references/tasks-refine.md) の手順で行う
+  (`text_refine.skill` が未設定なら `Next: continue` が返るので、そのまま state-sync に進む)
 - `.agents/workflow/state.json` — LLMは生成しない。tasks.md を書き終えたら
   `state-sync` を `--init` オプションで実行し、機械生成する。`--source` には
   計画ソース(Issue URL やドキュメントパス)を渡す。branch は git から自動取得される

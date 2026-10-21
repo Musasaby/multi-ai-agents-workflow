@@ -31,7 +31,7 @@
    タスクへの依存は、引き継ぎガードが `report.md` の存在を保証しているため
    問題なく解決できる
 3a. **追記セクションの推敲(yomiyasu、任意)**: 手順2で追記するセクションは、tasks.md に書く前に
-   `.agents/workflow/runs/refine/tasks.md` に書く。SKILL.md §3 の「tasks.md の推敲」と同じ手順
+   `.agents/workflow/runs/refine/tasks.md` に書く。`references/tasks-refine.md` と同じ手順
    (`text-refine tasks .agents/workflow/runs/refine/tasks.md` → `Next: refine` なら依頼文で推敲して `--check`)で
    推敲・確認し、`Next: continue` になったら `Output:` のファイルの内容を tasks.md の末尾に足す
    (推敲しないとき、`Next: continue` が最初に返ったときは、下書きを足す)。
