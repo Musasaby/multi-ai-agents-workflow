@@ -2,6 +2,8 @@
 
 AIエージェント(Claude Code、OpenCode 等)による複数エージェント協調の実装ワークフローを、任意のプロジェクトに `git subtree` で導入できる配布物です。
 
+利用先に配るのは `dist` ブランチです。`main` は本リポジトリの開発用で、`AGENTS.md`・`tests/`・`docs/`・`tools/`・`.github/`・`.distignore` は `dist` に含まれません。
+
 ## 含まれるもの
 
 | ファイル・ディレクトリ | 説明 |
@@ -17,8 +19,10 @@ AIエージェント(Claude Code、OpenCode 等)による複数エージェン�
 | `workflow-update/` | `git subtree` ベースの更新支援 |
 | `_templates/` | 利用先用テンプレート(`AGENTS.md`, `CLAUDE.md`, `workflow/config.json`, `workflow/README.md`) |
 | `.gitignore` | `.claude` リンクと個人設定の除外 |
-| `AGENTS.md` | **本リポジトリの開発用**ルール(利用先では使わない。利用先の `AGENTS.md` は `_templates/AGENTS.md` から作る) |
-| `tests/` | **本リポジトリの開発用**のテストと品質ゲート(利用先では使わない) |
+| `AGENTS.md` | **本リポジトリの開発用**ルール(`dist` に含まれない。利用先の `AGENTS.md` は `_templates/AGENTS.md` から作る) |
+| `tests/` | **本リポジトリの開発用**のテストと品質ゲート(`dist` に含まれない) |
+| `tools/` | **本リポジトリの開発用**のスクリプト。`build-dist.sh` が `dist` の木を作る(`dist` に含まれない) |
+| `.distignore` | `dist` から除外するパスの一覧(`dist` に含まれない) |
 
 ## 前提
 
@@ -47,7 +51,7 @@ AIエージェント(Claude Code、OpenCode 等)による複数エージェン�
 
 1. 利用先プロジェクトのルートで以下を実行:
    ```bash
-   git subtree add --prefix=.agents/skills https://github.com/Musasaby/multi-ai-agents-workflow.git main --squash
+   git subtree add --prefix=.agents/skills https://github.com/Musasaby/multi-ai-agents-workflow.git dist --squash
    ```
 2. `/agents-md-setup` skill を実行して、テンプレートから `AGENTS.md`・`CLAUDE.md`・`.agents/workflow/` 設定を非破壊でスキャフォールドし、`.claude` リンクを作成・検証
 3. `AGENTS.md` の「プロジェクト概要」をプロジェクトに合わせて書き換える
@@ -67,7 +71,7 @@ AIエージェント(Claude Code、OpenCode 等)による複数エージェン�
 git mv .agents/skills .agents/skills-tmp
 git commit -m "chore: subtree 導入のため既存の skill を一時退避する"
 # 2. 配布物を subtree で追加
-git subtree add --prefix=.agents/skills https://github.com/Musasaby/multi-ai-agents-workflow.git main --squash
+git subtree add --prefix=.agents/skills https://github.com/Musasaby/multi-ai-agents-workflow.git dist --squash
 # 3. 退避した skill を戻す(配布物と同名のディレクトリがあれば、戻す前に名前を変える)
 for d in .agents/skills-tmp/*; do git mv "$d" ".agents/skills/$(basename "$d")"; done
 rmdir .agents/skills-tmp
@@ -79,7 +83,7 @@ git commit -m "chore: 既存の skill を .agents/skills に戻す(subtree の�
 git mv .agents/skills .agents/skills-tmp
 git commit -m "chore: subtree 導入のため既存の skill を一時退避する"
 # 2. 配布物を subtree で追加
-git subtree add --prefix=.agents/skills https://github.com/Musasaby/multi-ai-agents-workflow.git main --squash
+git subtree add --prefix=.agents/skills https://github.com/Musasaby/multi-ai-agents-workflow.git dist --squash
 # 3. 退避した skill を戻す(配布物と同名のディレクトリがあれば、戻す前に名前を変える)
 Get-ChildItem .agents/skills-tmp | ForEach-Object { git mv $_.FullName ".agents/skills/$($_.Name)" }
 Remove-Item .agents/skills-tmp
@@ -95,7 +99,7 @@ skill ごとの個別リンクを置く旧構成になっている場合、`/age
 `.agents/skills/` 以下の skill は `workflow-update` skill を実行するか、手動で以下を実行して更新します。
 
 ```bash
-git subtree pull --prefix=.agents/skills https://github.com/Musasaby/multi-ai-agents-workflow.git main --squash
+git subtree pull --prefix=.agents/skills https://github.com/Musasaby/multi-ai-agents-workflow.git dist --squash
 ```
 
 `.agents/workflow/scripts/` と `.agents/workflow/README.md` はセットアップ時のコピーのため、
@@ -107,6 +111,19 @@ bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh        
 bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --copy-missing  # 未配置ファイルをコピー
 bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --overwrite <名前,...>  # 差分を確認して上書き
 ```
+
+## `main` から `dist` への移行
+
+以前の手順で `main` から取り込んだ利用先は、`.agents/workflow/config.json` の `upstream.branch` を
+`"dist"` に変えてから `workflow-update` を実行します。手動なら次を実行します:
+
+```bash
+git subtree pull --prefix=.agents/skills https://github.com/Musasaby/multi-ai-agents-workflow.git dist --squash
+```
+
+- この pull で、`.agents/skills/` から `tests/`・`docs/`・`AGENTS.md` 等の開発用ファイルが消えます
+- 利用先が独自に置いた skill は残ります
+- `upstream.branch` が `main` のままだと、`workflow-update` は WARN を出します(取り込みは続行します)
 
 ## 旧コピー方式からの移行手順
 
@@ -267,6 +284,14 @@ GitHub Actions(`.github/workflows/test.yml`)が push と pull_request で全テ�
 `ubuntu-latest` で `bash tests/run-all.sh`、`windows-latest` で `pwsh -NoProfile -File tests/run-all.ps1` と
 `pwsh -NoProfile -File tests/syntax-check.ps1`。POSIX 版のシグナル終了テストなど Linux でしか
 通らない経路の結果は、この CI で確認します。
+
+`.github/workflows/dist.yml` は `main` への push ごとに `tools/build-dist.sh` で `dist` ブランチを作り直します。
+`dist` から除外するパスは `.distignore` に書きます。ローカルでは、次で試しのブランチに木を作って中身を確かめられます:
+
+```bash
+bash tools/build-dist.sh --branch <試しのブランチ名>
+git ls-tree -r --name-only <試しのブランチ名>
+```
 
 ### 改行コード
 
