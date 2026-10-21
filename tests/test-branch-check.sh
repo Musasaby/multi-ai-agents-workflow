@@ -68,23 +68,6 @@ PY
     assert_eq 2 "$CODE" "base_branch is treated as main: $ERR"
 }
 
-t_upstream_branch_allowed() {
-    (cd "$PROJ" && git checkout -q -b dist)
-    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" <<'PY'
-import json, sys
-p = sys.argv[1]
-with open(p, encoding='utf-8') as f:
-    c = json.load(f)
-c['upstream'] = {'url': 'https://github.com/example/repo.git', 'branch': 'dist'}
-with open(p, 'w', encoding='utf-8', newline='\n') as f:
-    json.dump(c, f, ensure_ascii=False, indent=2)
-PY
-    gh_stub NONE
-    run_script branch-check.sh
-    assert_eq 0 "$CODE" "upstream.branch is not forbidden: $ERR"
-    assert_eq "OK dist" "${OUT%%$'\n'*}" "stdout"
-}
-
 t_merged() {
     setup_work_branch
     gh_stub MERGED "https://example.com/pr/1"
@@ -209,7 +192,6 @@ t_unknown_argument() {
 echo "test-branch-check.sh"
 test_case "branch-check: main 上は exit 2" t_main_rejected
 test_case "branch-check: config の base_branch 上も exit 2" t_base_branch_rejected
-test_case "branch-check: upstream.branch の名前は禁止しない" t_upstream_branch_allowed
 test_case "branch-check: マージ済み PR ありは exit 3 と MERGED <URL>" t_merged
 test_case "branch-check: PR なし([])は exit 0 と OK <branch>" t_no_pr
 test_case "branch-check: gh の「no pull requests found」失敗も PR なし扱い" t_no_pr_message
