@@ -35,6 +35,7 @@
     "targets": ["summary", "confirm", "commit", "pr_body", "task_done", "tasks"],
     "reader": "informed"
   },
+  "base_branch": "main",
   "upstream": {
     "url": "https://github.com/Musasaby/multi-ai-agents-workflow.git",
     "branch": "dist"
