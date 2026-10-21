@@ -7,7 +7,7 @@ set -uo pipefail
 # 新ブランチでは逆に成り立ってしまうため、祖先判定は使わず gh の PR 状態で判定する。
 # 判定順(gh を呼ばずに済む判定を先に行う):
 #   1. 使い方不備・git 失敗(detached HEAD を含む)→ exit 1
-#   2. 現在のブランチが main(config.json の upstream.branch があればその名前も)→ exit 2
+#   2. 現在のブランチが main(config.json の base_branch があればその名前も)→ exit 2
 #   3. --state 指定時、state.json の branch と現在のブランチが異なる → exit 5
 #      (state.json が無い・branch が空の場合はこの判定を飛ばす)
 #   4. gh が無い・認証切れ等で PR 状態を取得できない → exit 4
@@ -78,8 +78,8 @@ if [ -z "$BRANCH" ]; then
 fi
 
 # --- 2. main 上 ---
-UPSTREAM_BRANCH="$(json_field "$CONFIG_PATH" upstream.branch)"
-if [ "$BRANCH" = "main" ] || { [ -n "$UPSTREAM_BRANCH" ] && [ "$BRANCH" = "$UPSTREAM_BRANCH" ]; }; then
+BASE_BRANCH="$(json_field "$CONFIG_PATH" base_branch)"
+if [ "$BRANCH" = "main" ] || { [ -n "$BASE_BRANCH" ] && [ "$BRANCH" = "$BASE_BRANCH" ]; }; then
     echo "On '$BRANCH': do not work on the main branch (create a develop/<name> branch from the latest origin/main)" >&2
     echo "Next: switch-branch reason=main"
     exit 2

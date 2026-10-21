@@ -62,15 +62,27 @@ Invoke-TestCase "branch-check: main 上は exit 2" {
     Assert-Eq "" (Get-GhStubLog) "gh not called"
 }
 
-Invoke-TestCase "branch-check: config の upstream.branch 上も exit 2" {
+Invoke-TestCase "branch-check: config の base_branch 上も exit 2" {
     Invoke-Git checkout -q -b trunk
     $cfgPath = "$script:Proj/.agents/workflow/config.json"
     $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
-    $cfg.upstream = [pscustomobject]@{ url = 'https://github.com/example/repo.git'; branch = 'trunk' }
+    $cfg | Add-Member -NotePropertyName base_branch -NotePropertyValue 'trunk' -Force
     Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
     Set-GhStub NONE
     Invoke-Script branch-check.ps1
-    Assert-Eq 2 $script:Code "upstream.branch is treated as main: $($script:Err)"
+    Assert-Eq 2 $script:Code "base_branch is treated as main: $($script:Err)"
+}
+
+Invoke-TestCase "branch-check: upstream.branch の名前は禁止しない" {
+    Invoke-Git checkout -q -b dist
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg | Add-Member -NotePropertyName upstream -NotePropertyValue ([pscustomobject]@{ url = 'https://github.com/example/repo.git'; branch = 'dist' }) -Force
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+    Set-GhStub NONE
+    Invoke-Script branch-check.ps1
+    Assert-Eq 0 $script:Code "upstream.branch is not forbidden: $($script:Err)"
+    Assert-Eq "OK dist" (($script:Out -split "`n")[0]) "stdout"
 }
 
 Invoke-TestCase "branch-check: マージ済み PR ありは exit 3 と MERGED <URL>" {
