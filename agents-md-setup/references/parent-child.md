@@ -15,7 +15,7 @@
 子CLIは `.agents/workflow/config.json` の `child_agent.command_template` で決まる。
 `{prompt}` にプロンプト本文、`{prompt_file}` に prompt.md の絶対パスが入る(どちらも無ければ stdin で渡す)。
 
-既定の opencode:
+既定の opencode の設定は次のとおり。
 
 ```json
 {
@@ -26,7 +26,7 @@
 }
 ```
 
-Claude Code を子にする場合:
+Claude Code を子にする場合は次のとおり。
 
 ```json
 {

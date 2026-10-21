@@ -6,8 +6,8 @@ AIエージェント(Claude Code、OpenCode 等)による複数エージェン�
 
 2種類のエージェントが役割を分けて実装を進めます。
 
-- **親エージェント**(Claude Code・Codex 等): 利用者と対話します。計画のタスク分解、子への依頼、レビュー、コミット、PR 作成を行います
-- **子エージェント**(opencode・`claude -p` 等の CLI): 親から1タスクずつ依頼を受けて実装し、テストを実行して完了報告を書きます
+- 親エージェント(Claude Code・Codex 等): 利用者と対話します。計画のタスク分解、子への依頼、レビュー、コミット、PR 作成を行います
+- 子エージェント(opencode・`claude -p` 等の CLI): 親から1タスクずつ依頼を受けて実装し、テストを実行して完了報告を書きます
 
 ```
 1. 計画参照・タスク分解   → 親: /agent-task-plan
@@ -49,7 +49,7 @@ AIエージェント(Claude Code、OpenCode 等)による複数エージェン�
 
 ## クイックスタート
 
-1. 利用先プロジェクトのルートで以下を実行:
+1. 利用先プロジェクトのルートで、次のコマンドを実行します。
    ```bash
    npx skills add Musasaby/multi-ai-agents-workflow --skill '*' -a universal -y
    ```
@@ -59,7 +59,7 @@ AIエージェント(Claude Code、OpenCode 等)による複数エージェン�
    - `-a claude-code` は指定しません(`/agents-md-setup` が `.claude` を `.agents` へのリンクにするので、Claude Code からも同じ skill が見えます)
 2. `/agents-md-setup` を実行して、テンプレートから `AGENTS.md`・`CLAUDE.md`・`.agents/workflow/` 設定を非破壊でスキャフォールドし、`.claude` リンクを作成・検証します
 3. `AGENTS.md` の「プロジェクト概要」と「テスト・検証の注意(子エージェント向け)」をプロジェクトに合わせて書きます
-4. `.agents/workflow/config.json` の `child_agent.command_template` で子CLIを決めます。既定は `opencode run "{prompt}"` です。Claude Code など他の CLI の設定例は [agents-md-setup/references/parent-child.md](agents-md-setup/references/parent-child.md) を参照してください
+4. `.agents/workflow/config.json` の `child_agent.command_template` で子CLIを決めます。既定は `opencode run "{prompt}"` で、`child_agent.profile` は空(`auto`)です。Claude Code を子にする場合は、`command_template` と `profile` の両方を変えます。他の CLI も含めた設定例は [agents-md-setup/references/parent-child.md](agents-md-setup/references/parent-child.md) を参照してください
 5. `test_command` と `quality_gate.steps` の `command` に、プロジェクトのテスト・型検査・lint のコマンドを書きます。設定キーの一覧は [config.json 節](agents-md-setup/templates/workflow/README.md) を参照してください
 6. `develop/<作業名>` ブランチを作り、`skills-lock.json`・`.agents/skills/`・`.agents/workflow/`・`AGENTS.md`・`CLAUDE.md`・`.gitignore`・`.gitattributes` をコミットします
 7. `/agent-workflow <Issue 番号または計画ドキュメントのパス>` を実行します。親がタスク分解を示して承認を求めるので、確かめて承認すると、子への依頼・レビュー・コミットがタスクごとに進みます
@@ -88,14 +88,14 @@ bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-update.s
 ### git subtree から移行する場合
 
 `.agents/skills/` を `git subtree` で取り込んでいる利用先が対象です。`workflow-update` が `escalate reason=not-npx` を出した場合や、
-旧 `workflow-update` が `escalate reason=sync-failed` で止まった場合に進みます。
-手順は [`workflow-update/references/migrations.md`](workflow-update/references/migrations.md) の「git subtree から npx skills への移行」にあります。
+旧 `workflow-update` が `escalate reason=sync-failed` で止まった場合は、
+[`workflow-update/references/migrations.md`](workflow-update/references/migrations.md) の「git subtree から npx skills への移行」の手順で移行します。
 
 ## 運用ルール
 
-- **配布元の skill**: `.agents/skills/` 以下の配布元 skill は直接編集しません(`npx skills update` で上書きされます)。変更が必要な場合は upstream リポジトリで行ってから `workflow-update` で取り込んでください
-- **利用先固有 skill**: プロジェクト独自の skill は、配布物と重ならない名前のディレクトリで追加してください。`npx skills update` は `skills-lock.json` に記録された skill だけを更新するため、共存できます
-- **submodule ではない**: `.agents/skills/` と `skills-lock.json` をコミットするので、clone 後の追加操作は `/agents-md-setup` だけです
+- 配布元の skill: `.agents/skills/` 以下の配布元 skill は直接編集しません(`npx skills update` で上書きされます)。変更が必要な場合は upstream リポジトリで行ってから `workflow-update` で取り込んでください
+- 利用先固有の skill: プロジェクト独自の skill は、配布物と重ならない名前のディレクトリで追加してください。`npx skills update` は `skills-lock.json` に記録された skill だけを更新するため、共存できます
+- submodule は使いません。`.agents/skills/` と `skills-lock.json` をコミットするので、clone 後の追加操作は `/agents-md-setup` だけです
 
 ## 報告と日本語の推敲
 

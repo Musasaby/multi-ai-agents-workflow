@@ -6,7 +6,7 @@
 ## 構成
 
 本リポジトリの `.claude` は `.agents` へのジャンクション(標準形)です。
-skill の編集はリポジトリルート直下の各ディレクトリ(`agent-workflow/` 等)が正本です。
+skill の正本はリポジトリルート直下の各ディレクトリ(`agent-workflow/` 等)で、編集はここで行います。
 `.agents/` 配下は**未追跡**(ローカル実行状態。`.gitignore` で除外)のミラーで、編集しません。
 
 > **利用先との違い**: 利用先では `.agents/skills/` は `npx skills add` で配置して追跡しますが、
@@ -28,7 +28,7 @@ clone 後に、次の順で行います。
 ## skill・スクリプトを編集した後の同期
 
 ルート直下で skill を編集したら、`.claude/skills` 経由の Claude Code 等に反映するため、
-以下のコピーで `.agents/skills/` を同期します(git 操作・コミットは不要):
+次のコピーで `.agents/skills/` を同期します(git 操作・コミットは不要です)。
 
 ```powershell
 # ルート直下の配布物を .agents/skills にコピー
@@ -43,7 +43,7 @@ foreach ($i in $items) {
 
 スクリプト(`agents-md-setup/templates/workflow/scripts/`)を編集した後は、
 `.agents/workflow/` への反映も必要です。次のコマンドで差分を一覧し、
-`--overwrite <名前,...>` で `.agents/workflow/` に反映します:
+`--overwrite <名前,...>` で `.agents/workflow/` に反映します。
 
 ```bash
 bash agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.sh
@@ -78,7 +78,7 @@ POSIX 版のシグナル終了のテスト(Python 経由の経路)は Linux で�
 ## 品質ゲートと skill のサイズ
 
 構文・改行コード・BOM は `tests/syntax-check.ps1` で検査します(本リポジトリで workflow を回すときの
-品質ゲート。`.agents/workflow/config.json` の `test_command` / `quality_gate` にこのコマンドを設定する):
+品質ゲートで、`.agents/workflow/config.json` の `test_command` / `quality_gate` にこのコマンドを設定します)。
 
 ```powershell
 pwsh -NoProfile -File tests/syntax-check.ps1
@@ -89,7 +89,7 @@ pwsh -NoProfile -File tests/syntax-check.ps1
   非 ASCII 文字を含むのに BOM が無い `.ps1`・BOM 付きの `.ps1` 以外のファイル(`.sh`・`.py`・`.md` 等)を失敗にする
 - `tests/skill-size.ps1` を呼び出す(単体でも実行できる)
 
-skill のサイズは `tests/skill-size.ps1` で検査します:
+skill のサイズは `tests/skill-size.ps1` で検査します。
 
 ```powershell
 pwsh -NoProfile -File tests/skill-size.ps1
@@ -101,16 +101,16 @@ pwsh -NoProfile -File tests/skill-size.ps1
 
 ## CI
 
-GitHub Actions(`.github/workflows/test.yml`)が push と pull_request で全テストを実行します:
-`ubuntu-latest` で `bash tests/run-all.sh`、`windows-latest` で `pwsh -NoProfile -File tests/run-all.ps1` と
-`pwsh -NoProfile -File tests/syntax-check.ps1`。POSIX 版のシグナル終了テストなど Linux でしか
+GitHub Actions(`.github/workflows/test.yml`)が push と pull_request で全テストを実行します。
+`ubuntu-latest` では `bash tests/run-all.sh` を、`windows-latest` では `pwsh -NoProfile -File tests/run-all.ps1` と
+`pwsh -NoProfile -File tests/syntax-check.ps1` を実行します。POSIX 版のシグナル終了テストなど Linux でしか
 通らない経路の結果は、この CI で確認します。
 
 ## 改行コード
 
 `.gitattributes` で全テキストファイルを作業ツリーでも LF に固定しています(`core.autocrlf=true` の
 環境でも LF でチェックアウトされます)。`.gitattributes` の導入前に clone した作業ツリーに CRLF の
-ファイルが残っている場合は、未コミットの変更が無い状態で次を実行して LF でチェックアウトし直します:
+ファイルが残っている場合は、未コミットの変更が無い状態で次を実行して LF でチェックアウトし直します。
 
 ```bash
 git ls-files --eol | awk '$2 == "w/crlf" {print $NF}' | while read -r f; do rm -- "$f"; done

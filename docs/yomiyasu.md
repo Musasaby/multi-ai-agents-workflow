@@ -12,7 +12,7 @@
 2. `.agents/workflow/config.json` の `text_refine.skill` に、入れ方に合う名前を書きます。名前は、親エージェントの skill 一覧に出る名前です
 3. 必要なら `text_refine.targets`(推敲する場面)と `text_refine.reader`(想定する読み手)を変えます
 
-入れ方と `text_refine.skill` の対応(yomiyasu の資料で分かっているもの):
+入れ方と `text_refine.skill` の対応は次のとおりです(yomiyasu の資料で分かっているもの)。
 
 | 入れ方 | `text_refine.skill` |
 |--------|---------------------|
