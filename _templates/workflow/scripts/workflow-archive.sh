@@ -7,10 +7,10 @@ set -euo pipefail
 #   1. 引数の解析(スラッグ未指定・余分な引数は exit 1)
 #   2. スラッグのパス区切り・'..' の検査、移動対象の有無(無ければ exit 1)
 #   3. --force が無ければ PR の状態を確かめる(state.json の branch が空・main・config.json の
-#      upstream.branch と同じなら gh を呼ばずに通す)。gh pr view の結果で分岐する:
+#      base_branch と同じなら gh を呼ばずに通す)。gh pr view の結果で分岐する:
 #      - MERGED → アーカイブする
 #      - PR なし(gh が「no pull request」で失敗)→ ローカルにブランチが無い、または比較先
-#        (upstream.branch、無ければ main)に未マージのコミットが無ければアーカイブする。
+#        (base_branch、無ければ main)に未マージのコミットが無ければアーカイブする。
 #        未マージのコミットがある・比較先が無い → stdout "NO_PR"、exit 5
 #      - OPEN   → stdout "OPEN <PR URL>"、exit 2
 #      - CLOSED → stdout "CLOSED <PR URL>"、exit 3
@@ -84,10 +84,10 @@ PY
 
 # PR の状態を確かめる。止めるときは exit し、アーカイブしてよいときは return 0
 check_pr() {
-    local BRANCH UPSTREAM
+    local BRANCH BASE_BRANCH
     BRANCH="$(json_field "$STATE_PATH" branch)"
-    UPSTREAM="$(json_field "$CONFIG_PATH" upstream.branch)"
-    if [ -z "$BRANCH" ] || [ "$BRANCH" = "main" ] || { [ -n "$UPSTREAM" ] && [ "$BRANCH" = "$UPSTREAM" ]; }; then
+    BASE_BRANCH="$(json_field "$CONFIG_PATH" base_branch)"
+    if [ -z "$BRANCH" ] || [ "$BRANCH" = "main" ] || { [ -n "$BASE_BRANCH" ] && [ "$BRANCH" = "$BASE_BRANCH" ]; }; then
         return 0
     fi
 
@@ -109,7 +109,7 @@ check_pr() {
                 return 0   # ローカルにブランチが無い(失う作業が無い)
             fi
             local BASE BASE_REF COUNT
-            BASE="${UPSTREAM:-main}"
+            BASE="${BASE_BRANCH:-main}"
             BASE_REF=""
             if git rev-parse --verify --quiet "refs/heads/$BASE" > /dev/null; then
                 BASE_REF="refs/heads/$BASE"
