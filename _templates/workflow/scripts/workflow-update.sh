@@ -53,8 +53,11 @@ PY
 URL="$(printf '%s\n' "$UPSTREAM" | sed -n '1p' | tr -d '\r')"
 BRANCH="$(printf '%s\n' "$UPSTREAM" | sed -n '2p' | tr -d '\r')"
 [ -z "$URL" ] && URL="$DEFAULT_URL"
-[ -z "$BRANCH" ] && BRANCH="main"
+[ -z "$BRANCH" ] && BRANCH="dist"
 echo "Upstream: $URL $BRANCH"
+if [ "$BRANCH" = "main" ]; then
+    echo 'WARN: upstream.branch is main; the distribution moved to the dist branch. Set upstream.branch to "dist" in .agents/workflow/config.json (see .agents/skills/workflow-update/references/migrations.md)' >&2
+fi
 
 if ! git subtree pull --prefix=.agents/skills "$URL" "$BRANCH" --squash -m "chore: .agents/skills を upstream から更新"; then
     CONFLICTS="$(git diff --name-only --diff-filter=U)"

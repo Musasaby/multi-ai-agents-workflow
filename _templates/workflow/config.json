@@ -37,6 +37,6 @@
   },
   "upstream": {
     "url": "https://github.com/Musasaby/multi-ai-agents-workflow.git",
-    "branch": "main"
+    "branch": "dist"
   }
 }

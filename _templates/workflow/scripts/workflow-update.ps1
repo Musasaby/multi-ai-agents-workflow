@@ -52,8 +52,11 @@ try {
     # 読めなければデフォルト値で続行する
 }
 if (-not $url) { $url = 'https://github.com/Musasaby/multi-ai-agents-workflow.git' }
-if (-not $branch) { $branch = 'main' }
+if (-not $branch) { $branch = 'dist' }
 Write-Output "Upstream: $url $branch"
+if ($branch -eq 'main') {
+    [Console]::Error.WriteLine('WARN: upstream.branch is main; the distribution moved to the dist branch. Set upstream.branch to "dist" in .agents/workflow/config.json (see .agents/skills/workflow-update/references/migrations.md)')
+}
 
 git subtree pull --prefix=.agents/skills $url $branch --squash -m "chore: .agents/skills を upstream から更新"
 if ($LASTEXITCODE -ne 0) {
