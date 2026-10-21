@@ -1,7 +1,8 @@
 #!/bin/bash
 # テスト共通ヘルパー(POSIX版スクリプト用)。
-# 一時ディレクトリにダミーの利用先プロジェクト(.agents/workflow/ 一式 + git リポジトリ)を作り、
-# agents-md-setup/templates/workflow/scripts/ のスクリプトをコピーして実行する。
+# ダミーの利用先プロジェクト(.agents/workflow/ 一式 + git リポジトリ)の雛形を 1 度だけ作り、
+# ケースごとにそのコピーを一時ディレクトリに作って、
+# agents-md-setup/templates/workflow/scripts/ のスクリプトを実行する。
 
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
@@ -43,6 +44,7 @@ PASS_COUNT=0
 FAIL_COUNT=0
 FAILED_NAMES=()
 CREATED_PROJECTS=""
+PROJ_TEMPLATE=""
 
 # python3 は Windows ネイティブ版の場合 MSYS パス(/c/...)を解決できないため変換する
 py_path() {
@@ -64,18 +66,17 @@ assert_own_repo() {
     fi
 }
 
-# 新しいダミープロジェクトを作り、そのパスを PROJ に設定する
-new_project() {
-    PROJ="$(mktemp -d)"
-    CREATED_PROJECTS="$CREATED_PROJECTS $PROJ"
-    mkdir -p "$PROJ/.agents/workflow/scripts" "$PROJ/.agents/workflow/runs"
-    cp "$TEMPLATE_SCRIPTS"/* "$PROJ/.agents/workflow/scripts/"
-    chmod +x "$PROJ/.agents/workflow/scripts/"*.sh
-    cp "$REPO_ROOT/agents-md-setup/templates/workflow/config.json" "$PROJ/.agents/workflow/config.json"
-    git -C "$PROJ" init -q -b main
-    assert_own_repo "$PROJ"
+# ダミープロジェクトの雛形(スクリプト一式・config.json・初回コミット済みの git リポジトリ)を 1 度だけ作る
+make_proj_template() {
+    PROJ_TEMPLATE="$(mktemp -d)"
+    mkdir -p "$PROJ_TEMPLATE/.agents/workflow/scripts" "$PROJ_TEMPLATE/.agents/workflow/runs"
+    cp "$TEMPLATE_SCRIPTS"/* "$PROJ_TEMPLATE/.agents/workflow/scripts/"
+    chmod +x "$PROJ_TEMPLATE/.agents/workflow/scripts/"*.sh
+    cp "$REPO_ROOT/agents-md-setup/templates/workflow/config.json" "$PROJ_TEMPLATE/.agents/workflow/config.json"
+    git -C "$PROJ_TEMPLATE" init -q -b main
+    assert_own_repo "$PROJ_TEMPLATE"
     (
-        cd "$PROJ" || exit 1
+        cd "$PROJ_TEMPLATE" || exit 1
         git config user.email "test@example.com"
         git config user.name "test"
         git config core.autocrlf false
@@ -83,6 +84,15 @@ new_project() {
         git add .gitignore
         git commit -q -m "init"
     ) || exit 1
+}
+
+# 新しいダミープロジェクトを作り、そのパスを PROJ に設定する(雛形のコピー)
+new_project() {
+    [ -n "$PROJ_TEMPLATE" ] || make_proj_template
+    PROJ="$(mktemp -d)"
+    CREATED_PROJECTS="$CREATED_PROJECTS $PROJ"
+    cp -a "$PROJ_TEMPLATE/." "$PROJ/" || exit 1
+    assert_own_repo "$PROJ"
 }
 
 cleanup_project() {
@@ -265,6 +275,11 @@ summary() {
     # gh スタブのディレクトリも削除する(消えなければ残留として検出する)
     rm -rf "$GH_STUB_DIR"
     [ -e "$GH_STUB_DIR" ] && leftover="$leftover $GH_STUB_DIR"
+    # 雛形も同様に削除し、消えなければ残留として検出する
+    if [ -n "$PROJ_TEMPLATE" ]; then
+        rm -rf "$PROJ_TEMPLATE"
+        [ -e "$PROJ_TEMPLATE" ] && leftover="$leftover $PROJ_TEMPLATE"
+    fi
     if [ -n "$leftover" ]; then
         echo "    leftover temp dir(s):$leftover"
         FAIL_COUNT=$((FAIL_COUNT + 1))
