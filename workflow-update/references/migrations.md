@@ -3,6 +3,27 @@
 `workflow-update` でスクリプトを更新したあと、旧形式の `config.json`・`tasks.md` が原因で
 動作が変わったり止まったりしたときに読む。
 
+## git subtree から npx skills への移行
+
+`workflow-update` が `escalate reason=not-npx` を出した利用先(`.agents/skills/` を `git subtree` で取り込んでいる)で行う。
+subtree で取り込んだ配布物を `.agents/skills/` から消してコミットし、`npx skills add` で導入し直し、
+`workflow-update` スクリプトで配置済みスクリプトとの差分を反映してコミットする。
+コマンドは bash と PowerShell で同じものが使える:
+
+```bash
+git -C .agents/skills rm -r -q --ignore-unmatch agent-branch-guard agent-comprehension-check agent-dispatch agent-quality-gate agent-review-commit agent-task-plan agent-workflow agents-md-setup workflow-update _templates tests docs AGENTS.md README.md .gitignore .gitattributes .github
+git commit -m "chore: subtree で取り込んだ配布物を削除する(npx skills へ移行)"
+npx skills add Musasaby/multi-ai-agents-workflow --skill '*' -a universal -y
+bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-update.sh
+git add .agents/skills skills-lock.json
+git commit -m "chore: npx skills で配布物を導入する"
+```
+
+移行後に次を行うよう、ユーザーに提案する:
+
+- 利用先の `AGENTS.md` の「セットアップ(clone直後)」節にある subtree の説明を、`agents-md-setup/templates/AGENTS.md` の同じ節に合わせて書き換える
+- `config.json` の `upstream.branch` はもう使わないので消してよい
+
 ## XDG 切り替えの既定変更に伴う移行
 
 `dispatch-run` は `child_agent.isolate_xdg` が `true` のときだけ
@@ -15,7 +36,7 @@
 `dispatch-prompt-template.md` から
 Kotlin/Gradle 固有の指示(`-Pkotlin.incremental=false` での切り分け、Gradle 引数の引用符)を削除した。
 これらに依存していた利用先には、利用先の `AGENTS.md` の「テスト・検証の注意(子エージェント向け)」節
-(雛形は `_templates/AGENTS.md`)に同じ内容を書くよう提案する
+(雛形は `agents-md-setup/templates/AGENTS.md`)に同じ内容を書くよう提案する
 
 ## 依存欄の検証強化に伴う移行
 
