@@ -59,9 +59,9 @@ bash .agents/skills/_templates/workflow/scripts/workflow-update.sh
 `.agents/workflow/scripts/` 等がコミット対象の利用先では、反映後の変更をユーザーに
 コミットしてもらう(この skill ではコミットしない)。
 
-更新後に旧形式の config.json・tasks.md で止まったとき(XDG 切り替えの既定変更、子へのプロンプトからの
-プロジェクト固有指示の削除、依存欄の検証強化)は
-[references/migrations.md](references/migrations.md) を読んで対処する。
+更新後、`.agents/workflow/state.json` があれば `.agents/workflow/scripts/next-task.sh` を1回実行する。
+exit 1 になったとき(依存欄の旧形式の可能性)と、sandbox 環境で使っていて `config.json` の
+`child_agent` に `isolate_xdg` が無いときは、[references/migrations.md](references/migrations.md) を読んで対処する。
 
 ### 3. 配置状態の確認(旧レイアウト・.gitignore・.gitattributes)
 
