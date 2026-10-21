@@ -1,6 +1,6 @@
 ﻿# PowerShell セッション内で `& script.ps1` と直接呼んだときにも、成功時に $LASTEXITCODE が 0 になること。
 # (exit を呼ばずに終わるスクリプトは $LASTEXITCODE を更新しないため、直前の値や空のまま残る)
-# 動的検査は _templates/workflow/scripts/ の直接実行する .ps1(tasklib.ps1・childprofile.ps1 以外)の全 12 本に
+# 動的検査は agents-md-setup/templates/workflow/scripts/ の直接実行する .ps1(tasklib.ps1・childprofile.ps1 以外)の全 12 本に
 # 1 件ずつある。静的検査(最後の行が exit で始まるか)は補助として残す。
 . "$PSScriptRoot/lib.ps1"
 
@@ -201,15 +201,15 @@ Invoke-TestCase "upstream-issue: 成功時に LASTEXITCODE=0" {
 }
 
 Invoke-TestCase "workflow-sync-scripts: 成功時に LASTEXITCODE=0" {
-    # このスクリプトはテンプレート側のコピー(.agents/skills/_templates/workflow/scripts/)から
+    # このスクリプトはテンプレート側のコピー(.agents/skills/agents-md-setup/templates/workflow/scripts/)から
     # 実行する仕様(.agents/workflow/scripts/ からの実行は exit 1)。全ファイルが同期済みの
     # 構成を用意し、Invoke-InProcess にテンプレート側の相対パスを渡す
-    $tpl = "$script:Proj/.agents/skills/_templates/workflow"
+    $tpl = "$script:Proj/.agents/skills/agents-md-setup/templates/workflow"
     $null = New-Item -ItemType Directory -Force "$tpl/scripts"
     Copy-Item "$script:TemplateScripts/*" "$tpl/scripts/"
-    Copy-Item "$script:RepoRoot/_templates/workflow/README.md" "$tpl/README.md"
-    Copy-Item "$script:RepoRoot/_templates/workflow/README.md" "$script:Proj/.agents/workflow/README.md"
-    Assert-Eq 0 (Invoke-InProcess '../../skills/_templates/workflow/scripts/workflow-sync-scripts.ps1') "LASTEXITCODE"
+    Copy-Item "$script:RepoRoot/agents-md-setup/templates/workflow/README.md" "$tpl/README.md"
+    Copy-Item "$script:RepoRoot/agents-md-setup/templates/workflow/README.md" "$script:Proj/.agents/workflow/README.md"
+    Assert-Eq 0 (Invoke-InProcess '../../skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.ps1') "LASTEXITCODE"
 }
 
 Invoke-TestCase "workflow-setup: 成功時に LASTEXITCODE=0" {
@@ -217,11 +217,12 @@ Invoke-TestCase "workflow-setup: 成功時に LASTEXITCODE=0" {
     # (.agents/workflow/ と .gitignore を消す)にして、セットアップが全部成功する状態で呼ぶ
     Remove-Item -Recurse -Force "$script:Proj/.agents/workflow", "$script:Proj/.gitignore" -ErrorAction SilentlyContinue
     $null = New-Item -ItemType Directory -Force "$script:Proj/.agents/skills"
-    Copy-Item -Recurse "$script:RepoRoot/_templates" "$script:Proj/.agents/skills/_templates"
+    $null = New-Item -ItemType Directory -Force "$script:Proj/.agents/skills/agents-md-setup"
+    Copy-Item -Recurse "$script:RepoRoot/agents-md-setup/templates" "$script:Proj/.agents/skills/agents-md-setup/templates"
     Push-Location $script:Proj
     try {
         $global:LASTEXITCODE = 99
-        & "$script:Proj/.agents/skills/_templates/workflow/scripts/workflow-setup.ps1" *> $null
+        & "$script:Proj/.agents/skills/agents-md-setup/templates/workflow/scripts/workflow-setup.ps1" *> $null
         $code = $global:LASTEXITCODE
     } finally {
         Pop-Location
@@ -236,7 +237,8 @@ Invoke-TestCase "workflow-update: 成功時に LASTEXITCODE=0" {
     # 配置済みスクリプトと README をテンプレートと同じにしておき、差分なし(exit 0)にする
     $up = "$script:Proj/.agents/upstream"
     $null = New-Item -ItemType Directory -Force $up
-    Copy-Item -Recurse "$script:RepoRoot/_templates" "$up/_templates"
+    $null = New-Item -ItemType Directory -Force "$up/agents-md-setup"
+    Copy-Item -Recurse "$script:RepoRoot/agents-md-setup/templates" "$up/agents-md-setup/templates"
     git -C $up init -q -b main 2>$null
     Assert-OwnRepo $up
     Push-Location $up
@@ -258,12 +260,12 @@ Invoke-TestCase "workflow-update: 成功時に LASTEXITCODE=0" {
     } finally {
         Pop-Location
     }
-    Copy-Item "$script:RepoRoot/_templates/workflow/README.md" "$script:Proj/.agents/workflow/README.md"
+    Copy-Item "$script:RepoRoot/agents-md-setup/templates/workflow/README.md" "$script:Proj/.agents/workflow/README.md"
     $cfgPath = "$script:Proj/.agents/workflow/config.json"
     $cfg = [System.IO.File]::ReadAllText($cfgPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
     $cfg | Add-Member -NotePropertyName upstream -NotePropertyValue ([ordered]@{ url = '.agents/upstream'; branch = 'main' }) -Force
     Write-Utf8File $cfgPath (($cfg | ConvertTo-Json -Depth 10) + "`n")
-    Assert-Eq 0 (Invoke-InProcess '../../skills/_templates/workflow/scripts/workflow-update.ps1') "LASTEXITCODE"
+    Assert-Eq 0 (Invoke-InProcess '../../skills/agents-md-setup/templates/workflow/scripts/workflow-update.ps1') "LASTEXITCODE"
 }
 
 Invoke-TestCase "quality-gate: 成功時に LASTEXITCODE=0" {

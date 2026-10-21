@@ -2,14 +2,14 @@
 # #17: workflow-sync-scripts(テンプレートと配置先の差分検出・反映, POSIX版)
 source "$(dirname "$0")/lib.sh"
 
-# 利用先の構成を再現する: テンプレートは .agents/skills/_templates/workflow/ 配下、
+# 利用先の構成を再現する: テンプレートは .agents/skills/agents-md-setup/templates/workflow/ 配下、
 # 配置先は .agents/workflow/ 配下(new_project が全スクリプトを配置済み)
 setup_user_project() {
-    local tpl="$PROJ/.agents/skills/_templates/workflow"
+    local tpl="$PROJ/.agents/skills/agents-md-setup/templates/workflow"
     mkdir -p "$tpl/scripts"
     cp "$TEMPLATE_SCRIPTS"/* "$tpl/scripts/"
-    cp "$REPO_ROOT/_templates/workflow/README.md" "$tpl/README.md"
-    cp "$REPO_ROOT/_templates/workflow/README.md" "$PROJ/.agents/workflow/README.md"
+    cp "$REPO_ROOT/agents-md-setup/templates/workflow/README.md" "$tpl/README.md"
+    cp "$REPO_ROOT/agents-md-setup/templates/workflow/README.md" "$PROJ/.agents/workflow/README.md"
     # 差分を作る: next-task.sh は未配置、dispatch-run.sh は古い版、README.md は CRLF だけが違う
     rm "$PROJ/.agents/workflow/scripts/next-task.sh"
     printf '#!/bin/bash\necho old\n' > "$PROJ/.agents/workflow/scripts/dispatch-run.sh"
@@ -19,7 +19,7 @@ setup_user_project() {
 run_sync() {
     local out_file err_file
     out_file="$(mktemp)"; err_file="$(mktemp)"
-    (cd "$PROJ" && bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh "$@") > "$out_file" 2> "$err_file"
+    (cd "$PROJ" && bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.sh "$@") > "$out_file" 2> "$err_file"
     CODE=$?
     OUT="$(cat "$out_file")"; ERR="$(cat "$err_file")"
     rm -f "$out_file" "$err_file"

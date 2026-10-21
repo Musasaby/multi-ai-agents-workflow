@@ -1,11 +1,12 @@
 ﻿# #61: workflow-setup(利用先のセットアップ, PowerShell版)
 . "$PSScriptRoot/lib.ps1"
 
-# 空の利用先(Invoke-TestCase が New-TestProject 済み): テンプレートは .agents/skills/_templates/ 配下、.agents/workflow/ と .gitignore は無い
+# 空の利用先(Invoke-TestCase が New-TestProject 済み): テンプレートは .agents/skills/agents-md-setup/templates/ 配下、.agents/workflow/ と .gitignore は無い
 function Initialize-EmptyProject {
     Remove-Item -Recurse -Force "$script:Proj/.agents/workflow", "$script:Proj/.gitignore" -ErrorAction SilentlyContinue
     $null = New-Item -ItemType Directory -Force "$script:Proj/.agents/skills"
-    Copy-Item -Recurse "$script:RepoRoot/_templates" "$script:Proj/.agents/skills/_templates"
+    $null = New-Item -ItemType Directory -Force "$script:Proj/.agents/skills/agents-md-setup"
+    Copy-Item -Recurse "$script:RepoRoot/agents-md-setup/templates" "$script:Proj/.agents/skills/agents-md-setup/templates"
 }
 
 # リンク自体だけを消す(リンク先の .agents の中身を巻き込まない)
@@ -18,7 +19,7 @@ function Invoke-Setup {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Rest)
     $errFile = [System.IO.Path]::GetTempFileName()
     Push-Location $script:Proj
-    $outLines = & pwsh -NoProfile -File ".agents/skills/_templates/workflow/scripts/workflow-setup.ps1" @Rest 2> $errFile
+    $outLines = & pwsh -NoProfile -File ".agents/skills/agents-md-setup/templates/workflow/scripts/workflow-setup.ps1" @Rest 2> $errFile
     $script:Code = $LASTEXITCODE
     Pop-Location
     $script:Out = (@($outLines) -join "`n").Trim()

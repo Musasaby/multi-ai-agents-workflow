@@ -1,17 +1,17 @@
 ﻿# #17: workflow-sync-scripts(テンプレートと配置先の差分検出・反映, PowerShell版)
 . "$PSScriptRoot/lib.ps1"
 
-# 利用先の構成を再現する: テンプレートは .agents/skills/_templates/workflow/ 配下、
+# 利用先の構成を再現する: テンプレートは .agents/skills/agents-md-setup/templates/workflow/ 配下、
 # 配置先は .agents/workflow/ 配下(New-TestProject が全スクリプトを配置済み)
 function Initialize-UserProject {
-    $tpl = "$script:Proj/.agents/skills/_templates/workflow"
+    $tpl = "$script:Proj/.agents/skills/agents-md-setup/templates/workflow"
     $null = New-Item -ItemType Directory -Force "$tpl/scripts"
     Copy-Item "$script:TemplateScripts/*" "$tpl/scripts/"
-    Copy-Item "$script:RepoRoot/_templates/workflow/README.md" "$tpl/README.md"
+    Copy-Item "$script:RepoRoot/agents-md-setup/templates/workflow/README.md" "$tpl/README.md"
     # 差分を作る: next-task.ps1 は未配置、dispatch-run.ps1 は古い版、README.md は CRLF だけが違う
     Remove-Item "$script:Proj/.agents/workflow/scripts/next-task.ps1"
     Write-Utf8File "$script:Proj/.agents/workflow/scripts/dispatch-run.ps1" "Write-Output old`n"
-    $readme = [System.IO.File]::ReadAllText("$script:RepoRoot/_templates/workflow/README.md").Replace("`r`n", "`n").Replace("`n", "`r`n")
+    $readme = [System.IO.File]::ReadAllText("$script:RepoRoot/agents-md-setup/templates/workflow/README.md").Replace("`r`n", "`n").Replace("`n", "`r`n")
     Write-Utf8File "$script:Proj/.agents/workflow/README.md" $readme
 }
 
@@ -19,7 +19,7 @@ function Invoke-Sync {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Rest)
     $errFile = [System.IO.Path]::GetTempFileName()
     Push-Location $script:Proj
-    $outLines = & pwsh -NoProfile -File ".agents/skills/_templates/workflow/scripts/workflow-sync-scripts.ps1" @Rest 2> $errFile
+    $outLines = & pwsh -NoProfile -File ".agents/skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.ps1" @Rest 2> $errFile
     $script:Code = $LASTEXITCODE
     Pop-Location
     $script:Out = (@($outLines) -join "`n").Trim()

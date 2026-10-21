@@ -8,7 +8,8 @@ UPSTREAM_DIR=""
 setup_project_with_upstream() {
     UPSTREAM_DIR="$PROJ/.agents/upstream"
     mkdir -p "$UPSTREAM_DIR"
-    cp -r "$REPO_ROOT/_templates" "$UPSTREAM_DIR/_templates"
+    mkdir -p "$UPSTREAM_DIR/agents-md-setup"
+    cp -r "$REPO_ROOT/agents-md-setup/templates" "$UPSTREAM_DIR/agents-md-setup/templates"
     git -C "$UPSTREAM_DIR" init -q -b main
     assert_own_repo "$UPSTREAM_DIR"
     (
@@ -52,7 +53,7 @@ upstream_commit() {
 run_update() {
     local out_file err_file
     out_file="$(mktemp)"; err_file="$(mktemp)"
-    (cd "$PROJ" && bash .agents/skills/_templates/workflow/scripts/workflow-update.sh "$@") > "$out_file" 2> "$err_file"
+    (cd "$PROJ" && bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-update.sh "$@") > "$out_file" 2> "$err_file"
     CODE=$?
     OUT="$(cat "$out_file")"; ERR="$(cat "$err_file")"
     rm -f "$out_file" "$err_file"
@@ -60,10 +61,10 @@ run_update() {
 
 t_update() {
     setup_project_with_upstream
-    upstream_commit "_templates/new.txt" "new"
+    upstream_commit "agents-md-setup/templates/new.txt" "new"
     run_update
     if [ "$CODE" -eq 0 ] || [ "$CODE" -eq 3 ]; then _record ok; else _record ng "exit 0 or 3 (got $CODE): $OUT $ERR"; fi
-    assert_file_exists "$PROJ/.agents/skills/_templates/new.txt" "new.txt pulled"
+    assert_file_exists "$PROJ/.agents/skills/agents-md-setup/templates/new.txt" "new.txt pulled"
     assert_contains "$OUT" "Upstream: .agents/upstream main" "Upstream line"
 }
 
@@ -79,22 +80,22 @@ t_conflict() {
     setup_project_with_upstream
     (
         cd "$PROJ" || exit 1
-        { printf 'project side\n'; tail -n +2 .agents/skills/_templates/AGENTS.md; } > .agents/skills/_templates/AGENTS.md.new
-        mv .agents/skills/_templates/AGENTS.md.new .agents/skills/_templates/AGENTS.md
+        { printf 'project side\n'; tail -n +2 .agents/skills/agents-md-setup/templates/AGENTS.md; } > .agents/skills/agents-md-setup/templates/AGENTS.md.new
+        mv .agents/skills/agents-md-setup/templates/AGENTS.md.new .agents/skills/agents-md-setup/templates/AGENTS.md
         git add -A
         git commit -q -m "project change"
     ) || exit 1
-    upstream_commit "_templates/AGENTS.md" "upstream side
-$(tail -n +2 "$UPSTREAM_DIR/_templates/AGENTS.md")"
+    upstream_commit "agents-md-setup/templates/AGENTS.md" "upstream side
+$(tail -n +2 "$UPSTREAM_DIR/agents-md-setup/templates/AGENTS.md")"
     run_update
     assert_eq 2 "$CODE" "exit 2: $OUT $ERR"
-    assert_contains "$OUT" "CONFLICT .agents/skills/_templates/AGENTS.md" "CONFLICT line"
+    assert_contains "$OUT" "CONFLICT .agents/skills/agents-md-setup/templates/AGENTS.md" "CONFLICT line"
     assert_eq "Next: escalate reason=conflict" "$(printf '%s\n' "$OUT" | tail -n 1)" "last line"
 }
 
 t_sync_failed() {
     setup_project_with_upstream
-    upstream_commit "_templates/workflow/scripts/workflow-sync-scripts.sh" "exit 1"
+    upstream_commit "agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.sh" "exit 1"
     run_update
     assert_eq 22 "$CODE" "exit 22: $OUT $ERR"
     assert_eq "Next: escalate reason=sync-failed" "$(printf '%s\n' "$OUT" | tail -n 1)" "last line"

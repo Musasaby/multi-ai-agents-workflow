@@ -1,6 +1,6 @@
 ﻿# 配布テンプレート(このスクリプトがあるディレクトリ)と利用先の配置先
 # (.agents/workflow/scripts/ と .agents/workflow/README.md)を比較し、差分を反映する。
-# 必ずテンプレート側のコピー(利用先では .agents/skills/_templates/workflow/scripts/)から実行する。
+# 必ずテンプレート側のコピー(利用先では .agents/skills/agents-md-setup/templates/workflow/scripts/)から実行する。
 #
 # Usage:
 #   workflow-sync-scripts.ps1                          差分の一覧(missing / differs)を表示
@@ -31,7 +31,7 @@ $destRoot = Join-Path $root '.agents/workflow'
 # 配置先のコピー(.agents/workflow/scripts/)から実行すると比較元と比較先が同じになり、
 # 常に「差分なし」と誤報するため拒否する
 if ((Test-Path $destRoot) -and ((Resolve-Path $templateRoot).Path.TrimEnd('\', '/') -eq (Resolve-Path $destRoot).Path.TrimEnd('\', '/'))) {
-    [Console]::Error.WriteLine("Run this script from the template copy (.agents/skills/_templates/workflow/scripts/), not from .agents/workflow/scripts/")
+    [Console]::Error.WriteLine("Run this script from the template copy (.agents/skills/agents-md-setup/templates/workflow/scripts/), not from .agents/workflow/scripts/")
     exit 1
 }
 

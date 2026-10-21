@@ -7,7 +7,8 @@ $script:UpstreamDir = $null
 function Initialize-ProjectWithUpstream {
     $script:UpstreamDir = "$script:Proj/.agents/upstream"
     $null = New-Item -ItemType Directory -Force $script:UpstreamDir
-    Copy-Item -Recurse "$script:RepoRoot/_templates" "$script:UpstreamDir/_templates"
+    $null = New-Item -ItemType Directory -Force "$script:UpstreamDir/agents-md-setup"
+    Copy-Item -Recurse "$script:RepoRoot/agents-md-setup/templates" "$script:UpstreamDir/agents-md-setup/templates"
     git -C $script:UpstreamDir init -q -b main 2>$null
     Assert-OwnRepo $script:UpstreamDir
     Push-Location $script:UpstreamDir
@@ -53,7 +54,7 @@ function Invoke-Update {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Rest)
     $errFile = [System.IO.Path]::GetTempFileName()
     Push-Location $script:Proj
-    $outLines = & pwsh -NoProfile -File ".agents/skills/_templates/workflow/scripts/workflow-update.ps1" @Rest 2> $errFile
+    $outLines = & pwsh -NoProfile -File ".agents/skills/agents-md-setup/templates/workflow/scripts/workflow-update.ps1" @Rest 2> $errFile
     $script:Code = $LASTEXITCODE
     Pop-Location
     $script:Out = (@($outLines) -join "`n").Trim()
@@ -65,10 +66,10 @@ Write-Host "test-workflow-update.ps1"
 
 Invoke-TestCase "update: upstream の更新を取り込む" {
     Initialize-ProjectWithUpstream
-    Add-UpstreamCommit "_templates/new.txt" "new"
+    Add-UpstreamCommit "agents-md-setup/templates/new.txt" "new"
     Invoke-Update
     Add-Result ($script:Code -eq 0 -or $script:Code -eq 3) "exit 0 or 3 (got $($script:Code)): $($script:Out) $($script:Err)"
-    Assert-FileExists "$script:Proj/.agents/skills/_templates/new.txt" "new.txt pulled"
+    Assert-FileExists "$script:Proj/.agents/skills/agents-md-setup/templates/new.txt" "new.txt pulled"
     Assert-Contains $script:Out "Upstream: .agents/upstream main" "Upstream line"
 }
 
@@ -82,7 +83,7 @@ Invoke-TestCase "update: 作業ツリーが汚れていれば exit 20" {
 
 Invoke-TestCase "update: コンフリクトは CONFLICT 行と exit 2" {
     Initialize-ProjectWithUpstream
-    $rel = "_templates/AGENTS.md"
+    $rel = "agents-md-setup/templates/AGENTS.md"
     $projFile = "$script:Proj/.agents/skills/$rel"
     $body = @([System.IO.File]::ReadAllLines($projFile, [System.Text.Encoding]::UTF8) | Select-Object -Skip 1)
     Write-Utf8File $projFile ((@('project side') + $body) -join "`n")
@@ -97,13 +98,13 @@ Invoke-TestCase "update: コンフリクトは CONFLICT 行と exit 2" {
     Add-UpstreamCommit $rel ((@('upstream side') + $upBody) -join "`n")
     Invoke-Update
     Assert-Eq 2 $script:Code "exit 2: $($script:Out) $($script:Err)"
-    Assert-Contains $script:Out "CONFLICT .agents/skills/_templates/AGENTS.md" "CONFLICT line"
+    Assert-Contains $script:Out "CONFLICT .agents/skills/agents-md-setup/templates/AGENTS.md" "CONFLICT line"
     Assert-Eq "Next: escalate reason=conflict" (@($script:Out -split "`n")[-1].Trim()) "last line"
 }
 
 Invoke-TestCase "update: 差分の確認に失敗したら exit 22" {
     Initialize-ProjectWithUpstream
-    Add-UpstreamCommit "_templates/workflow/scripts/workflow-sync-scripts.ps1" "exit 1"
+    Add-UpstreamCommit "agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.ps1" "exit 1"
     Invoke-Update
     Assert-Eq 22 $script:Code "exit 22: $($script:Out) $($script:Err)"
     Assert-Eq "Next: escalate reason=sync-failed" (@($script:Out -split "`n")[-1].Trim()) "last line"

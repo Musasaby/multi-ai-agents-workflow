@@ -739,7 +739,7 @@ Invoke-TestCase "gen: 参照ファイル なし は検証しない" {
 Invoke-TestCase "gen: @参照だけのAGENTS.mdは警告" {
     Set-Tasks $basicTasks
     Set-State 'T1:pending'
-    Write-Utf8File "$script:Proj/AGENTS.md" "@.agents/skills/_templates/AGENTS.md`n"
+    Write-Utf8File "$script:Proj/AGENTS.md" "@.agents/skills/agents-md-setup/templates/AGENTS.md`n"
     Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1
     Assert-Eq 0 $script:Code "exit code: $($script:Err)"
     Assert-Contains $script:Err "AGENTS.md only contains '@' references" "warning"
@@ -751,7 +751,7 @@ Invoke-TestCase "gen: @参照だけのAGENTS.mdは警告" {
 Invoke-TestCase "gen: AGENTS.md の @ 参照を展開する profile では警告しない" {
     Set-Tasks $basicTasks
     Set-State 'T1:pending'
-    Write-Utf8File "$script:Proj/AGENTS.md" "@.agents/skills/_templates/AGENTS.md`n"
+    Write-Utf8File "$script:Proj/AGENTS.md" "@.agents/skills/agents-md-setup/templates/AGENTS.md`n"
     Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1
     Assert-Contains $script:Err "the child CLI (profile: auto) does not expand them" "profile name in warning"
     $cfgPath = "$script:Proj/.agents/workflow/config.json"

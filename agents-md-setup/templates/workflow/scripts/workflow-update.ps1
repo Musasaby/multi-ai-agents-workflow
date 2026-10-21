@@ -1,5 +1,5 @@
 ﻿# 利用先で .agents/skills/ を upstream から git subtree pull で更新し、配置済みスクリプトとの差分を知らせる。
-# 必ずテンプレート側のコピー(利用先では .agents/skills/_templates/workflow/scripts/)から実行する。
+# 必ずテンプレート側のコピー(利用先では .agents/skills/agents-md-setup/templates/workflow/scripts/)から実行する。
 #
 # Usage:
 #   workflow-update.ps1
@@ -27,7 +27,7 @@ if (-not $root) {
 }
 $destRoot = Join-Path $root '.agents/workflow'
 if ((Test-Path $destRoot) -and ((Resolve-Path $templateRoot).Path.TrimEnd('\', '/') -eq (Resolve-Path $destRoot).Path.TrimEnd('\', '/'))) {
-    [Console]::Error.WriteLine("Run this script from the template copy (.agents/skills/_templates/workflow/scripts/), not from .agents/workflow/scripts/")
+    [Console]::Error.WriteLine("Run this script from the template copy (.agents/skills/agents-md-setup/templates/workflow/scripts/), not from .agents/workflow/scripts/")
     exit 1
 }
 
