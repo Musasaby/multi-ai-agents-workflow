@@ -49,4 +49,18 @@ Invoke-TestCase "FileLimit を超えると失敗する" {
     Assert-Contains $r.Out 'FAIL: agent-x/SKILL.md' "サイズ超過を報告する"
 }
 
+Invoke-TestCase "frontmatter の description に ': ' があり引用符が無いと失敗する" {
+    New-DummySkill "---`nname: agent-x`ndescription: 例: x`n---`n`n# x`n"
+    $r = Invoke-SkillSize
+    Assert-Eq 1 $r.Code "exit code"
+    Assert-Contains $r.Out 'FAIL: frontmatter description of agent-x/SKILL.md must be quoted' "引用符の欠落を報告する"
+}
+
+Invoke-TestCase "frontmatter の description を二重引用符で囲めば成功する" {
+    New-DummySkill "---`nname: agent-x`ndescription: `"例: x`"`n---`n`n# x`n"
+    $r = Invoke-SkillSize
+    Assert-Eq 0 $r.Code "exit code"
+    Assert-Contains $r.Out 'SKILL SIZE OK' "OK を出す"
+}
+
 Show-Summary

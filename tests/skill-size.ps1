@@ -4,6 +4,8 @@
 #   (2) 実装ループで読み込む agent-workflow・agent-dispatch・agent-review-commit の合計が LoopLimit 以下であること
 #   (3) SKILL.md と references/*.md の中の `references/<名前>.md`(`<skill名>/references/<名前>.md` も可)の
 #       リンク先が存在すること。`references/<CLI>.md` のように < を含む書き方は対象外
+#   (4) frontmatter の name・description が、引用符なしのまま YAML で読めること
+#       (プレーンスカラーに `: ` や ` #` があると npx skills が skill ごと無視する)
 #   FAIL が 1 件でもあれば exit 1、無ければ SKILL SIZE OK を出して exit 0。
 #   -Root を渡すとそのディレクトリを検査する(省略時はこのリポジトリのルート。テスト用)。
 param(
@@ -71,6 +73,22 @@ foreach ($f in $mdFiles) {
         if (-not (Test-Path -LiteralPath $target -PathType Leaf)) {
             $shown = $target.Substring($root.Length).TrimStart('\', '/') -replace '\\', '/'
             Write-Host "FAIL: broken reference $rel -> $shown"
+            $failed = $true
+        }
+    }
+}
+
+# (4) frontmatter の name・description が、引用符なしのまま YAML で読めること
+foreach ($f in $skillFiles) {
+    $rel = $f.Substring($root.Length).TrimStart('\', '/') -replace '\\', '/'
+    $lines = [System.IO.File]::ReadAllLines($f)
+    if ($lines.Count -eq 0 -or $lines[0] -ne '---') { continue }   # frontmatter が無いファイルは対象外
+    for ($i = 1; $i -lt $lines.Count -and $lines[$i] -ne '---'; $i++) {
+        if ($lines[$i] -notmatch '^(name|description):\s*(.*)$') { continue }
+        $key = $Matches[1]; $v = $Matches[2]
+        if ($v -match '^["''|>]') { continue }   # 引用符・ブロックスカラーは対象外
+        if ($v.Contains(': ') -or $v.Contains(' #') -or $v.EndsWith(':')) {
+            Write-Host "FAIL: frontmatter $key of $rel must be quoted (contains ': ' or ' #')"
             $failed = $true
         }
     }

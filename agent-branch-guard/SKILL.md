@@ -1,6 +1,6 @@
 ---
 name: agent-branch-guard
-description: マルチエージェント実装ワークフローで、tasks.md のタスク実行(/agent-workflow・/agent-dispatch・/agent-review-commit)以外の変更やコミットを伴う依頼を受けたときに、作業に着手する前に必ず使う。`.agents/workflow/state.json` があるリポジトリ前提。該当する依頼の例: タスクの追加・計画の変更・ワークフロー外のバグ修正・ドキュメントや設定の変更。branch-check スクリプトでブランチを判定し、main やマージ済みブランチ上での誤コミットを防ぐ。
+description: "マルチエージェント実装ワークフローで、tasks.md のタスク実行(/agent-workflow・/agent-dispatch・/agent-review-commit)以外の変更やコミットを伴う依頼を受けたときに、作業に着手する前に必ず使う。`.agents/workflow/state.json` があるリポジトリ前提。該当する依頼の例: タスクの追加・計画の変更・ワークフロー外のバグ修正・ドキュメントや設定の変更。branch-check スクリプトでブランチを判定し、main やマージ済みブランチ上での誤コミットを防ぐ。"
 ---
 
 # ブランチガード(ワークフロー外の作業のブランチ判定)
