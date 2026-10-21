@@ -101,9 +101,29 @@ t_sync_failed() {
     assert_contains "$ERR" "workflow-sync-scripts.sh failed" "stderr"
 }
 
+t_warn_main() {
+    setup_project_with_upstream
+    run_update
+    if [ "$CODE" -eq 0 ] || [ "$CODE" -eq 3 ]; then _record ok; else _record ng "exit 0 or 3 (got $CODE): $OUT $ERR"; fi
+    assert_contains "$ERR" "WARN: upstream.branch is main" "WARN"
+}
+
+t_no_warn_dist() {
+    setup_project_with_upstream
+    git -C "$UPSTREAM_DIR" branch dist
+    local cfg="$PROJ/.agents/workflow/config.json"
+    sed 's/"branch": "main"/"branch": "dist"/' "$cfg" > "$cfg.new" && mv "$cfg.new" "$cfg"
+    run_update
+    if [ "$CODE" -eq 0 ] || [ "$CODE" -eq 3 ]; then _record ok; else _record ng "exit 0 or 3 (got $CODE): $OUT $ERR"; fi
+    assert_contains "$OUT" "Upstream: .agents/upstream dist" "Upstream line"
+    assert_not_contains "$ERR" "WARN: upstream.branch" "no WARN"
+}
+
 echo "test-workflow-update.sh"
 test_case "update: upstream の更新を取り込む" t_update
 test_case "update: 作業ツリーが汚れていれば exit 20" t_dirty
 test_case "update: コンフリクトは CONFLICT 行と exit 2" t_conflict
 test_case "update: 差分の確認に失敗したら exit 22" t_sync_failed
+test_case "update: upstream.branch が main なら WARN を出して取り込みは続ける" t_warn_main
+test_case "update: upstream.branch が dist なら WARN を出さない" t_no_warn_dist
 summary

@@ -110,4 +110,24 @@ Invoke-TestCase "update: 差分の確認に失敗したら exit 22" {
     Assert-Contains $script:Err "workflow-sync-scripts.ps1 failed" "stderr"
 }
 
+Invoke-TestCase "update: upstream.branch が main なら WARN を出して取り込みは続ける" {
+    Initialize-ProjectWithUpstream
+    Invoke-Update
+    Add-Result ($script:Code -eq 0 -or $script:Code -eq 3) "exit 0 or 3 (got $($script:Code)): $($script:Out) $($script:Err)"
+    Assert-Contains $script:Err "WARN: upstream.branch is main" "WARN"
+}
+
+Invoke-TestCase "update: upstream.branch が dist なら WARN を出さない" {
+    Initialize-ProjectWithUpstream
+    git -C $script:UpstreamDir branch dist 2>$null
+    $path = "$script:Proj/.agents/workflow/config.json"
+    $cfg = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $cfg.upstream.branch = 'dist'
+    Write-Utf8File $path (($cfg | ConvertTo-Json -Depth 10) + "`n")
+    Invoke-Update
+    Add-Result ($script:Code -eq 0 -or $script:Code -eq 3) "exit 0 or 3 (got $($script:Code)): $($script:Out) $($script:Err)"
+    Assert-Contains $script:Out "Upstream: .agents/upstream dist" "Upstream line"
+    Assert-NotContains $script:Err "WARN: upstream.branch" "no WARN"
+}
+
 Show-Summary
