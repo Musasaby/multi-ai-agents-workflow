@@ -4,7 +4,7 @@
 # 新ブランチでは逆に成り立ってしまうため、祖先判定は使わず gh の PR 状態で判定する。
 # 判定順(gh を呼ばずに済む判定を先に行う):
 #   1. 使い方不備・git 失敗(detached HEAD を含む)→ exit 1
-#   2. 現在のブランチが main(config.json の upstream.branch があればその名前も)→ exit 2
+#   2. 現在のブランチが main(config.json の base_branch があればその名前も)→ exit 2
 #   3. -State 指定時、state.json の branch と現在のブランチが異なる → exit 5
 #      (state.json が無い・branch が空の場合はこの判定を飛ばす)
 #   4. gh が無い・認証切れ等で PR 状態を取得できない → exit 4
@@ -64,8 +64,8 @@ $branch = ($branchOut -join '').Trim()
 if (-not $branch) { Fail 'HEAD is detached (switch to a work branch first)' }
 
 # --- 2. main 上 ---
-$upstreamBranch = Get-JsonField $configPath 'upstream.branch'
-if ($branch -ceq 'main' -or ($upstreamBranch -and $branch -ceq $upstreamBranch)) {
+$baseBranch = Get-JsonField $configPath 'base_branch'
+if ($branch -ceq 'main' -or ($baseBranch -and $branch -ceq $baseBranch)) {
     Fail "On '$branch': do not work on the main branch (create a develop/<name> branch from the latest origin/main)" 2 'Next: switch-branch reason=main'
 }
 

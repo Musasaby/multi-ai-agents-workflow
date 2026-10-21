@@ -74,7 +74,7 @@ description: 回答記入済みの質問ファイルを検出し、回答の判�
 
 ## 質問ファイルのフォーマット
 
-各タスク完了時に `agent-review-commit` が以下の形式で生成する。この形式は `docs/plans/comprehension-check.md` の設計に従う。
+各タスク完了時に `agent-review-commit` が以下の形式で生成する。
 
 ```markdown
 # 理解確認: <タスクID> <タスクタイトル>

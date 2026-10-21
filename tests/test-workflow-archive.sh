@@ -176,6 +176,32 @@ t_no_pr_no_branch() {
     assert_file_absent "$PROJ/.agents/workflow/state.json" "state.json moved"
 }
 
+t_no_pr_base_branch() {
+    setup_branch_state
+    gh_stub_set 1 '' 'no pull requests found for branch "develop/x"'
+    (
+        cd "$PROJ" || exit 1
+        git checkout -q -b develop/x
+        printf 'x\n' > x.txt
+        git add x.txt
+        git commit -q -m "feat: x"
+        git branch trunk develop/x
+    ) || exit 1
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" <<'PY'
+import json, sys
+p = sys.argv[1]
+with open(p, encoding='utf-8') as f:
+    c = json.load(f)
+c['base_branch'] = 'trunk'
+c['upstream'] = {'url': 'https://github.com/example/repo.git', 'branch': 'dist'}
+with open(p, 'w', encoding='utf-8', newline='\n') as f:
+    json.dump(c, f, ensure_ascii=False, indent=2)
+PY
+    run_script workflow-archive.sh myslug
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_file_absent "$PROJ/.agents/workflow/state.json" "state.json moved"
+}
+
 echo "test-workflow-archive.sh"
 test_case "全対象の移動と Archived: の出力" t_all_targets
 test_case "一部の対象だけ移動" t_partial_targets
@@ -190,4 +216,5 @@ test_case "--force なら PR を確かめずにアーカイブする" t_force
 test_case "PR 未作成で未マージのコミットがあれば exit 5" t_no_pr_unmerged
 test_case "PR 未作成で未マージのコミットが無ければアーカイブする" t_no_pr_no_new_commits
 test_case "PR 未作成でブランチが無ければアーカイブする" t_no_pr_no_branch
+test_case "PR 未作成のとき比較先は base_branch" t_no_pr_base_branch
 summary
