@@ -72,45 +72,24 @@ AIエージェント(Claude Code、OpenCode 等)による複数エージェン�
 skill ごとの個別リンクを置く旧構成になっている場合、`/agents-md-setup` は `.claude` を
 `.agents` へのリンクに置き換えるよう提案します(既存の skill も引き続き `.claude/skills/` から見えます)。
 
-## 更新手順
+## 更新
 
-`workflow-update` skill を実行するか、手動で以下を実行して更新します。
+`workflow-update` skill を実行すると、`npx skills update -p -y` から、配置済みスクリプトとの差分の反映までを行います。
+手動で更新する場合は、次の2行を実行します。
 
 ```bash
 npx skills update -p -y
 bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-update.sh
 ```
 
-`.agents/workflow/scripts/` と `.agents/workflow/README.md` はセットアップ時のコピーのため、
-`npx skills update` だけでは更新されません。`workflow-update.sh` で差分があれば、続けて以下で差分を確認・反映してください
-(`workflow-update` skill はこの手順も実行します):
+`.agents/workflow/scripts/` と `.agents/workflow/README.md` はセットアップ時のコピーのため、`npx skills update` だけでは更新されません。
+差分の反映は `workflow-update` skill が行います。手順は [`workflow-update/SKILL.md`](workflow-update/SKILL.md) にあります。
 
-```bash
-bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.sh                 # 差分の一覧
-bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.sh --copy-missing  # 未配置ファイルをコピー
-bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.sh --overwrite <名前,...>  # 差分を確認して上書き
-```
+### git subtree から移行する場合
 
-## git subtree からの移行手順
-
-`.agents/skills/` を `git subtree` で取り込んでいる利用先で行います(`workflow-update` が `escalate reason=not-npx` を出した場合)。
-subtree 時代の `workflow-update` が `escalate reason=sync-failed`
-(`.agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh` が見つからない)で止まった場合も、この手順に進みます。
-subtree で取り込んだ配布物を `.agents/skills/` から消してコミットし、`npx skills add` で導入し直し、
-配置済みスクリプトとの差分を反映してコミットします。コマンドは bash と PowerShell で同じものが使えます。
-利用先固有の skill は `.agents/skills/` に残ります。
-`--overwrite` には、`workflow-update.sh` の `differs` 行に出た名前をカンマ区切りで渡します(`differs` が無ければその行は飛ばします)。
-
-```bash
-git -C .agents/skills rm -r -q --ignore-unmatch agent-branch-guard agent-comprehension-check agent-dispatch agent-quality-gate agent-review-commit agent-task-plan agent-workflow agents-md-setup workflow-update _templates tests docs AGENTS.md README.md .gitignore .gitattributes .github
-git commit -m "chore: subtree で取り込んだ配布物を削除する(npx skills へ移行)"
-npx skills add Musasaby/multi-ai-agents-workflow --skill '*' -a universal -y
-bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-update.sh
-bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.sh --copy-missing
-bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.sh --overwrite <workflow-update が differs と出した名前,...>
-git add .agents/skills skills-lock.json .agents/workflow/scripts .agents/workflow/README.md
-git commit -m "chore: npx skills で配布物を導入する"
-```
+`.agents/skills/` を `git subtree` で取り込んでいる利用先が対象です。`workflow-update` が `escalate reason=not-npx` を出した場合や、
+旧 `workflow-update` が `escalate reason=sync-failed` で止まった場合に進みます。
+手順は [`workflow-update/references/migrations.md`](workflow-update/references/migrations.md) の「git subtree から npx skills への移行」にあります。
 
 ## 運用ルール
 
@@ -118,171 +97,21 @@ git commit -m "chore: npx skills で配布物を導入する"
 - **利用先固有 skill**: プロジェクト独自の skill は、配布物と重ならない名前のディレクトリで追加してください。`npx skills update` は `skills-lock.json` に記録された skill だけを更新するため、共存できます
 - **submodule ではない**: `.agents/skills/` と `skills-lock.json` をコミットするので、clone 後の追加操作は `/agents-md-setup` だけです
 
-## ユーザーへの報告と日本語の推敲
+## 報告と日本語の推敲
 
 ### 報告の形
 
 - 親エージェントの報告は、`agent-workflow/references/report-template.md` の3点(状況・起きたこと・次にすること)の形で書きます。場面ごとの書き方も、このファイルにあります
 - 進捗は、親が数えずに `workflow-status` で機械的に出します。完了時は `workflow-status --summary` の出力からサマリーを作ります
 
-### yomiyasu による日本語の推敲(任意)
+任意で yomiyasu による日本語の推敲を有効にできます。手順は [`docs/yomiyasu.md`](docs/yomiyasu.md) にあります。
 
-[yomiyasu](https://github.com/nanaism/yomiyasu) は、AI が書いた日本語を推敲する skill です。本リポジトリには**同梱しません**。理由は次の3つです。
+## 困ったとき
 
-1. SKILL.md が大きく、トークンを多く使うため
-2. `yomiyasu_check.py` の実行に Python が要るため
-3. 入れ方と skill の名前が、利用者ごとに違うため
+- 子CLIの失敗の切り分けと、reason ごとの対処: [`agent-dispatch/references/troubleshooting.md`](agent-dispatch/references/troubleshooting.md)
+- sandbox で子CLIがホーム(`~/.config` 等)に書けない場合は、`child_agent.isolate_xdg` を `true` にします(認証情報が見えなくなるので、sandbox 以外では `false` のままにします)。詳細は [`agent-dispatch/references/troubleshooting.md`](agent-dispatch/references/troubleshooting.md) と [`agent-dispatch/references/opencode.md`](agent-dispatch/references/opencode.md)
+- スクリプトの exit code と `Next:` 行の意味: [`agents-md-setup/templates/workflow/README.md`](agents-md-setup/templates/workflow/README.md)
 
-有効にする手順:
+## 開発に参加する
 
-1. `npx skills add nanaism/yomiyasu` などで yomiyasu を導入します
-2. `.agents/workflow/config.json` の `text_refine.skill` に、入れ方に合う名前を書きます。名前は、親エージェントの skill 一覧に出る名前です
-3. 必要なら `text_refine.targets`(推敲する場面)と `text_refine.reader`(想定する読み手)を変えます
-
-入れ方と `text_refine.skill` の対応(yomiyasu の資料で分かっているもの):
-
-| 入れ方 | `text_refine.skill` |
-|--------|---------------------|
-| Claude Code の `npx skills add` / `gh skill install` | `yomiyasu` |
-| Claude Code のプラグイン | `yomiyasu:yomiyasu` |
-| Codex | `yomiyasu:yomiyasu` |
-| `npx openskills install` | `yomiyasu` |
-
-それ以外のエージェントは、親の skill 一覧で名前を確かめてください。
-
-推敲される場面は、次の6つです(`targets` の値)。
-
-- `commit`: コミットメッセージの説明
-- `task_done`: タスク1件が done になったときの報告
-- `pr_body`: PR の説明
-- `confirm`: 停止して判断を仰ぐときの報告
-- `summary`: 完了時のサマリー
-- `tasks`: agent-task-plan で書く tasks.md(要件・前提・解釈・対象外・目的欄・受け入れ基準の文)
-
-次のものは推敲されません: 子へのプロンプト(prompt.md・fix-notes.md)、state.json などの管理ファイル、スクリプトの出力、コード、途中経過の報告。
-
-`text_refine.skill` が未設定のまま yomiyasu を導入していると、推敲の場面で知らせが出ます。どのエージェント用に入れた場合も対象です(プロジェクトとホームの `*/skills/yomiyasu/`、Claude Code のプラグイン)。
-
-## 開発者向け(本リポジトリの開発)
-
-本リポジトリの `.claude` は `.agents` へのジャンクション(標準形)です。
-skill の編集はリポジトリルート直下の各ディレクトリ(`agent-workflow/` 等)が正本です。
-
-### `.agents/skills/` への同期(配布元リポジトリ固有の手順)
-
-本リポジトリでは `.agents/` 配下は**未追跡**(ローカル実行状態。`.gitignore` で除外)です。
-ルート直下で skill を編集したら、`.claude/skills` 経由の Claude Code 等に反映するため、
-以下のコピーで `.agents/skills/` を同期します(git 操作・コミットは不要):
-
-```powershell
-# ルート直下の配布物を .agents/skills にコピー
-$items = 'agent-workflow','agent-task-plan','agent-dispatch','agent-review-commit',
-         'agent-comprehension-check','agent-quality-gate','agent-branch-guard','agents-md-setup','workflow-update'
-foreach ($i in $items) {
-  Remove-Item ".agents/skills/$i" -Recurse -Force -ErrorAction SilentlyContinue
-  Copy-Item $i ".agents/skills/$i" -Recurse
-}
-Copy-Item README.md .agents/skills/README.md -Force
-```
-
-> **利用先との違い**: 利用先では `.agents/skills/` は `npx skills add` で配置して追跡しますが、
-> 本リポジトリ(配布元)はルートが配布物そのもののため、`.agents/` はローカル実行用のコピーとして
-> 未追跡で運用します(`npx skills` は使わず、上のコピーで同期します)。
-
-### テスト
-
-`agents-md-setup/templates/workflow/scripts/` のスクリプトは `tests/` のシナリオテストで検証します。
-一時ディレクトリにダミーの利用先プロジェクトを作ってスクリプトを実行するため、
-本リポジトリの `.agents/` には影響しません(gh への実アクセスもしません)。
-
-```bash
-# POSIX 版(bash + python3 + git)
-bash tests/run-all.sh
-```
-```powershell
-# PowerShell 版(pwsh 7 + git)
-pwsh -NoProfile -File tests/run-all.ps1
-```
-
-`run-all` は各テストファイルを名前順に実行し、各ファイルの結果(PASS / FAIL と所要秒数)を
-1 行ずつ出力します。最後に失敗したファイルの一覧を出し、1 本でも失敗すれば exit 1、
-すべて成功なら exit 0 になります。
-
-既定は直列実行ですが、`--jobs <N>`(`run-all.ps1` は `-Jobs <N>`)を付けると
-テストファイル単位の並列実行になります。並列実行時も各ファイルの出力は混ぜず、
-実行後にファイルごとにまとめて出します。
-
-POSIX 版のシグナル終了のテスト(Python 経由の経路)は Linux でのみ実行されます(Windows ではスキップ)。
-
-構文・改行コード・BOM は `tests/syntax-check.ps1` で検査します(本リポジトリで workflow を回すときの
-品質ゲート。`.agents/workflow/config.json` の `test_command` / `quality_gate` にこのコマンドを設定する):
-
-```powershell
-pwsh -NoProfile -File tests/syntax-check.ps1
-```
-
-- `agents-md-setup/templates/workflow/scripts/` と `tests/` の `.ps1` をパースし、`.sh` を `bash -n` で検査する
-- git 管理下と未追跡(`.gitignore` 対象外)のテキストファイルについて、CRLF を含むもの・
-  非 ASCII 文字を含むのに BOM が無い `.ps1`・BOM 付きの `.ps1` 以外のファイル(`.sh`・`.py`・`.md` 等)を失敗にする
-- `tests/skill-size.ps1` を呼び出す(単体でも実行できる)
-
-skill のサイズは `tests/skill-size.ps1` で検査します:
-
-```powershell
-pwsh -NoProfile -File tests/skill-size.ps1
-```
-
-- ワークフローのループで読み込まれる 3 つの skill の `SKILL.md` の合計が 30,000 バイトを超えたら失敗にする
-- 各 `SKILL.md` が 18,000 バイトを超えたら失敗にする
-- `SKILL.md` から `references/*.md` へのリンク先が存在しなければ失敗にする(バッククォートの `references/x.md` と Markdown リンク `[説明](references/x.md#見出し)` の両方。見出しは検査しない)
-
-### CI
-
-GitHub Actions(`.github/workflows/test.yml`)が push と pull_request で全テストを実行します:
-`ubuntu-latest` で `bash tests/run-all.sh`、`windows-latest` で `pwsh -NoProfile -File tests/run-all.ps1` と
-`pwsh -NoProfile -File tests/syntax-check.ps1`。POSIX 版のシグナル終了テストなど Linux でしか
-通らない経路の結果は、この CI で確認します。
-
-### 改行コード
-
-`.gitattributes` で全テキストファイルを作業ツリーでも LF に固定しています(`core.autocrlf=true` の
-環境でも LF でチェックアウトされます)。`.gitattributes` の導入前に clone した作業ツリーに CRLF の
-ファイルが残っている場合は、未コミットの変更が無い状態で次を実行して LF でチェックアウトし直します:
-
-```bash
-git ls-files --eol | awk '$2 == "w/crlf" {print $NF}' | while read -r f; do rm -- "$f"; done
-git checkout -- .
-git ls-files --eol | grep -c "w/crlf"   # 0 になれば完了
-```
-
-### 旧構成からの移行
-
-以前の「`.claude/skills` 配下に各 skill への個別ジャンクション/シンボリックリンクを作成する」方式は、現在の「`.claude` 全体を `.agents` へのジャンクションとする」標準形に統一されています。
-
-### ワークフロー設定
-
-`.agents/workflow/config.json` は `agents-md-setup/templates/workflow/config.json` をプロジェクトルートにコピーして使用してください。
-
-```bash
-cp agents-md-setup/templates/workflow/config.json .agents/workflow/config.json
-```
-
-## サンドボックス環境での実行注意点
-
-Codex 等のサンドボックス環境で子エージェント CLI を実行する際、CLI がホームディレクトリ(`~/.config` 等)への書込を必要とする場合があります(以下は opencode を例にした記述です)。
-
-制限環境では、例えば opencode で `EEXIST: file already exists, mkdir '~/.config/opencode'` 等のエラーが出て CLI が起動失敗する場合があります。対処の詳細は `agent-dispatch/SKILL.md` の「トラブルシューティング」節を参照してください。
-
-簡易対処として、`.agents/workflow/config.json` の `child_agent.isolate_xdg` を `true` にすると、`dispatch-run` が子エージェント CLI の `XDG_CONFIG_HOME` と `XDG_DATA_HOME` をプロジェクト内の書き込み可能なディレクトリ(`.agents/workflow/.config`)に向けます。`isolate_xdg` を `true` にした後で `/agents-md-setup`(`workflow-setup`)を再実行すると `.agents/workflow/.config/` が作られます(その下に CLI が使うディレクトリ(例: opencode の `log`)は、CLI が作るか、作れない環境では事前に作成します。詳細は `agent-dispatch/references/opencode.md`)。この設定では `~/.local/share/<CLI>/auth.json` 等の認証情報が見えなくなるため、sandbox 環境以外では既定の `false` のまま使ってください。
-
-```powershell
-# PowerShell の例
-$env:XDG_CONFIG_HOME = ".agents/workflow/.config"
-$env:XDG_DATA_HOME = ".agents/workflow/.config"
-$null | opencode run $prompt
-```
-
-```bash
-# POSIX シェルの例
-XDG_CONFIG_HOME=.agents/workflow/.config XDG_DATA_HOME=.agents/workflow/.config opencode run "$prompt" < /dev/null
-```
+本リポジトリの開発手順は [`CONTRIBUTING.md`](CONTRIBUTING.md) にあります。
