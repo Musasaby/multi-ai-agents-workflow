@@ -8,7 +8,7 @@ description: AGENTS.md / .agents を正本としたエージェント共通設�
 single source of truth として `AGENTS.md`(リポジトリルート)と `.agents/` を正本にし、
 Claude Code 固有のパス(`CLAUDE.md`, `.claude/`)からはリンク経由で参照させる。
 `CLAUDE.md`・`.claude/` は親が Claude Code の場合のためのもので、AGENTS.md を直接読む親(Codex 等)では使われない(作られても害はない)。
-それ以外の親は配布元 README の「親エージェント・子CLIの対応」を参照する。
+それ以外の親は[references/parent-child.md](references/parent-child.md) を参照する。
 ファイル・ディレクトリの作成や `.gitignore` / `.gitattributes` の整備は `workflow-setup` スクリプトが行う
 (処理の詳細と出力の仕様は `agents-md-setup/templates/workflow/README.md` の「workflow-setup」の節を参照)。
 
