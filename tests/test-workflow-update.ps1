@@ -30,6 +30,7 @@ Invoke-TestCase "update: skills-lock.json が無ければ exit 2" {
     Assert-Eq 2 $script:Code "exit 2: $($script:Out) $($script:Err)"
     Assert-Eq "Next: escalate reason=not-npx" (@($script:Out -split "`n")[-1].Trim()) "last line"
     Assert-Contains $script:Err "skills-lock.json" "stderr"
+    Assert-Contains $script:Err "workflow-update/references/migrations.md" "stderr points to migrations"
 }
 
 Invoke-TestCase "update: 差分が無ければ exit 0" {

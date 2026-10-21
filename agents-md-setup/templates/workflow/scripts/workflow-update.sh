@@ -31,7 +31,7 @@ fi
 cd "$ROOT" || exit 1
 
 if [ ! -f skills-lock.json ]; then
-    echo "skills-lock.json not found: install the skills with 'npx skills add' (see README: git subtree からの移行手順)" >&2
+    echo "skills-lock.json not found: install the skills with 'npx skills add' (to migrate from git subtree, see .agents/skills/workflow-update/references/migrations.md)" >&2
     echo "Next: escalate reason=not-npx"
     exit 2
 fi

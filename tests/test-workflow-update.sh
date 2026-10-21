@@ -26,6 +26,7 @@ t_no_lock() {
     assert_eq 2 "$CODE" "exit 2: $OUT $ERR"
     assert_eq "Next: escalate reason=not-npx" "$(printf '%s\n' "$OUT" | tail -n 1)" "last line"
     assert_contains "$ERR" "skills-lock.json" "stderr"
+    assert_contains "$ERR" "workflow-update/references/migrations.md" "stderr points to migrations"
 }
 
 t_no_diff() {

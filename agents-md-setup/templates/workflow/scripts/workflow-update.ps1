@@ -33,7 +33,7 @@ if ((Test-Path $destRoot) -and ((Resolve-Path $templateRoot).Path.TrimEnd('\', '
 Set-Location $root
 
 if (-not (Test-Path -LiteralPath (Join-Path $root 'skills-lock.json') -PathType Leaf)) {
-    [Console]::Error.WriteLine("skills-lock.json not found: install the skills with 'npx skills add' (see README: git subtree からの移行手順)")
+    [Console]::Error.WriteLine("skills-lock.json not found: install the skills with 'npx skills add' (to migrate from git subtree, see .agents/skills/workflow-update/references/migrations.md)")
     Write-Output "Next: escalate reason=not-npx"
     exit 2
 }
