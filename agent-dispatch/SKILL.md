@@ -5,7 +5,7 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
 
 # 子エージェントへの実装dispatch
 
-前提・解釈: コード例は `.sh` 版だけを示す。PowerShell では `.agents/workflow/scripts/<名>.ps1` を使い、位置引数を `-TaskId` `-Attempt` `-MaxWait` の名前付き引数に読み替える。報告・説明はすべて日本語で行う(子の出力が英語でも同じ)。
+前提・解釈: コード例は `.sh` 版だけを示す。PowerShell では `.agents/workflow/scripts/<名>.ps1` を使い、位置引数を `-TaskId` `-Attempt` に、`--max-wait` を `-MaxWait` の名前付き引数に読み替える。報告・説明はすべて日本語で行う(子の出力が英語でも同じ)。
 
 タスクを子エージェントCLIに依頼し、完了(プロセス終了)を検知して結果を検証する。
 
