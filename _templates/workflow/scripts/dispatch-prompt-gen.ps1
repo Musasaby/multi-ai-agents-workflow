@@ -155,10 +155,24 @@ if ($unknownDeps.Count -gt 0) {
     exit 1
 }
 
+# 作業量のしきい値(config.json の task_sizing。値が無ければ既定値、不正値は警告して既定値)
+$sizingDefaults = [ordered]@{ max_acceptance_criteria = 5; max_changed_files = 3; max_reference_files = 5 }
+$sizingConfig = $null
+try { $sizingConfig = (Get-Content $ConfigPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop).task_sizing } catch {}
+$sizing = @{}
+foreach ($key in $sizingDefaults.Keys) {
+    $v = if ($sizingConfig -is [pscustomobject]) { $sizingConfig.$key } else { $null }
+    if ($null -ne $v -and -not (($v -is [int] -or $v -is [long]) -and $v -ge 1)) {
+        [Console]::Error.WriteLine("WARN: config task_sizing.${key} is not a positive integer (using $($sizingDefaults[$key]))")
+        $v = $null
+    }
+    $sizing[$key] = if ($null -eq $v) { $sizingDefaults[$key] } else { [int]$v }
+}
+
 # 参照ファイル欄の検証
 # `- **参照ファイル**:` の下の箇条書き(`` - `<パス>` `` + 任意の説明。`<パス>:10-40` のような
 # 行範囲は可)を、子が最初に読むファイルとして扱う。存在しないパスはエラー、欄が無い・
-# 6件以上ある場合は警告のみ。値に `なし` と書いた場合は検証しない。
+# しきい値(max_reference_files)を超える場合は警告のみ。値に `なし` と書いた場合は検証しない。
 $refStart = -1
 for ($i = 0; $i -lt $sectionLines.Count; $i++) {
     if ($sectionLines[$i].TrimEnd("`r") -match '^(\s*)-\s+\*\*参照ファイル\*\*:\s*(.*?)\s*$') {
@@ -186,13 +200,14 @@ if ($refStart -lt 0) {
         [Console]::Error.WriteLine("${TaskId}: reference file(s) not found: $($missingRefs -join ', ')")
         exit 1
     }
-    if ($refPaths.Count -gt 5) {
+    if ($refPaths.Count -gt $sizing['max_reference_files']) {
         [Console]::Error.WriteLine("WARN: ${TaskId}: $($refPaths.Count) reference files (keep it to a few)")
     }
 }
 
 # --- 作業量の警告(タスクが1応答で処理しきれなそうなら計画の段階で気付けるようにする) ---
-# 1) 受け入れ基準が6件以上、2) (変更対象)の参照ファイルが4件以上。どちらも警告のみで生成は続ける。
+# 1) 受け入れ基準がしきい値(max_acceptance_criteria)を超える、2) (変更対象)の参照ファイルがしきい値
+# (max_changed_files)を超える。どちらも警告のみで生成は続ける。
 function Find-BulletField {
     # `- **<名前>**:` の行位置・インデント・同一行の値(無ければ $null)を返す
     param([string[]]$Lines, [string]$Name)
@@ -212,8 +227,8 @@ if ($acField) {
         if (($line.Length - $line.TrimStart().Length) -le $acField.Indent) { break }
         if ($line -match '^\s*-\s+\[[ xX]\]') { $acCount++ }
     }
-    if ($acCount -gt 5) {
-        [Console]::Error.WriteLine("WARN: ${TaskId}: $acCount acceptance criteria (more than 5; consider splitting the task)")
+    if ($acCount -gt $sizing['max_acceptance_criteria']) {
+        [Console]::Error.WriteLine("WARN: ${TaskId}: $acCount acceptance criteria (more than $($sizing['max_acceptance_criteria']); consider splitting the task)")
     }
 }
 $changedRefCount = 0
@@ -227,8 +242,8 @@ if ($refStart -ge 0) {
         $changedRefCount += [regex]::Matches($line, '[(（]変更対象').Count
     }
 }
-if ($changedRefCount -gt 3) {
-    [Console]::Error.WriteLine("WARN: ${TaskId}: $changedRefCount reference files marked 変更対象 (more than 3; consider splitting the task)")
+if ($changedRefCount -gt $sizing['max_changed_files']) {
+    [Console]::Error.WriteLine("WARN: ${TaskId}: $changedRefCount reference files marked 変更対象 (more than $($sizing['max_changed_files']); consider splitting the task)")
 }
 
 # AGENTS.md が @ 参照だけのファイルなら警告する(プロファイルの agents_md_imports が false の子CLIは @ を展開しないため、子にルールが届かない)

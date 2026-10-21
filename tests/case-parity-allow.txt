@@ -19,10 +19,6 @@ test-dispatch.sh: run: プロジェクトルート以外から相対パスで起
 # ps1 版は tasklib.ps1 を使い Python を実行しないため、この確認は ps1 に該当しない
 test-tasks.sh: __pycache__ を作らない
 
-# #70 T2 で ps1 にも足すまでの一時許可
-test-tasks.sh: gen: task_sizing の値で作業量の警告のしきい値が変わる
-test-tasks.sh: gen: task_sizing が不正値なら警告して既定値を使う
-
 # test-exitcode.sh は存在しない(sh 側では各テストが直接 exit code を断言する)
 test-exitcode.ps1: *
 
