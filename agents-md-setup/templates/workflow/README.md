@@ -28,7 +28,7 @@
 │   ├── upstream-issue.ps1 / .sh
 │   ├── upstream-issue-template.md  upstream への Issue 本文テンプレート
 │   ├── workflow-setup.ps1 / .sh  セットアップ(テンプレート側から実行)
-│   ├── workflow-update.ps1 / .sh  upstream の取り込み(テンプレート側から実行)
+│   ├── workflow-update.ps1 / .sh  `npx skills update` 後の確認(テンプレート側から実行)
 │   ├── workflow-sync-scripts.ps1 / .sh
 │   └── workflow-archive.ps1 / .sh
 ├── runs/<タスクID>-<試行回数>/   ← 実行単位の生成物(.gitignore対象。PR作成の単発依頼は pr-<N>-1/)
@@ -77,9 +77,8 @@
 | `task_sizing.design_detail` | 計画時にどこまで設計を書くか。`skeleton`: 実装方法が複数ありうる箇所を計画時に決め、必要ならコードの骨格を目的欄に書く。`outline`: 方針と制約だけを書き、実装方法の選択を子に任せる(性能の高い子向け)。スクリプトは読まず、agent-task-plan が計画を書くときに使う。他の値は `skeleton` 扱い | `skeleton` |
 | `quality_gate.steps` | 品質ゲートのステップ定義。各要素は `name`(表示名)・`command`(実行コマンド)・`blocking`(真なら不合格時に進行停止)を持つ。`command` は bash と pwsh の両方で動く書き方にする(quality-gate の節を参照) | `[{name:typecheck,...},{name:test,...},{name:lint,...}]` |
 | `quality_gate.child_dispatch_command` | 子エージェントへの検証指示に使う統合コマンド。空文字列でなければ blocking ステップの個別列挙に代えてこの1コマンドを子に指示する。Gradle 等のデーモンの多重コールドスタート回避に有効。子にも同じ判定をさせる場合は `bash .agents/workflow/scripts/quality-gate.sh`(Windows の子は `pwsh -NoProfile -File .agents/workflow/scripts/quality-gate.ps1`)を指定できる | `""` |
-| `upstream.url` | upstream リポジトリの URL。`workflow-update` skill で使用 | `https://github.com/Musasaby/multi-ai-agents-workflow.git` |
+| `upstream.url` | upstream(配布元)リポジトリの URL。`upstream-issue` が起票先に使う | `https://github.com/Musasaby/multi-ai-agents-workflow.git` |
 | `base_branch` | 利用先の基準ブランチ(PR のマージ先)。`branch-check` が `main` に加えてこの名前のブランチもコミット禁止にし、`workflow-archive` が PR 未作成のブランチの比較先に使う。値が無い・空なら `main` | `main` |
-| `upstream.branch` | upstream(配布元)から取り込むブランチ名。`workflow-update` だけが使う | `main` |
 | `text_refine.skill` | 推敲に使う yomiyasu を呼ぶ名前(入れ方ごとに違う。プラグインなら `yomiyasu:yomiyasu`、skill 単体なら `yomiyasu` など)。`null`・空なら推敲しない。名前は推測せず、`text-refine` の `Found:` 行を見て利用者が決める | `null` |
 | `text_refine.targets` | 推敲する場面。`summary`(完了サマリー報告)・`confirm`(ユーザーへの確認依頼)・`commit`(コミットメッセージの説明の1行)・`pr_body`(PR説明)・`task_done`(タスク1件の完了報告)・`tasks`(agent-task-plan で書く tasks.md)から選ぶ配列。既存の利用先は `"tasks"` を足すと有効になる | 6つすべて |
 | `text_refine.reader` | 推敲後の文章の読み手。`expert`(同じ分野の専門家)・`informed`(分野は違うが技術に詳しい人)・`general`(専門知識のない人)。他の値は `informed` 扱い | `informed` |
@@ -331,7 +330,7 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 - `refine-unchecked` — text-refine --check の exit 3(推敲済みファイルか yomiyasu の記録が無く、確かめられない)
 - `refine-structure-changed` — text-refine --check の exit 4(`tasks` の推敲前後で見出し・依存・要件ID 等の構造が変わった)
 - `no-steps` — quality-gate の exit 3(実行するステップが0件)
-- `conflict` / `subtree-failed` / `dirty-tree` / `sync-failed` — workflow-update の exit 2 / 21 / 20 / 22(コンフリクト / コンフリクト以外の subtree pull の失敗 / 作業ツリーが汚れている / 配置済みスクリプトとの差分確認の失敗)
+- `not-npx` / `sync-failed` — workflow-update の exit 2 / 22(`npx skills` で導入されていない / 配置済みスクリプトとの差分確認の失敗)
 
 ### dispatch-prompt-gen — dispatchプロンプトの機械生成
 
@@ -1126,16 +1125,16 @@ exit code: `0`=成功、`1`=使い方不備・`upstream.url` 未設定・GitHub 
 ### workflow-setup — セットアップと検証
 
 利用先に `.agents/workflow/` 一式と関連設定を揃える。すべて冪等で、既存のファイルは上書きしない。
-**必ずテンプレート側のコピー(`.agents/skills/_templates/workflow/scripts/`)から実行する**
+**必ずテンプレート側のコピー(`.agents/skills/agents-md-setup/templates/workflow/scripts/`)から実行する**
 (`.agents/workflow/scripts/` 側から実行すると exit 1)。
 
 ```powershell
-.agents/skills/_templates/workflow/scripts/workflow-setup.ps1           # 不足しているものを作る・足す
-.agents/skills/_templates/workflow/scripts/workflow-setup.ps1 -Check    # 何も変えず不足を出力
+.agents/skills/agents-md-setup/templates/workflow/scripts/workflow-setup.ps1           # 不足しているものを作る・足す
+.agents/skills/agents-md-setup/templates/workflow/scripts/workflow-setup.ps1 -Check    # 何も変えず不足を出力
 ```
 ```bash
-bash .agents/skills/_templates/workflow/scripts/workflow-setup.sh
-bash .agents/skills/_templates/workflow/scripts/workflow-setup.sh --check
+bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-setup.sh
+bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-setup.sh --check
 ```
 
 行う処理:
@@ -1164,51 +1163,48 @@ bash .agents/skills/_templates/workflow/scripts/workflow-setup.sh --check
 exit code: `0`=変更済み(`--check` では不足なし)かつ `DECIDE` なし、`1`=使い方不備・git の外・テンプレート側以外からの実行、
 `3`=`DECIDE` あり(`--check` では `MISSING` あり)。
 
-### workflow-update — upstream の取り込み
+### workflow-update — npx skills update 後の確認
 
-利用先で `.agents/skills/` を upstream から更新し、配置済みスクリプトとの差分を知らせる。
-**必ずテンプレート側のコピー(`.agents/skills/_templates/workflow/scripts/`)から実行する**。
+利用先で `npx skills update` のあとに実行し、`npx skills` で導入済みかと、配置済みスクリプトとの差分を確かめる。
+**必ずテンプレート側のコピー(`.agents/skills/agents-md-setup/templates/workflow/scripts/`)から実行する**。
 
 ```powershell
-.agents/skills/_templates/workflow/scripts/workflow-update.ps1
+.agents/skills/agents-md-setup/templates/workflow/scripts/workflow-update.ps1
 ```
 ```bash
-bash .agents/skills/_templates/workflow/scripts/workflow-update.sh
+bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-update.sh
 ```
 
 手順:
 
-1. 作業ツリーがクリーンか確認する(汚れていれば `git status --porcelain` を stderr に出して exit 20)
-2. `config.json` の `upstream.url`・`upstream.branch` を読む(読めなければ配布元の URL と `main`)
-3. `git subtree pull --prefix=.agents/skills <url> <branch> --squash` を実行する
-   (失敗時、未解決のファイルがあれば `CONFLICT <パス>` を1行ずつ出して exit 2、それ以外は exit 21)
-4. `workflow-sync-scripts` で配置済みスクリプトとの差分を調べる(差分があれば exit 3。`workflow-sync-scripts` が失敗したら exit 22)
+1. ルートに `skills-lock.json` があるか確かめる(無ければ stderr にメッセージを出し、`Next: escalate reason=not-npx` で exit 2)
+2. `workflow-sync-scripts` で配置済みスクリプトとの差分を調べる(差分があれば exit 3。失敗したら exit 22)
 
 最後の行は `Next: continue`(exit 0)/ `Next: confirm`(exit 3。差分を確認し、承認を得て `workflow-sync-scripts --overwrite`)/
-`Next: escalate reason=<dirty-tree|conflict|subtree-failed|sync-failed>`。
+`Next: escalate reason=<not-npx|sync-failed>`。
 
-exit code: `0`=更新済みで差分なし、`1`=使い方不備・git の外・テンプレート側以外からの実行、`2`=コンフリクト、
-`3`=更新済みで配置済みスクリプトに差分あり、`20`=作業ツリーが汚れている、`21`=subtree pull の失敗(コンフリクト以外)、
+exit code: `0`=配置済みスクリプトとの差分なし、`1`=使い方不備・git の外・テンプレート側以外からの実行、
+`2`=`npx skills` で導入されていない(ルートに `skills-lock.json` が無い)、`3`=配置済みスクリプトに差分あり、
 `22`=差分確認(workflow-sync-scripts)の失敗。
 
 ### workflow-sync-scripts — 配布テンプレートの更新を配置先に反映
 
-`scripts/` と `README.md` はセットアップ時のコピーのため、`.agents/skills/` を更新しても
+`scripts/` と `README.md` はセットアップ時のコピーのため、`npx skills update` で `.agents/skills/` を更新しても
 自動では更新されない。このスクリプトで配布テンプレートとの差分を検出・反映する
 (`workflow-update` skill から使う)。**必ずテンプレート側のコピー
-(`.agents/skills/_templates/workflow/scripts/`)から実行する**。
+(`.agents/skills/agents-md-setup/templates/workflow/scripts/`)から実行する**。
 
 ```powershell
-.agents/skills/_templates/workflow/scripts/workflow-sync-scripts.ps1                 # 一覧
-.agents/skills/_templates/workflow/scripts/workflow-sync-scripts.ps1 -CopyMissing    # 未配置のみコピー
-.agents/skills/_templates/workflow/scripts/workflow-sync-scripts.ps1 -Diff scripts/dispatch-run.ps1
-.agents/skills/_templates/workflow/scripts/workflow-sync-scripts.ps1 -Overwrite scripts/dispatch-run.ps1,README.md
+.agents/skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.ps1                 # 一覧
+.agents/skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.ps1 -CopyMissing    # 未配置のみコピー
+.agents/skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.ps1 -Diff scripts/dispatch-run.ps1
+.agents/skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.ps1 -Overwrite scripts/dispatch-run.ps1,README.md
 ```
 ```bash
-bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh
-bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --copy-missing
-bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --diff scripts/dispatch-run.sh
-bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --overwrite scripts/dispatch-run.sh,README.md
+bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.sh
+bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.sh --copy-missing
+bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.sh --diff scripts/dispatch-run.sh
+bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.sh --overwrite scripts/dispatch-run.sh,README.md
 ```
 
 一覧は `missing`(未配置)/ `differs`(内容が異なる)とファイル名(`scripts/<名前>` / `README.md`)を
