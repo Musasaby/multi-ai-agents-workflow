@@ -797,6 +797,34 @@ Invoke-TestCase "gen: 受け入れ基準5件・変更対象3件なら警告し�
     Assert-NotContains $script:Err "WARN" "no warning"
 }
 
+function Set-TaskSizing { param($Value)
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg | Add-Member -NotePropertyName task_sizing -NotePropertyValue $Value -Force
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+}
+
+Invoke-TestCase "gen: task_sizing の値で作業量の警告のしきい値が変わる" {
+    foreach ($f in @('a', 'b', 'c')) { Write-Utf8File "$script:Proj/$f.txt" "x`n" }
+    Set-TaskSizing ([pscustomobject]@{ max_acceptance_criteria = 2; max_changed_files = 1; max_reference_files = 2 })
+    Set-RefTasks "- **受け入れ基準**:`n  - [ ] c1`n  - [ ] c2`n  - [ ] c3`n- **参照ファイル**:`n  - ``a.txt``(変更対象)`n  - ``b.txt``(変更対象)`n  - ``c.txt``(全体)"
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Err "3 acceptance criteria (more than 2; consider splitting the task)" "ac warning"
+    Assert-Contains $script:Err "2 reference files marked 変更対象 (more than 1; consider splitting the task)" "changed warning"
+    Assert-Contains $script:Err "3 reference files (keep it to a few)" "refs warning"
+}
+
+Invoke-TestCase "gen: task_sizing が不正値なら警告して既定値を使う" {
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Set-TaskSizing ([pscustomobject]@{ max_acceptance_criteria = 'x' })
+    Set-RefTasks "- **受け入れ基準**:`n  - [ ] c1`n  - [ ] c2`n  - [ ] c3`n  - [ ] c4`n  - [ ] c5`n  - [ ] c6`n- **参照ファイル**:`n  - ``a.txt``(全体)"
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Err "WARN: config task_sizing.max_acceptance_criteria is not a positive integer (using 5)" "invalid warning"
+    Assert-Contains $script:Err "6 acceptance criteria (more than 5;" "default threshold"
+}
+
 # ---------- テスト環境の切り離し(Issue F-1) ----------
 
 Invoke-TestCase "テストの git はグローバル設定を読まない" {

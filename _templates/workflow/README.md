@@ -71,6 +71,10 @@
 | `max_fix_retries` | レビュー不合格時の子エージェントへの再依頼上限。超過で親のサブエージェントにフォールバック | `2` |
 | `comprehension_check.enabled` | タスク合格時に理解確認質問を生成するか | `false` |
 | `comprehension_check.questions_per_task` | タスクあたりの質問数 | `3` |
+| `task_sizing.max_acceptance_criteria` | 受け入れ基準のチェックボックス数のしきい値。`dispatch-prompt-gen` が、これを超えると WARN を出す。1以上の整数。値が無ければ既定値、不正値は WARN を出して既定値 | `5` |
+| `task_sizing.max_changed_files` | 参照ファイル欄で `(変更対象` と書いた項目数のしきい値。`dispatch-prompt-gen` が、これを超えると WARN を出す。1以上の整数。値が無ければ既定値、不正値は WARN を出して既定値 | `3` |
+| `task_sizing.max_reference_files` | 参照ファイル欄の項目数のしきい値。`dispatch-prompt-gen` が、これを超えると WARN を出す。1以上の整数。値が無ければ既定値、不正値は WARN を出して既定値 | `5` |
+| `task_sizing.design_detail` | 計画時にどこまで設計を書くか。`skeleton`: 実装方法が複数ありうる箇所を計画時に決め、必要ならコードの骨格を目的欄に書く。`outline`: 方針と制約だけを書き、実装方法の選択を子に任せる(性能の高い子向け)。スクリプトは読まず、agent-task-plan が計画を書くときに使う。他の値は `skeleton` 扱い | `skeleton` |
 | `quality_gate.steps` | 品質ゲートのステップ定義。各要素は `name`(表示名)・`command`(実行コマンド)・`blocking`(真なら不合格時に進行停止)を持つ。`command` は bash と pwsh の両方で動く書き方にする(quality-gate の節を参照) | `[{name:typecheck,...},{name:test,...},{name:lint,...}]` |
 | `quality_gate.child_dispatch_command` | 子エージェントへの検証指示に使う統合コマンド。空文字列でなければ blocking ステップの個別列挙に代えてこの1コマンドを子に指示する。Gradle 等のデーモンの多重コールドスタート回避に有効。子にも同じ判定をさせる場合は `bash .agents/workflow/scripts/quality-gate.sh`(Windows の子は `pwsh -NoProfile -File .agents/workflow/scripts/quality-gate.ps1`)を指定できる | `""` |
 | `upstream.url` | upstream リポジトリの URL。`workflow-update` skill で使用 | `https://github.com/Musasaby/multi-ai-agents-workflow.git` |
@@ -185,7 +189,7 @@
 - **対象**: 変更が想定されるファイル・モジュール
 - **グループ**: <名前>            ← 任意(所属を位置でなく名前で指定する)
 - **要件**: R1, R3                ← `## 要件` 節があるとき必須(対応する要件が無ければ `なし`)
-- **参照ファイル**:               ← 子が最初に読むファイル(5件以内。読ませるものが無ければ `なし`)
+- **参照ファイル**:               ← 子が最初に読むファイル(`task_sizing.max_reference_files` 件以内。読ませるものが無ければ `なし`)
   - `path/to/file`(理由)
   - `path/to/other:10-40`(行範囲を付けられる)
 - **受け入れ基準**:
@@ -368,10 +372,12 @@ exit 0 以外は dispatch を行わず、stderr の内容(exit 2 なら欠落内
 exit 0 でも、次の場合は stderr に `WARN:` を出す(生成は続ける)。親は内容を確かめ、必要なら
 tasks.md や AGENTS.md を直してから dispatch する:
 
-- タスクに `- **参照ファイル**:` 欄が無い、または6件以上ある(子が実装前に多くのファイルを読む原因になる)
-- 受け入れ基準のチェックボックス(`- [ ]`)が6件以上ある(子の1応答の処理量を超えて、推論だけで
-  出力トークン上限に達する原因になる)
-- 参照ファイル欄で `(変更対象` と書いた項目が4件以上ある(同上)
+- タスクに `- **参照ファイル**:` 欄が無い、または `task_sizing.max_reference_files`(既定 5)件を超えている
+  (子が実装前に多くのファイルを読む原因になる)
+- 受け入れ基準のチェックボックス(`- [ ]`)が `task_sizing.max_acceptance_criteria`(既定 5)件を超えている
+  (子の1応答の処理量を超えて、推論だけで出力トークン上限に達する原因になる)
+- 参照ファイル欄で `(変更対象` と書いた項目が `task_sizing.max_changed_files`(既定 3)件を超えている(同上)
+- `task_sizing` のキーの値が1以上の整数でない(その旨と既定値を使うことを示す。生成は既定値で続ける)
 - ルートの `AGENTS.md` が `@` 参照の行だけでできている(プロファイルの `agents_md_imports` が `false` の
   子CLI(opencode 等)は `@` を展開しないため、子にルールが届かない。`AGENTS.md` に実体を書き、
   `CLAUDE.md` 側を `@AGENTS.md` にする)。プロファイルの `agents_md_imports` が `true`
