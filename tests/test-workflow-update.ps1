@@ -1,53 +1,12 @@
-﻿# #61: workflow-update(upstream の更新取り込み, PowerShell版)
+﻿# #61: workflow-update(npx skills 導入の確認と配置済みスクリプトとの差分確認, PowerShell版)
 . "$PSScriptRoot/lib.ps1"
 
-$script:UpstreamDir = $null
-
-# 利用先に upstream 用の別リポジトリを作り、そこから .agents/skills を subtree add する
-function Initialize-ProjectWithUpstream {
-    $script:UpstreamDir = "$script:Proj/.agents/upstream"
-    $null = New-Item -ItemType Directory -Force $script:UpstreamDir
-    $null = New-Item -ItemType Directory -Force "$script:UpstreamDir/agents-md-setup"
-    Copy-Item -Recurse "$script:RepoRoot/agents-md-setup/templates" "$script:UpstreamDir/agents-md-setup/templates"
-    git -C $script:UpstreamDir init -q -b main 2>$null
-    Assert-OwnRepo $script:UpstreamDir
-    Push-Location $script:UpstreamDir
-    try {
-        git config user.email "test@example.com"
-        git config user.name "test"
-        git config core.autocrlf false
-        git add -A
-        git commit -q -m "upstream init"
-    } finally {
-        Pop-Location
-    }
-    Push-Location $script:Proj
-    try {
-        Write-Utf8File "$script:Proj/.gitignore" ".agents/upstream/`n.agents/workflow/`n"
-        git add .gitignore
-        git commit -q -m "gitignore"
-        git subtree add -q --prefix=.agents/skills .agents/upstream main --squash 2>$null
-    } finally {
-        Pop-Location
-    }
-    $path = "$script:Proj/.agents/workflow/config.json"
-    $cfg = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
-    $cfg | Add-Member -NotePropertyName upstream -NotePropertyValue ([ordered]@{ url = '.agents/upstream'; branch = 'main' }) -Force
-    Write-Utf8File $path (($cfg | ConvertTo-Json -Depth 10) + "`n")
-}
-
-# upstream で <file> の内容を <content> にしてコミットする
-function Add-UpstreamCommit {
-    param([string]$File, [string]$Content)
-    $full = Join-Path $script:UpstreamDir $File
-    Write-Utf8File $full "$Content`n"
-    Push-Location $script:UpstreamDir
-    try {
-        git add -A
-        git commit -q -m "upstream change"
-    } finally {
-        Pop-Location
-    }
+# 利用先にテンプレートを .agents/skills/ としてコピーし、skills-lock.json を置く
+function Initialize-ProjectNpx {
+    $null = New-Item -ItemType Directory -Force "$script:Proj/.agents/skills/agents-md-setup"
+    Copy-Item -Recurse "$script:RepoRoot/agents-md-setup/templates" "$script:Proj/.agents/skills/agents-md-setup/templates"
+    Copy-Item "$script:RepoRoot/agents-md-setup/templates/workflow/README.md" "$script:Proj/.agents/workflow/README.md"
+    Write-Utf8File "$script:Proj/skills-lock.json" "{`"version`": 1, `"skills`": {}}`n"
 }
 
 function Invoke-Update {
@@ -64,47 +23,34 @@ function Invoke-Update {
 
 Write-Host "test-workflow-update.ps1"
 
-Invoke-TestCase "update: upstream の更新を取り込む" {
-    Initialize-ProjectWithUpstream
-    Add-UpstreamCommit "agents-md-setup/templates/new.txt" "new"
-    Invoke-Update
-    Add-Result ($script:Code -eq 0 -or $script:Code -eq 3) "exit 0 or 3 (got $($script:Code)): $($script:Out) $($script:Err)"
-    Assert-FileExists "$script:Proj/.agents/skills/agents-md-setup/templates/new.txt" "new.txt pulled"
-    Assert-Contains $script:Out "Upstream: .agents/upstream main" "Upstream line"
-}
-
-Invoke-TestCase "update: 作業ツリーが汚れていれば exit 20" {
-    Initialize-ProjectWithUpstream
-    Write-Utf8File "$script:Proj/untracked.txt" "x`n"
-    Invoke-Update
-    Assert-Eq 20 $script:Code "exit 20"
-    Assert-Eq "Next: escalate reason=dirty-tree" (@($script:Out -split "`n")[-1].Trim()) "last line"
-}
-
-Invoke-TestCase "update: コンフリクトは CONFLICT 行と exit 2" {
-    Initialize-ProjectWithUpstream
-    $rel = "agents-md-setup/templates/AGENTS.md"
-    $projFile = "$script:Proj/.agents/skills/$rel"
-    $body = @([System.IO.File]::ReadAllLines($projFile, [System.Text.Encoding]::UTF8) | Select-Object -Skip 1)
-    Write-Utf8File $projFile ((@('project side') + $body) -join "`n")
-    Push-Location $script:Proj
-    try {
-        git add -A
-        git commit -q -m "project change"
-    } finally {
-        Pop-Location
-    }
-    $upBody = @([System.IO.File]::ReadAllLines("$script:UpstreamDir/$rel", [System.Text.Encoding]::UTF8) | Select-Object -Skip 1)
-    Add-UpstreamCommit $rel ((@('upstream side') + $upBody) -join "`n")
+Invoke-TestCase "update: skills-lock.json が無ければ exit 2" {
+    Initialize-ProjectNpx
+    Remove-Item "$script:Proj/skills-lock.json" -Force
     Invoke-Update
     Assert-Eq 2 $script:Code "exit 2: $($script:Out) $($script:Err)"
-    Assert-Contains $script:Out "CONFLICT .agents/skills/agents-md-setup/templates/AGENTS.md" "CONFLICT line"
-    Assert-Eq "Next: escalate reason=conflict" (@($script:Out -split "`n")[-1].Trim()) "last line"
+    Assert-Eq "Next: escalate reason=not-npx" (@($script:Out -split "`n")[-1].Trim()) "last line"
+    Assert-Contains $script:Err "skills-lock.json" "stderr"
+}
+
+Invoke-TestCase "update: 差分が無ければ exit 0" {
+    Initialize-ProjectNpx
+    Invoke-Update
+    Assert-Eq 0 $script:Code "exit 0: $($script:Out) $($script:Err)"
+    Assert-Eq "Next: continue" (@($script:Out -split "`n")[-1].Trim()) "last line"
+}
+
+Invoke-TestCase "update: 配置済みスクリプトに差分があれば exit 3" {
+    Initialize-ProjectNpx
+    Write-Utf8File "$script:Proj/.agents/workflow/scripts/dispatch-run.ps1" "Write-Output old`n"
+    Invoke-Update
+    Assert-Eq 3 $script:Code "exit 3: $($script:Out) $($script:Err)"
+    Assert-Contains $script:Out "differs  scripts/dispatch-run.ps1" "differs line"
+    Assert-Eq "Next: confirm" (@($script:Out -split "`n")[-1].Trim()) "last line"
 }
 
 Invoke-TestCase "update: 差分の確認に失敗したら exit 22" {
-    Initialize-ProjectWithUpstream
-    Add-UpstreamCommit "agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.ps1" "exit 1"
+    Initialize-ProjectNpx
+    Write-Utf8File "$script:Proj/.agents/skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.ps1" "exit 1`n"
     Invoke-Update
     Assert-Eq 22 $script:Code "exit 22: $($script:Out) $($script:Err)"
     Assert-Eq "Next: escalate reason=sync-failed" (@($script:Out -split "`n")[-1].Trim()) "last line"

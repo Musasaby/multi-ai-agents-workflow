@@ -24,7 +24,3 @@ test-exitcode.ps1: *
 
 # skill-size.ps1 は PowerShell 版だけなので、そのテストも ps1 だけ
 test-skill-size.ps1: *
-
-# T4(#105)で test-workflow-update.ps1 を揃えたら消す
-test-workflow-update.sh: *
-test-workflow-update.ps1: *

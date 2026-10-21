@@ -233,38 +233,12 @@ Invoke-TestCase "workflow-setup: 成功時に LASTEXITCODE=0" {
 }
 
 Invoke-TestCase "workflow-update: 成功時に LASTEXITCODE=0" {
-    # upstream(.agents/upstream)から .agents/skills を subtree add し、upstream に更新が無い状態で呼ぶ。
-    # 配置済みスクリプトと README をテンプレートと同じにしておき、差分なし(exit 0)にする
-    $up = "$script:Proj/.agents/upstream"
-    $null = New-Item -ItemType Directory -Force $up
-    $null = New-Item -ItemType Directory -Force "$up/agents-md-setup"
-    Copy-Item -Recurse "$script:RepoRoot/agents-md-setup/templates" "$up/agents-md-setup/templates"
-    git -C $up init -q -b main 2>$null
-    Assert-OwnRepo $up
-    Push-Location $up
-    try {
-        git config user.email "test@example.com"
-        git config user.name "test"
-        git config core.autocrlf false
-        git add -A
-        git commit -q -m "upstream init"
-    } finally {
-        Pop-Location
-    }
-    Push-Location $script:Proj
-    try {
-        Write-Utf8File "$script:Proj/.gitignore" ".agents/upstream/`n.agents/workflow/`n"
-        git add .gitignore
-        git commit -q -m "gitignore"
-        git subtree add -q --prefix=.agents/skills .agents/upstream main --squash 2>$null
-    } finally {
-        Pop-Location
-    }
+    # テンプレート一式を .agents/skills/agents-md-setup/templates に置き、skills-lock.json を書く。
+    # 配置済みスクリプトと README をテンプレートと同じにして、差分なし(exit 0)にする
+    $null = New-Item -ItemType Directory -Force "$script:Proj/.agents/skills/agents-md-setup"
+    Copy-Item -Recurse "$script:RepoRoot/agents-md-setup/templates" "$script:Proj/.agents/skills/agents-md-setup/templates"
     Copy-Item "$script:RepoRoot/agents-md-setup/templates/workflow/README.md" "$script:Proj/.agents/workflow/README.md"
-    $cfgPath = "$script:Proj/.agents/workflow/config.json"
-    $cfg = [System.IO.File]::ReadAllText($cfgPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
-    $cfg | Add-Member -NotePropertyName upstream -NotePropertyValue ([ordered]@{ url = '.agents/upstream'; branch = 'main' }) -Force
-    Write-Utf8File $cfgPath (($cfg | ConvertTo-Json -Depth 10) + "`n")
+    Write-Utf8File "$script:Proj/skills-lock.json" "{`"version`": 1, `"skills`": {}}`n"
     Assert-Eq 0 (Invoke-InProcess '../../skills/agents-md-setup/templates/workflow/scripts/workflow-update.ps1') "LASTEXITCODE"
 }
 
