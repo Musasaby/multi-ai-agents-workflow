@@ -181,7 +181,7 @@ skill の編集はリポジトリルート直下の各ディレクトリ(`agent-
 ```powershell
 # ルート直下の配布物を .agents/skills にコピー
 $items = 'agent-workflow','agent-task-plan','agent-dispatch','agent-review-commit',
-         'agent-comprehension-check','agent-quality-gate','agent-branch-guard','agents-md-setup','workflow-update','_templates'
+         'agent-comprehension-check','agent-quality-gate','agent-branch-guard','agents-md-setup','workflow-update'
 foreach ($i in $items) {
   Remove-Item ".agents/skills/$i" -Recurse -Force -ErrorAction SilentlyContinue
   Copy-Item $i ".agents/skills/$i" -Recurse
@@ -189,15 +189,13 @@ foreach ($i in $items) {
 Copy-Item README.md .agents/skills/README.md -Force
 ```
 
-> **利用先との違い**: 利用先プロジェクトでは `.agents/skills/` は `git subtree` で取り込んだ
-> 追跡対象ですが、本リポジトリ(配布元)はルート全体が配布物そのもののため、
-> `.agents/` はローカル実行用のコピーとして未追跡で運用します。
-> なお `git subtree pull` は自己参照で no-op になり、`git subtree split` も最終取込時点の
-> コミットを返すだけのため、git ベースの同期は機能しません(コピー方式に統一した理由)。
+> **利用先との違い**: 利用先では `.agents/skills/` は `npx skills add` で配置して追跡しますが、
+> 本リポジトリ(配布元)はルートが配布物そのもののため、`.agents/` はローカル実行用のコピーとして
+> 未追跡で運用します(`npx skills` は使わず、上のコピーで同期します)。
 
 ### テスト
 
-`_templates/workflow/scripts/` のスクリプトは `tests/` のシナリオテストで検証します。
+`agents-md-setup/templates/workflow/scripts/` のスクリプトは `tests/` のシナリオテストで検証します。
 一時ディレクトリにダミーの利用先プロジェクトを作ってスクリプトを実行するため、
 本リポジトリの `.agents/` には影響しません(gh への実アクセスもしません)。
 
@@ -227,7 +225,7 @@ POSIX 版のシグナル終了のテスト(Python 経由の経路)は Linux で�
 pwsh -NoProfile -File tests/syntax-check.ps1
 ```
 
-- `_templates/workflow/scripts/` と `tests/` の `.ps1` をパースし、`.sh` を `bash -n` で検査する
+- `agents-md-setup/templates/workflow/scripts/` と `tests/` の `.ps1` をパースし、`.sh` を `bash -n` で検査する
 - git 管理下と未追跡(`.gitignore` 対象外)のテキストファイルについて、CRLF を含むもの・
   非 ASCII 文字を含むのに BOM が無い `.ps1`・BOM 付きの `.ps1` 以外のファイル(`.sh`・`.py`・`.md` 等)を失敗にする
 - `tests/skill-size.ps1` を呼び出す(単体でも実行できる)
@@ -267,10 +265,10 @@ git ls-files --eol | grep -c "w/crlf"   # 0 になれば完了
 
 ### ワークフロー設定
 
-`.agents/workflow/config.json` は `_templates/workflow/config.json` をプロジェクトルートにコピーして使用してください。
+`.agents/workflow/config.json` は `agents-md-setup/templates/workflow/config.json` をプロジェクトルートにコピーして使用してください。
 
 ```bash
-cp _templates/workflow/config.json .agents/workflow/config.json
+cp agents-md-setup/templates/workflow/config.json .agents/workflow/config.json
 ```
 
 ## サンドボックス環境での実行注意点

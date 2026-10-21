@@ -4,7 +4,6 @@
 .agents/settings.local.json
 # 本リポジトリでは .agents/ はローカル実行状態のため未追跡
 .agents/
-# 直下の CLAUDE.md(@AGENTS.md)は未追跡。利用先では .agents/skills/CLAUDE.md になり、
-# Claude Code がサブディレクトリの CLAUDE.md として自動で読み込んでしまうため
-# (直下の AGENTS.md は本リポジトリの開発用ルールとして追跡する)
+# 直下の CLAUDE.md(@AGENTS.md)は開発用で未追跡
+# (直下の AGENTS.md は本リポジトリの開発用ルールとして追跡する。どちらも npx skills では配られない)
 /CLAUDE.md
