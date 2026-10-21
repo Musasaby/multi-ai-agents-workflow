@@ -5,12 +5,14 @@
 #   (3) SKILL.md と references/*.md の中の `references/<名前>.md`(`<skill名>/references/<名前>.md` も可)の
 #       リンク先が存在すること。`references/<CLI>.md` のように < を含む書き方は対象外
 #   FAIL が 1 件でもあれば exit 1、無ければ SKILL SIZE OK を出して exit 0。
+#   -Root を渡すとそのディレクトリを検査する(省略時はこのリポジトリのルート。テスト用)。
 param(
     [int]$LoopLimit = 30000,
-    [int]$FileLimit = 18000
+    [int]$FileLimit = 18000,
+    [string]$Root = ''
 )
 $ErrorActionPreference = "Stop"
-$root = Split-Path -Parent $PSScriptRoot
+$root = if ($Root) { (Resolve-Path -LiteralPath $Root).Path } else { Split-Path -Parent $PSScriptRoot }
 $failed = $false
 
 $skillFiles = @(
