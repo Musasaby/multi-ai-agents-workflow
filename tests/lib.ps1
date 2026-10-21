@@ -1,6 +1,6 @@
 ﻿# テスト共通ヘルパー(PowerShell版スクリプト用)。
-# 一時ディレクトリにダミーの利用先プロジェクト(.agents/workflow/ 一式 + git リポジトリ)を作り、
-# agents-md-setup/templates/workflow/scripts/ のスクリプトをコピーして実行する。
+# ダミーの利用先プロジェクト(.agents/workflow/ 一式 + git リポジトリ。agents-md-setup/templates/workflow/scripts/
+# のスクリプトを含む)の雛形を 1 度だけ作り、ケースごとに一時ディレクトリへコピーして実行する。
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
@@ -70,6 +70,7 @@ $script:FailCount = 0
 $script:FailedNames = @()
 $script:CurrentTest = ''
 $script:Proj = $null
+$script:ProjTemplate = $null
 $script:CreatedProjects = [System.Collections.Generic.List[string]]::new()
 
 # $Dir が自分自身の git リポジトリであることを確かめる(親の本物のリポジトリに git を実行しないため)
@@ -83,15 +84,16 @@ function Assert-OwnRepo {
     }
 }
 
-function New-TestProject {
-    $script:Proj = Join-Path ([System.IO.Path]::GetTempPath()) ("wf-test-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
-    $script:CreatedProjects.Add($script:Proj)
-    $null = New-Item -ItemType Directory -Force "$script:Proj/.agents/workflow/scripts", "$script:Proj/.agents/workflow/runs"
-    Copy-Item "$script:TemplateScripts/*" "$script:Proj/.agents/workflow/scripts/"
-    Copy-Item "$script:RepoRoot/agents-md-setup/templates/workflow/config.json" "$script:Proj/.agents/workflow/config.json"
-    git -C $script:Proj init -q -b main 2>$null
-    Assert-OwnRepo $script:Proj
-    Push-Location $script:Proj -ErrorAction Stop
+# ダミープロジェクトの雛形(スクリプト一式・config.json・初回コミット済みの git リポジトリ)を 1 度だけ作る
+function New-ProjTemplate {
+    $script:ProjTemplate = Join-Path ([System.IO.Path]::GetTempPath()) ("wf-tpl-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $tpl = $script:ProjTemplate
+    $null = New-Item -ItemType Directory -Force "$tpl/.agents/workflow/scripts", "$tpl/.agents/workflow/runs"
+    Copy-Item "$script:TemplateScripts/*" "$tpl/.agents/workflow/scripts/"
+    Copy-Item "$script:RepoRoot/agents-md-setup/templates/workflow/config.json" "$tpl/.agents/workflow/config.json"
+    git -C $tpl init -q -b main 2>$null
+    Assert-OwnRepo $tpl
+    Push-Location $tpl -ErrorAction Stop
     try {
         git config user.email "test@example.com"
         git config user.name "test"
@@ -102,6 +104,16 @@ function New-TestProject {
     } finally {
         Pop-Location
     }
+}
+
+function New-TestProject {
+    if (-not $script:ProjTemplate) { New-ProjTemplate }
+    $script:Proj = Join-Path ([System.IO.Path]::GetTempPath()) ("wf-test-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $script:CreatedProjects.Add($script:Proj)
+    # $script:Proj はまだ存在しないので、雛形のディレクトリごと $script:Proj という名前でコピーされる。
+    # .git は Hidden 属性なので、"<雛形>/*" のようなワイルドカードではコピーしない
+    Copy-Item -LiteralPath $script:ProjTemplate -Destination $script:Proj -Recurse
+    Assert-OwnRepo $script:Proj
 }
 
 function Remove-TestProject {
@@ -237,6 +249,15 @@ function Show-Summary {
         $script:FailCount++
         $script:FailedNames += "gh スタブの残留: $($script:GhStubDir)"
         Write-Host "    leftover temp dir: $($script:GhStubDir)"
+    }
+    # ダミープロジェクトの雛形も削除する(消えなければ残留として検出する)
+    if ($script:ProjTemplate) {
+        Remove-Item $script:ProjTemplate -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path $script:ProjTemplate) {
+            $script:FailCount++
+            $script:FailedNames += "雛形の残留: $($script:ProjTemplate)"
+            Write-Host "    leftover temp dir: $($script:ProjTemplate)"
+        }
     }
     # 一時ディレクトリの残留検出(New-TestProject が作ったディレクトリがすべて消えていること)
     $leftovers = @($script:CreatedProjects | Where-Object { Test-Path $_ })
