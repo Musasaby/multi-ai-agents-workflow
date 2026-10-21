@@ -1,0 +1,8 @@
+# dist ブランチ(利用先に配る配布物)から除くパス。1行1パス(リポジトリルートからの相対パス)。
+# tools/build-dist.sh が読む。# 以降はコメント、空行は無視する
+.distignore
+.github/
+AGENTS.md
+docs/
+tests/
+tools/

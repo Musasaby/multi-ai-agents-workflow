@@ -11,7 +11,7 @@ Set-Location (Resolve-Path "$PSScriptRoot/..")
 $OutputEncoding = [System.Text.Encoding]::UTF8
 $failed = $false
 
-$scriptDirs = @("_templates/workflow/scripts", "tests")
+$scriptDirs = @("_templates/workflow/scripts", "tests", "tools")
 
 foreach ($dir in $scriptDirs) {
     foreach ($f in Get-ChildItem "$dir/*.ps1") {
