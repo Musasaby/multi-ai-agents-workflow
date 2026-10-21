@@ -78,7 +78,8 @@
 | `quality_gate.steps` | 品質ゲートのステップ定義。各要素は `name`(表示名)・`command`(実行コマンド)・`blocking`(真なら不合格時に進行停止)を持つ。`command` は bash と pwsh の両方で動く書き方にする(quality-gate の節を参照) | `[{name:typecheck,...},{name:test,...},{name:lint,...}]` |
 | `quality_gate.child_dispatch_command` | 子エージェントへの検証指示に使う統合コマンド。空文字列でなければ blocking ステップの個別列挙に代えてこの1コマンドを子に指示する。Gradle 等のデーモンの多重コールドスタート回避に有効。子にも同じ判定をさせる場合は `bash .agents/workflow/scripts/quality-gate.sh`(Windows の子は `pwsh -NoProfile -File .agents/workflow/scripts/quality-gate.ps1`)を指定できる | `""` |
 | `upstream.url` | upstream リポジトリの URL。`workflow-update` skill で使用 | `https://github.com/Musasaby/multi-ai-agents-workflow.git` |
-| `upstream.branch` | upstream 追従ブランチ名 | `main` |
+| `base_branch` | 利用先の基準ブランチ(PR のマージ先)。`branch-check` が `main` に加えてこの名前のブランチもコミット禁止にし、`workflow-archive` が PR 未作成のブランチの比較先に使う。値が無い・空なら `main` | `main` |
+| `upstream.branch` | upstream(配布元)から取り込むブランチ名。`workflow-update` だけが使う | `main` |
 | `text_refine.skill` | 推敲に使う yomiyasu を呼ぶ名前(入れ方ごとに違う。プラグインなら `yomiyasu:yomiyasu`、skill 単体なら `yomiyasu` など)。`null`・空なら推敲しない。名前は推測せず、`text-refine` の `Found:` 行を見て利用者が決める | `null` |
 | `text_refine.targets` | 推敲する場面。`summary`(完了サマリー報告)・`confirm`(ユーザーへの確認依頼)・`commit`(コミットメッセージの説明の1行)・`pr_body`(PR説明)・`task_done`(タスク1件の完了報告)・`tasks`(agent-task-plan で書く tasks.md)から選ぶ配列。既存の利用先は `"tasks"` を足すと有効になる | 6つすべて |
 | `text_refine.reader` | 推敲後の文章の読み手。`expert`(同じ分野の専門家)・`informed`(分野は違うが技術に詳しい人)・`general`(専門知識のない人)。他の値は `informed` 扱い | `informed` |
@@ -1043,7 +1044,7 @@ exit 0・7・8・9・10 では stdout の最後の行に `Next:` 行を出す(�
 判定は次の順に行い、最初に当たったもので終える(gh を呼ばずに済む判定を先に行う):
 
 1. 使い方不備・git の失敗(detached HEAD を含む)→ exit `1`
-2. 現在のブランチが `main`(config.json の `upstream.branch` があればその名前も)→ exit `2`
+2. 現在のブランチが `main`(config.json の `base_branch` があればその名前も)→ exit `2`
 3. `--state` / `-State` 指定時、state.json の `branch` と現在のブランチが異なる → exit `5`
    (stderr に両方の名前を出す。state.json が無い・`branch` が空の場合はこの判定を飛ばす)
 4. gh が無い・認証切れ等で PR 状態を取得できない → exit `4`
@@ -1240,7 +1241,7 @@ PowerShell 版は `-Force`、bash 版は `--force`(スラッグの前後どち�
 ```
 
 アーカイブする前に、`state.json` の `branch` の PR の状態を `gh pr view` で確かめる。
-`branch` が空・`main`・`config.json` の `upstream.branch` のときは確かめずに進む。
+`branch` が空・`main`・`config.json` の `base_branch` のときは確かめずに進む。
 判定ごとの結果は次のとおり。
 
 | 判定 | 結果 | stdout |
@@ -1252,7 +1253,7 @@ PowerShell 版は `-Force`、bash 版は `--force`(スラッグの前後どち�
 | PR 未作成で、ブランチに未マージのコミットがある(比較先が無い場合も含む) | 止める(exit 5) | `NO_PR` |
 | PR 未作成で、未マージのコミットが無い・ローカルにブランチが無い | アーカイブする(exit 0) | `Archived: ...` |
 
-未マージのコミットの比較先は `upstream.branch`(無ければ `main`)。
+未マージのコミットの比較先は `base_branch`(無ければ `main`)。
 止めるとき(exit 2〜5)は何も移動せず、`archive/` も作らない。stdout の最後の行は次アクションを示す
 `Next:` 行になる。
 

@@ -34,7 +34,7 @@ skill 名の指定がなくても発動するように、AGENTS.md の「マル�
      **`Next: switch-branch reason=merged`**(PR がマージ済み。stdout に `MERGED <PR URL>`)→
      作業を始めず、利用者に提案する:
      - `git fetch origin` の後、最新の main(`origin/main`)から専用ブランチ
-       `develop/<作業名>-plan` を切ることを提案する。config.json の `upstream.branch` が
+       `develop/<作業名>-plan` を切ることを提案する。config.json の `base_branch` が
        設定されている場合は `main` の代わりにその名前を使う
      - `develop` という名前のブランチが既にあると、git の仕様で `develop/...` を作れない。
        その場合だけ `develop-<作業名>` を使う
