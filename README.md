@@ -2,9 +2,31 @@
 
 AIエージェント(Claude Code、OpenCode 等)による複数エージェント協調の実装ワークフローを、任意のプロジェクトに `npx skills add` で導入できる配布物です。
 
-## 含まれるもの
+## 概要
 
-| ファイル・ディレクトリ | 説明 |
+2種類のエージェントが役割を分けて実装を進めます。
+
+- **親エージェント**(Claude Code・Codex 等): 利用者と対話します。計画のタスク分解、子への依頼、レビュー、コミット、PR 作成を行います
+- **子エージェント**(opencode・`claude -p` 等の CLI): 親から1タスクずつ依頼を受けて実装し、テストを実行して完了報告を書きます
+
+```
+1. 計画参照・タスク分解   → 親: /agent-task-plan
+2. 各タスクを順次実行:
+   a. 実装dispatch        → 親が依頼し、子が実装・テスト実行・完了報告(/agent-dispatch)
+   b. レビュー・コミット  → 親: /agent-review-commit
+      - 合格時、verify_before_commit 有効なら最終ゲート → 親: /agent-quality-gate
+        (FAIL(blocking) なら修正再依頼に戻る)
+      - config有効時、合格時に質問ファイルを生成
+3. 全タスク完了 → 親: サマリー報告(未回答の質問一覧含む)
+```
+
+理解確認(任意・デフォルト無効): 質問ファイルに回答後、`/agent-comprehension-check` で判定・解説を依頼できます(別セッション可)。
+
+状態は `.agents/workflow/` の `tasks.md`(タスク定義)と `state.json`(進捗)に残ります。中断しても、`/agent-workflow` を引数なしで実行し直せば未完了のタスクから再開できます。
+
+## 含まれる skill
+
+| ディレクトリ | 説明 |
 |---|---|
 | `agent-workflow/` | 全体オーケストレーター(中断再開対応) |
 | `agent-task-plan/` | 計画→タスク分解 |
@@ -15,9 +37,6 @@ AIエージェント(Claude Code、OpenCode 等)による複数エージェン�
 | `agent-branch-guard/` | ワークフロー外の変更・コミットを伴う依頼のブランチ判定(branch-check) |
 | `agents-md-setup/` | 正本化セットアップとリンク検証。`templates/` に利用先用テンプレート(`AGENTS.md`・`CLAUDE.md`・`workflow/` の config.json・README.md・scripts) |
 | `workflow-update/` | `npx skills update` 後の確認と配置済みスクリプトの更新支援 |
-| `.gitignore` | `.claude` リンクと個人設定の除外 |
-| `AGENTS.md` | **本リポジトリの開発用**ルール(利用先では使わない。利用先の `AGENTS.md` は `agents-md-setup/templates/AGENTS.md` から作る) |
-| `tests/` | **本リポジトリの開発用**のテストと品質ゲート(利用先では使わない) |
 
 `npx skills` が配るのは `SKILL.md` を持つディレクトリだけで、`tests/`・`docs/`・`AGENTS.md` は利用先に入りません。
 
@@ -25,26 +44,10 @@ AIエージェント(Claude Code、OpenCode 等)による複数エージェン�
 
 - プロジェクトは Git 管理されていること
 - Node.js 22.20 以上(`npx skills` の要件。導入・更新のときだけ使う)
-- `main` ブランチへの直接コミットは禁止。`develop/<作業名>` ブランチで作業
-- 子エージェントCLIは `.agents/workflow/config.json` の `child_agent.command_template` で設定
+- `main` への直接コミットはしない。作業は `develop/<作業名>` ブランチで行う。`branch-check` は `main`(と `base_branch`)の上での作業を止め、`state-sync --set-branch` と `group-advance` は `develop/` で始まらないブランチ名を受け付けない
+- 子CLI(既定は opencode)が使えること
 
-## 親エージェント・子CLIの対応
-
-### 親エージェント
-
-- Claude Code: `CLAUDE.md`(`@AGENTS.md` の1行)と `.claude` リンクで、AGENTS.md と skill を読み込む
-- AGENTS.md を直接読む親(Codex 等): 追加の設定は不要
-- 別の名前の設定ファイルを読む親: その設定ファイルから AGENTS.md を読み込む(import できなければ内容を写す)
-- skill の仕組みが無い親: `.agents/skills/<名前>/SKILL.md` を読ませて手順に従わせる
-- 親固有の機能(進捗表示のタスク登録等)は任意手順であり、対応していなくてもワークフローは進められる
-
-### 子CLI
-
-- `.agents/workflow/config.json` の `child_agent.profile` で、子CLIの出力形式と検知パターンを選ぶ
-- 組み込みのプロファイルに無い CLI は、`.agents/workflow/child-profiles.json` で定義する
-- 検知できない検査は、`dispatch-check` が `Disabled checks:` に出す
-
-## 導入手順
+## クイックスタート
 
 1. 利用先プロジェクトのルートで以下を実行:
    ```bash
@@ -54,15 +57,18 @@ AIエージェント(Claude Code、OpenCode 等)による複数エージェン�
    - `-a universal` で `.agents/skills/<name>/` にコピーで置かれます(symlink を作らないので Windows でも `--copy` は不要です)
    - ルートの `skills-lock.json` と `.agents/skills/` をコミットします(clone した人は Node.js なしで使えます)
    - `-a claude-code` は指定しません(`/agents-md-setup` が `.claude` を `.agents` へのリンクにするので、Claude Code からも同じ skill が見えます)
-2. `/agents-md-setup` skill を実行して、テンプレートから `AGENTS.md`・`CLAUDE.md`・`.agents/workflow/` 設定を非破壊でスキャフォールドし、`.claude` リンクを作成・検証
-3. `AGENTS.md` の「プロジェクト概要」をプロジェクトに合わせて書き換える
-4. `/agent-workflow <Issue ID または計画ドキュメントのパス>` でワークフローを開始
+2. `/agents-md-setup` を実行して、テンプレートから `AGENTS.md`・`CLAUDE.md`・`.agents/workflow/` 設定を非破壊でスキャフォールドし、`.claude` リンクを作成・検証します
+3. `AGENTS.md` の「プロジェクト概要」と「テスト・検証の注意(子エージェント向け)」をプロジェクトに合わせて書きます
+4. `.agents/workflow/config.json` の `child_agent.command_template` で子CLIを決めます。既定は `opencode run "{prompt}"` です。Claude Code など他の CLI の設定例は [agents-md-setup/references/parent-child.md](agents-md-setup/references/parent-child.md) を参照してください
+5. `test_command` と `quality_gate.steps` の `command` に、プロジェクトのテスト・型検査・lint のコマンドを書きます。設定キーの一覧は [config.json 節](agents-md-setup/templates/workflow/README.md) を参照してください
+6. `develop/<作業名>` ブランチを作り、`skills-lock.json`・`.agents/skills/`・`.agents/workflow/`・`AGENTS.md`・`CLAUDE.md`・`.gitignore`・`.gitattributes` をコミットします
+7. `/agent-workflow <Issue 番号または計画ドキュメントのパス>` を実行します。親がタスク分解を示して承認を求めるので、確かめて承認すると、子への依頼・レビュー・コミットがタスクごとに進みます
 
 ### `.agents/skills/` がすでにある場合
 
 既存の skill はそのまま残り、配布物と同じディレクトリに共存します(配布物と名前が重ならないこと)。
 
-その後は上記の手順2以降(`/agents-md-setup` の実行など)を続けます。`.claude/skills/` に
+その後はクイックスタートの手順2以降(`/agents-md-setup` の実行など)を続けます。`.claude/skills/` に
 skill ごとの個別リンクを置く旧構成になっている場合、`/agents-md-setup` は `.claude` を
 `.agents` へのリンクに置き換えるよう提案します(既存の skill も引き続き `.claude/skills/` から見えます)。
 
@@ -111,21 +117,6 @@ git commit -m "chore: npx skills で配布物を導入する"
 - **配布元の skill**: `.agents/skills/` 以下の配布元 skill は直接編集しません(`npx skills update` で上書きされます)。変更が必要な場合は upstream リポジトリで行ってから `workflow-update` で取り込んでください
 - **利用先固有 skill**: プロジェクト独自の skill は、配布物と重ならない名前のディレクトリで追加してください。`npx skills update` は `skills-lock.json` に記録された skill だけを更新するため、共存できます
 - **submodule ではない**: `.agents/skills/` と `skills-lock.json` をコミットするので、clone 後の追加操作は `/agents-md-setup` だけです
-
-## ワークフローの流れ
-
-```
-1. 計画参照・タスク分解   → /agent-task-plan
-2. 各タスクを順次実行:
-   a. 実装dispatch        → /agent-dispatch
-   b. レビュー・コミット  → /agent-review-commit
-      - 合格時、verify_before_commit 有効なら最終ゲート → /agent-quality-gate
-        (FAIL(blocking) なら修正再依頼に戻る)
-      - config有効時、合格時に質問ファイルを生成
-3. 全タスク完了 → サマリー報告(未回答の質問一覧含む)
-```
-
-理解確認(任意・デフォルト無効): 質問ファイルに回答後、`/agent-comprehension-check` で判定・解説を依頼(別セッション可)
 
 ## ユーザーへの報告と日本語の推敲
 
