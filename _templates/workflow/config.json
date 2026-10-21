@@ -24,6 +24,12 @@
     "enabled": false,
     "questions_per_task": 3
   },
+  "task_sizing": {
+    "max_acceptance_criteria": 5,
+    "max_changed_files": 3,
+    "max_reference_files": 5,
+    "design_detail": "skeleton"
+  },
   "text_refine": {
     "skill": null,
     "targets": ["summary", "confirm", "commit", "pr_body", "task_done", "tasks"],
