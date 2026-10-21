@@ -75,8 +75,8 @@ if ($Existing.Count -eq 0) {
 # PR の状態を確かめる。止めるときは exit し、アーカイブしてよいときはそのまま戻る
 function Test-PrState {
     $stateBranch = Get-JsonField $StatePath 'branch'
-    $upstream = Get-JsonField $ConfigPath 'upstream.branch'
-    if (-not $stateBranch -or $stateBranch -eq 'main' -or ($upstream -and $stateBranch -eq $upstream)) {
+    $baseBranch = Get-JsonField $ConfigPath 'base_branch'
+    if (-not $stateBranch -or $stateBranch -eq 'main' -or ($baseBranch -and $stateBranch -eq $baseBranch)) {
         return
     }
 
@@ -98,7 +98,7 @@ function Test-PrState {
                 # PR 未作成: ブランチに比較先へ入っていないコミットがあれば、まだサイクルが終わっていないとみなす
                 & git rev-parse --verify --quiet "refs/heads/$stateBranch" *> $null
                 if ($LASTEXITCODE -ne 0) { return }   # ローカルにブランチが無い(失う作業が無い)
-                $base = if ($upstream) { $upstream } else { 'main' }
+                $base = if ($baseBranch) { $baseBranch } else { 'main' }
                 $baseRef = ''
                 & git rev-parse --verify --quiet "refs/heads/$base" *> $null
                 if ($LASTEXITCODE -eq 0) {

@@ -162,4 +162,25 @@ Invoke-TestCase "PR 未作成でブランチが無ければアーカイブする
     Assert-FileAbsent "$script:Proj/.agents/workflow/state.json" "state.json moved"
 }
 
+Invoke-TestCase "PR 未作成のとき比較先は base_branch" {
+    Initialize-BranchState
+    Set-GhStubResult -Code 1 -Stderr 'no pull requests found for branch "develop/x"'
+    Push-Location $script:Proj
+    try {
+        git checkout -q -b develop/x
+        Write-Utf8File "$script:Proj/x.txt" "x`n"
+        git add x.txt
+        git commit -q -m "feat: x"
+        git branch trunk develop/x
+    } finally { Pop-Location }
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg | Add-Member -NotePropertyName base_branch -NotePropertyValue 'trunk' -Force
+    $cfg | Add-Member -NotePropertyName upstream -NotePropertyValue ([pscustomobject]@{ url = 'https://github.com/example/repo.git'; branch = 'dist' }) -Force
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+    Invoke-Script workflow-archive.ps1 myslug
+    Assert-Eq 0 $script:Code "exit: $($script:Err)"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/state.json" "state.json moved"
+}
+
 Show-Summary
