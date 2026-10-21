@@ -44,4 +44,4 @@
 リンク類(`.claude` ジャンクション等)はリポジトリにコミットされない。clone後に
 `/agents-md-setup` skillを実行するか、`.agents/skills/agents-md-setup/SKILL.md` の手順でリンクを再作成すること。
 
-`.agents/skills/` は `git subtree` で取り込んだ配布物です。更新が必要な場合は `workflow-update` skill を実行するか、`git subtree pull` で取り込んでください。配布元の skill は直接編集せず、利用先固有の変更が必要な場合は別名ディレクトリで追加してください。
+`.agents/skills/` の配布元 skill は `npx skills add` で導入したものです(導入元はルートの `skills-lock.json`)。更新は `workflow-update` skill を実行してください。`npx skills update` で上書きされるため、配布元の skill は直接編集せず、利用先固有の変更が必要な場合は別名のディレクトリで追加してください。

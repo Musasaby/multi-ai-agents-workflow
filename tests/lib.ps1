@@ -1,6 +1,6 @@
 ﻿# テスト共通ヘルパー(PowerShell版スクリプト用)。
 # 一時ディレクトリにダミーの利用先プロジェクト(.agents/workflow/ 一式 + git リポジトリ)を作り、
-# _templates/workflow/scripts/ のスクリプトをコピーして実行する。
+# agents-md-setup/templates/workflow/scripts/ のスクリプトをコピーして実行する。
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
@@ -64,7 +64,7 @@ function Reset-GhStub {
 }
 
 $script:RepoRoot = (Resolve-Path "$PSScriptRoot/..").Path
-$script:TemplateScripts = Join-Path $script:RepoRoot '_templates/workflow/scripts'
+$script:TemplateScripts = Join-Path $script:RepoRoot 'agents-md-setup/templates/workflow/scripts'
 $script:PassCount = 0
 $script:FailCount = 0
 $script:FailedNames = @()
@@ -88,7 +88,7 @@ function New-TestProject {
     $script:CreatedProjects.Add($script:Proj)
     $null = New-Item -ItemType Directory -Force "$script:Proj/.agents/workflow/scripts", "$script:Proj/.agents/workflow/runs"
     Copy-Item "$script:TemplateScripts/*" "$script:Proj/.agents/workflow/scripts/"
-    Copy-Item "$script:RepoRoot/_templates/workflow/config.json" "$script:Proj/.agents/workflow/config.json"
+    Copy-Item "$script:RepoRoot/agents-md-setup/templates/workflow/config.json" "$script:Proj/.agents/workflow/config.json"
     git -C $script:Proj init -q -b main 2>$null
     Assert-OwnRepo $script:Proj
     Push-Location $script:Proj -ErrorAction Stop

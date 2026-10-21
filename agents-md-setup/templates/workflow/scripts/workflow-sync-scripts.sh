@@ -3,7 +3,7 @@ set -uo pipefail
 
 # 配布テンプレート(このスクリプトがあるディレクトリ)と利用先の配置先
 # (.agents/workflow/scripts/ と .agents/workflow/README.md)を比較し、差分を反映する。
-# 必ずテンプレート側のコピー(利用先では .agents/skills/_templates/workflow/scripts/)から実行する。
+# 必ずテンプレート側のコピー(利用先では .agents/skills/agents-md-setup/templates/workflow/scripts/)から実行する。
 #
 # Usage:
 #   workflow-sync-scripts.sh                         差分の一覧(missing / differs)を表示
@@ -38,7 +38,7 @@ DEST_ROOT="$ROOT/.agents/workflow"
 # 配置先のコピー(.agents/workflow/scripts/)から実行すると比較元と比較先が同じになり、
 # 常に「差分なし」と誤報するため拒否する
 if [ "$(cd "$TEMPLATE_ROOT" && pwd -P)" = "$(cd "$DEST_ROOT" 2>/dev/null && pwd -P)" ]; then
-    echo "Run this script from the template copy (.agents/skills/_templates/workflow/scripts/), not from .agents/workflow/scripts/" >&2
+    echo "Run this script from the template copy (.agents/skills/agents-md-setup/templates/workflow/scripts/), not from .agents/workflow/scripts/" >&2
     exit 1
 fi
 

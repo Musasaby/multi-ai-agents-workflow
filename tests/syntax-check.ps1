@@ -1,5 +1,5 @@
 ﻿# このリポジトリの品質ゲート(子エージェントの検証コマンド)。リポジトリルートから実行する。
-#   1. _templates/workflow/scripts と tests の .ps1 をパースし、.sh を bash -n で構文チェックする
+#   1. agents-md-setup/templates/workflow/scripts と tests の .ps1 をパースし、.sh を bash -n で構文チェックする
 #   2. git 管理下と未追跡(.gitignore 対象外)のテキストファイルについて、改行コードと BOM を検査する
 #      - CRLF を含むファイルは失敗(.gitattributes で全ファイル LF に固定している)
 #      - 非 ASCII 文字を含む .ps1 に BOM が無ければ失敗(Windows PowerShell 5.1 が UTF-8 と認識しないため)
@@ -11,7 +11,7 @@ Set-Location (Resolve-Path "$PSScriptRoot/..")
 $OutputEncoding = [System.Text.Encoding]::UTF8
 $failed = $false
 
-$scriptDirs = @("_templates/workflow/scripts", "tests")
+$scriptDirs = @("agents-md-setup/templates/workflow/scripts", "tests")
 
 foreach ($dir in $scriptDirs) {
     foreach ($f in Get-ChildItem "$dir/*.ps1") {

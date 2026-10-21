@@ -10,7 +10,7 @@ Claude Code 固有のパス(`CLAUDE.md`, `.claude/`)からはリンク経由で�
 `CLAUDE.md`・`.claude/` は親が Claude Code の場合のためのもので、AGENTS.md を直接読む親(Codex 等)では使われない(作られても害はない)。
 それ以外の親は配布元 README の「親エージェント・子CLIの対応」を参照する。
 ファイル・ディレクトリの作成や `.gitignore` / `.gitattributes` の整備は `workflow-setup` スクリプトが行う
-(処理の詳細と出力の仕様は `_templates/workflow/README.md` の「workflow-setup」の節を参照)。
+(処理の詳細と出力の仕様は `agents-md-setup/templates/workflow/README.md` の「workflow-setup」の節を参照)。
 
 ## 手順
 
@@ -21,10 +21,10 @@ Claude Code 固有のパス(`CLAUDE.md`, `.claude/`)からはリンク経由で�
 前提・解釈: `workflow-setup` の実行例は `.sh` 版だけを示す。PowerShell では `.sh` を `.ps1` にし、`--check` を `-Check` の形の名前付き引数に読み替える(手順2・3の PowerShell の例はそのまま使う)。
 
 ```bash
-bash .agents/skills/_templates/workflow/scripts/workflow-setup.sh
+bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-setup.sh
 ```
 
-配布元リポジトリでは `_templates/workflow/scripts/` 配下のものを使う。
+配布元リポジトリでは `agents-md-setup/templates/workflow/scripts/` 配下のものを使う。
 変更せずに検証だけ行う場合は、`--check` を付ける。
 
 出力末尾の `Next:` 行で次の動作を決める:
@@ -36,7 +36,7 @@ bash .agents/skills/_templates/workflow/scripts/workflow-setup.sh
   - `claude-dir` / `claude-link`: `.claude` の中身を `.agents` に移し、リンクに置き換えてよいか
   - `old-layout`: 旧レイアウトのファイル・ディレクトリを削除してよいか(過去の実行履歴が必要な場合もあるため自動削除しない)
 
-`AGENTS.md` が既存の場合は、テンプレート(`_templates/AGENTS.md`)の「テスト・検証の注意(子エージェント向け)」節と
+`AGENTS.md` が既存の場合は、テンプレート(`agents-md-setup/templates/AGENTS.md`)の「テスト・検証の注意(子エージェント向け)」節と
 「マルチエージェントワークフロー」節を追記するかユーザーに提案する。**既存の内容を上書きしない**。
 
 `.gitignore` / `.gitattributes` が変更されたらコミットする(未コミットだと `agent-dispatch` の事前チェック(作業ツリーがクリーン)で止まる)。

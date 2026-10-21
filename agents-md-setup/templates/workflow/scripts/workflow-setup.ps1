@@ -1,6 +1,6 @@
 ﻿# 利用先プロジェクトに .agents/workflow/ 一式と関連設定(AGENTS.md・CLAUDE.md・.claude・.gitignore・.gitattributes)を揃える。
 # すべて冪等で、既存のファイルは上書きしない。必ずテンプレート側のコピー
-# (利用先では .agents/skills/_templates/workflow/scripts/)から実行する。
+# (利用先では .agents/skills/agents-md-setup/templates/workflow/scripts/)から実行する。
 #
 # Usage:
 #   workflow-setup.ps1           不足しているものを作る・足す(CREATED / APPENDED を出力)
@@ -24,7 +24,7 @@ if (-not $root) {
 }
 $destRoot = Join-Path $root '.agents/workflow'
 if ((Test-Path $destRoot) -and ((Resolve-Path $templateRoot).Path.TrimEnd('\', '/') -eq (Resolve-Path $destRoot).Path.TrimEnd('\', '/'))) {
-    [Console]::Error.WriteLine("Run this script from the template copy (.agents/skills/_templates/workflow/scripts/), not from .agents/workflow/scripts/")
+    [Console]::Error.WriteLine("Run this script from the template copy (.agents/skills/agents-md-setup/templates/workflow/scripts/), not from .agents/workflow/scripts/")
     exit 1
 }
 

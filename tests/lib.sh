@@ -1,7 +1,7 @@
 #!/bin/bash
 # テスト共通ヘルパー(POSIX版スクリプト用)。
 # 一時ディレクトリにダミーの利用先プロジェクト(.agents/workflow/ 一式 + git リポジトリ)を作り、
-# _templates/workflow/scripts/ のスクリプトをコピーして実行する。
+# agents-md-setup/templates/workflow/scripts/ のスクリプトをコピーして実行する。
 
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
@@ -37,7 +37,7 @@ else
 fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TEMPLATE_SCRIPTS="$REPO_ROOT/_templates/workflow/scripts"
+TEMPLATE_SCRIPTS="$REPO_ROOT/agents-md-setup/templates/workflow/scripts"
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -71,7 +71,7 @@ new_project() {
     mkdir -p "$PROJ/.agents/workflow/scripts" "$PROJ/.agents/workflow/runs"
     cp "$TEMPLATE_SCRIPTS"/* "$PROJ/.agents/workflow/scripts/"
     chmod +x "$PROJ/.agents/workflow/scripts/"*.sh
-    cp "$REPO_ROOT/_templates/workflow/config.json" "$PROJ/.agents/workflow/config.json"
+    cp "$REPO_ROOT/agents-md-setup/templates/workflow/config.json" "$PROJ/.agents/workflow/config.json"
     git -C "$PROJ" init -q -b main
     assert_own_repo "$PROJ"
     (

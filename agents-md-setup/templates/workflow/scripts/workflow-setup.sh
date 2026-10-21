@@ -3,7 +3,7 @@ set -uo pipefail
 
 # 利用先プロジェクトに .agents/workflow/ 一式と関連設定(AGENTS.md・CLAUDE.md・.claude・.gitignore・.gitattributes)を揃える。
 # すべて冪等で、既存のファイルは上書きしない。必ずテンプレート側のコピー
-# (利用先では .agents/skills/_templates/workflow/scripts/)から実行する。
+# (利用先では .agents/skills/agents-md-setup/templates/workflow/scripts/)から実行する。
 #
 # Usage:
 #   workflow-setup.sh            不足しているものを作る・足す(CREATED / APPENDED を出力)
@@ -28,7 +28,7 @@ ROOT="$(cd "$TEMPLATE_SCRIPTS" && git rev-parse --show-toplevel 2>/dev/null)" ||
 }
 DEST_ROOT="$ROOT/.agents/workflow"
 if [ "$(cd "$TEMPLATE_ROOT" && pwd -P)" = "$(cd "$DEST_ROOT" 2>/dev/null && pwd -P)" ]; then
-    echo "Run this script from the template copy (.agents/skills/_templates/workflow/scripts/), not from .agents/workflow/scripts/" >&2
+    echo "Run this script from the template copy (.agents/skills/agents-md-setup/templates/workflow/scripts/), not from .agents/workflow/scripts/" >&2
     exit 1
 fi
 

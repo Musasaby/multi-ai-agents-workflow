@@ -1,17 +1,19 @@
 # AGENTS.md(multi-ai-agents-workflow の開発用)
 
 このファイルは、**このリポジトリ自体を開発する**AIエージェント(親・子とも)向けの指示です。
-利用先プロジェクト向けのテンプレートは `_templates/AGENTS.md` です(こちらとは別物)。
+利用先プロジェクト向けのテンプレートは `agents-md-setup/templates/AGENTS.md` です(こちらとは別物)。
 `CLAUDE.md`(git 管理外)は `@AGENTS.md` の1行でこのファイルを読み込みます。
 
 ## プロジェクト概要
 
 - 複数エージェント協調の実装ワークフロー(skill 群とスクリプト)の配布元リポジトリ。
-  利用先は `git subtree` でリポジトリ全体を `.agents/skills/` に取り込む
+  利用先は `npx skills add` で各 skill(`SKILL.md` を持つディレクトリ)を `.agents/skills/` に取り込む。
+  `tests/`・`docs/`・このファイルは配られない
 - 主要ディレクトリ:
   - `agent-*/SKILL.md`・`agents-md-setup/`・`workflow-update/` — skill(正本)
-  - `_templates/workflow/scripts/` — 利用先に配布するスクリプト(`.sh` と `.ps1` を対で持つ)
-  - `_templates/workflow/README.md` — スクリプトと tasks.md / state.json の仕様
+  - `agents-md-setup/templates/` — 利用先用テンプレート(`AGENTS.md`・`CLAUDE.md`・`workflow/`)
+  - `agents-md-setup/templates/workflow/scripts/` — 利用先に配布するスクリプト(`.sh` と `.ps1` を対で持つ)
+  - `agents-md-setup/templates/workflow/README.md` — スクリプトと tasks.md / state.json の仕様
   - `tests/` — スクリプトのシナリオテスト(`test-*.sh` / `test-*.ps1`)と品質ゲート
 
 ## 共通ルール
@@ -22,16 +24,16 @@
 
 ## 編集対象(正本とミラー)
 
-- **編集するのはリポジトリルートのファイルだけ**(`_templates/...`、`agent-*/SKILL.md`、`tests/...`、
+- **編集するのはリポジトリルートのファイルだけ**(`agents-md-setup/templates/...`、`agent-*/SKILL.md`、`tests/...`、
   `README.md` 等)。`.agents/` 配下は git 管理外のミラー(ローカル実行用のコピー)なので編集しない
 - スクリプトは `.sh` と `.ps1` で同じ動作にし、テストも両方に書く
 - skill のコマンド例は `.sh` 版だけを書き、冒頭に `.ps1` への読み替え規則の文を置く
 - めったに起きない場面の手順は `references/*.md` に置き、本文からリンクする(サイズ上限は `tests/skill-size.ps1` が検査する)
-- exit code の意味は `_templates/workflow/README.md` に書き、skill には次の行動だけを書く
+- exit code の意味は `agents-md-setup/templates/workflow/README.md` に書き、skill には次の行動だけを書く
 
 ## テスト・検証の注意(子エージェント向け)
 
-- 品質ゲート: `pwsh -NoProfile -File tests/syntax-check.ps1`(ルートの `_templates/workflow/scripts/` と
+- 品質ゲート: `pwsh -NoProfile -File tests/syntax-check.ps1`(ルートの `agents-md-setup/templates/workflow/scripts/` と
   `tests/` の構文、全ファイルの改行コード・BOM を検査する)
 - シナリオテスト: `bash tests/test-<名前>.sh` と `pwsh -NoProfile -File tests/test-<名前>.ps1`。
   一時ディレクトリにダミーの利用先プロジェクトを作って実行するため、このリポジトリの `.agents/` には

@@ -5,11 +5,12 @@ source "$(dirname "$0")/lib.sh"
 IS_WINDOWS=false
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) IS_WINDOWS=true ;; esac
 
-# 空の利用先(test_case が new_project 済み): テンプレートは .agents/skills/_templates/ 配下、.agents/workflow/ と .gitignore は無い
+# 空の利用先(test_case が new_project 済み): テンプレートは .agents/skills/agents-md-setup/templates/ 配下、.agents/workflow/ と .gitignore は無い
 setup_empty_project() {
     rm -rf "$PROJ/.agents/workflow" "$PROJ/.gitignore"
     mkdir -p "$PROJ/.agents/skills"
-    cp -r "$REPO_ROOT/_templates" "$PROJ/.agents/skills/_templates"
+    mkdir -p "$PROJ/.agents/skills/agents-md-setup"
+    cp -r "$REPO_ROOT/agents-md-setup/templates" "$PROJ/.agents/skills/agents-md-setup/templates"
 }
 
 # リンク自体だけを消す(リンク先の .agents の中身を巻き込まない)
@@ -25,7 +26,7 @@ remove_claude_link() {
 run_setup() {
     local out_file err_file
     out_file="$(mktemp)"; err_file="$(mktemp)"
-    (cd "$PROJ" && bash .agents/skills/_templates/workflow/scripts/workflow-setup.sh "$@") > "$out_file" 2> "$err_file"
+    (cd "$PROJ" && bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-setup.sh "$@") > "$out_file" 2> "$err_file"
     CODE=$?
     OUT="$(cat "$out_file")"; ERR="$(cat "$err_file")"
     rm -f "$out_file" "$err_file"

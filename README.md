@@ -1,6 +1,6 @@
 # multi-ai-agents-workflow
 
-AIエージェント(Claude Code、OpenCode 等)による複数エージェント協調の実装ワークフローを、任意のプロジェクトに `git subtree` で導入できる配布物です。
+AIエージェント(Claude Code、OpenCode 等)による複数エージェント協調の実装ワークフローを、任意のプロジェクトに `npx skills add` で導入できる配布物です。
 
 ## 含まれるもの
 
@@ -13,17 +13,18 @@ AIエージェント(Claude Code、OpenCode 等)による複数エージェン�
 | `agent-comprehension-check/` | 回答済み質問ファイルの判定・解説(別セッション対応) |
 | `agent-review-commit/` | レビュー・修正再依頼・コミット |
 | `agent-branch-guard/` | ワークフロー外の変更・コミットを伴う依頼のブランチ判定(branch-check) |
-| `agents-md-setup/` | 正本化セットアップとリンク検証 |
-| `workflow-update/` | `git subtree` ベースの更新支援 |
-| `_templates/` | 利用先用テンプレート(`AGENTS.md`, `CLAUDE.md`, `workflow/config.json`, `workflow/README.md`) |
+| `agents-md-setup/` | 正本化セットアップとリンク検証。`templates/` に利用先用テンプレート(`AGENTS.md`・`CLAUDE.md`・`workflow/` の config.json・README.md・scripts) |
+| `workflow-update/` | `npx skills update` 後の確認と配置済みスクリプトの更新支援 |
 | `.gitignore` | `.claude` リンクと個人設定の除外 |
-| `AGENTS.md` | **本リポジトリの開発用**ルール(利用先では使わない。利用先の `AGENTS.md` は `_templates/AGENTS.md` から作る) |
+| `AGENTS.md` | **本リポジトリの開発用**ルール(利用先では使わない。利用先の `AGENTS.md` は `agents-md-setup/templates/AGENTS.md` から作る) |
 | `tests/` | **本リポジトリの開発用**のテストと品質ゲート(利用先では使わない) |
+
+`npx skills` が配るのは `SKILL.md` を持つディレクトリだけで、`tests/`・`docs/`・`AGENTS.md` は利用先に入りません。
 
 ## 前提
 
 - プロジェクトは Git 管理されていること
-- `git subtree` は標準 Git に同梱されているため、追加ツールは不要です
+- Node.js 22.20 以上(`npx skills` の要件。導入・更新のときだけ使う)
 - `main` ブランチへの直接コミットは禁止。`develop/<作業名>` ブランチで作業
 - 子エージェントCLIは `.agents/workflow/config.json` の `child_agent.command_template` で設定
 
@@ -47,44 +48,19 @@ AIエージェント(Claude Code、OpenCode 等)による複数エージェン�
 
 1. 利用先プロジェクトのルートで以下を実行:
    ```bash
-   git subtree add --prefix=.agents/skills https://github.com/Musasaby/multi-ai-agents-workflow.git main --squash
+   npx skills add Musasaby/multi-ai-agents-workflow --skill '*' -a universal -y
    ```
+   - `--skill '*'` で全 skill を入れます(このワークフローは全 skill が揃っている前提です)
+   - `-a universal` で `.agents/skills/<name>/` にコピーで置かれます(symlink を作らないので Windows でも `--copy` は不要です)
+   - ルートの `skills-lock.json` と `.agents/skills/` をコミットします(clone した人は Node.js なしで使えます)
+   - `-a claude-code` は指定しません(`/agents-md-setup` が `.claude` を `.agents` へのリンクにするので、Claude Code からも同じ skill が見えます)
 2. `/agents-md-setup` skill を実行して、テンプレートから `AGENTS.md`・`CLAUDE.md`・`.agents/workflow/` 設定を非破壊でスキャフォールドし、`.claude` リンクを作成・検証
 3. `AGENTS.md` の「プロジェクト概要」をプロジェクトに合わせて書き換える
 4. `/agent-workflow <Issue ID または計画ドキュメントのパス>` でワークフローを開始
 
 ### `.agents/skills/` がすでにある場合
 
-利用先に別の skill(ゲーム用の skill 集など)がすでに `.agents/skills/` にコミットされていると、
-`git subtree add --prefix=.agents/skills` は「prefix がすでに存在する」として失敗します。
-その場合は、既存の skill をいったん退避して subtree を追加し、元に戻します。戻した skill は
-配布物と同じディレクトリに共存し(配布物と名前が重ならないこと)、以後の `git subtree pull`
-(`workflow-update`)も通常どおり使えます。作業は `develop/*` ブランチで、作業ツリーが
-クリーンな状態で行ってください。
-
-```bash
-# 1. 既存の skill を退避
-git mv .agents/skills .agents/skills-tmp
-git commit -m "chore: subtree 導入のため既存の skill を一時退避する"
-# 2. 配布物を subtree で追加
-git subtree add --prefix=.agents/skills https://github.com/Musasaby/multi-ai-agents-workflow.git main --squash
-# 3. 退避した skill を戻す(配布物と同名のディレクトリがあれば、戻す前に名前を変える)
-for d in .agents/skills-tmp/*; do git mv "$d" ".agents/skills/$(basename "$d")"; done
-rmdir .agents/skills-tmp
-git commit -m "chore: 既存の skill を .agents/skills に戻す(subtree の配布物と共存)"
-```
-
-```powershell
-# 1. 既存の skill を退避
-git mv .agents/skills .agents/skills-tmp
-git commit -m "chore: subtree 導入のため既存の skill を一時退避する"
-# 2. 配布物を subtree で追加
-git subtree add --prefix=.agents/skills https://github.com/Musasaby/multi-ai-agents-workflow.git main --squash
-# 3. 退避した skill を戻す(配布物と同名のディレクトリがあれば、戻す前に名前を変える)
-Get-ChildItem .agents/skills-tmp | ForEach-Object { git mv $_.FullName ".agents/skills/$($_.Name)" }
-Remove-Item .agents/skills-tmp
-git commit -m "chore: 既存の skill を .agents/skills に戻す(subtree の配布物と共存)"
-```
+既存の skill はそのまま残り、配布物と同じディレクトリに共存します(配布物と名前が重ならないこと)。
 
 その後は上記の手順2以降(`/agents-md-setup` の実行など)を続けます。`.claude/skills/` に
 skill ごとの個別リンクを置く旧構成になっている場合、`/agents-md-setup` は `.claude` を
@@ -92,39 +68,49 @@ skill ごとの個別リンクを置く旧構成になっている場合、`/age
 
 ## 更新手順
 
-`.agents/skills/` 以下の skill は `workflow-update` skill を実行するか、手動で以下を実行して更新します。
+`workflow-update` skill を実行するか、手動で以下を実行して更新します。
 
 ```bash
-git subtree pull --prefix=.agents/skills https://github.com/Musasaby/multi-ai-agents-workflow.git main --squash
+npx skills update -p -y
+bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-update.sh
 ```
 
 `.agents/workflow/scripts/` と `.agents/workflow/README.md` はセットアップ時のコピーのため、
-subtree pull だけでは更新されません。手動で更新した場合は、続けて以下で差分を確認・反映してください
+`npx skills update` だけでは更新されません。`workflow-update.sh` で差分があれば、続けて以下で差分を確認・反映してください
 (`workflow-update` skill はこの手順も実行します):
 
 ```bash
-bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh                 # 差分の一覧
-bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --copy-missing  # 未配置ファイルをコピー
-bash .agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh --overwrite <名前,...>  # 差分を確認して上書き
+bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.sh                 # 差分の一覧
+bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.sh --copy-missing  # 未配置ファイルをコピー
+bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.sh --overwrite <名前,...>  # 差分を確認して上書き
 ```
 
-## 旧コピー方式からの移行手順
+## git subtree からの移行手順
 
-以前は「ファイルをコピーして配置」する方式でした。現在は `git subtree` 方式に統一しています。
+`.agents/skills/` を `git subtree` で取り込んでいる利用先で行います(`workflow-update` が `escalate reason=not-npx` を出した場合)。
+subtree 時代の `workflow-update` が `escalate reason=sync-failed`
+(`.agents/skills/_templates/workflow/scripts/workflow-sync-scripts.sh` が見つからない)で止まった場合も、この手順に進みます。
+subtree で取り込んだ配布物を `.agents/skills/` から消してコミットし、`npx skills add` で導入し直し、
+配置済みスクリプトとの差分を反映してコミットします。コマンドは bash と PowerShell で同じものが使えます。
+利用先固有の skill は `.agents/skills/` に残ります。
+`--overwrite` には、`workflow-update.sh` の `differs` 行に出た名前をカンマ区切りで渡します(`differs` が無ければその行は飛ばします)。
 
-1. 既存の `.agents/skills/` を削除します:
-   ```bash
-   git rm -rf .agents/skills
-   git commit -m "chore: remove old copied skills for subtree migration"
-   ```
-2. 上記「導入手順」を実行して subtree で再導入します
-3. テンプレートが既にコピー済みの場合は、差分を確認して必要に応じて上書きしてください
+```bash
+git -C .agents/skills rm -r -q --ignore-unmatch agent-branch-guard agent-comprehension-check agent-dispatch agent-quality-gate agent-review-commit agent-task-plan agent-workflow agents-md-setup workflow-update _templates tests docs AGENTS.md README.md .gitignore .gitattributes .github
+git commit -m "chore: subtree で取り込んだ配布物を削除する(npx skills へ移行)"
+npx skills add Musasaby/multi-ai-agents-workflow --skill '*' -a universal -y
+bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-update.sh
+bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.sh --copy-missing
+bash .agents/skills/agents-md-setup/templates/workflow/scripts/workflow-sync-scripts.sh --overwrite <workflow-update が differs と出した名前,...>
+git add .agents/skills skills-lock.json .agents/workflow/scripts .agents/workflow/README.md
+git commit -m "chore: npx skills で配布物を導入する"
+```
 
 ## 運用ルール
 
-- **vendored skill (subtree由来)**: `.agents/skills/` 以下の配布元 skill は直接編集せず、変更が必要な場合は upstream リポジトリで行ってから `workflow-update` で取り込んでください
-- **利用先固有 skill**: プロジェクト独自の skill は `.agents/skills/` 内に upstream の skill 名と被らない名前のディレクトリとして追加してください。`git subtree pull` のマージはローカル固有のファイルを保持するため、upstream 更新と共存できます
-- **submodule ではない**: 本配布物は `git subtree` で管理します。`git submodule` とは仕組みが異なり、利用先のリポジトリに skill の内容が直接含まれるため、clone 時の追加操作が不要です
+- **配布元の skill**: `.agents/skills/` 以下の配布元 skill は直接編集しません(`npx skills update` で上書きされます)。変更が必要な場合は upstream リポジトリで行ってから `workflow-update` で取り込んでください
+- **利用先固有 skill**: プロジェクト独自の skill は、配布物と重ならない名前のディレクトリで追加してください。`npx skills update` は `skills-lock.json` に記録された skill だけを更新するため、共存できます
+- **submodule ではない**: `.agents/skills/` と `skills-lock.json` をコミットするので、clone 後の追加操作は `/agents-md-setup` だけです
 
 ## ワークフローの流れ
 
@@ -200,7 +186,7 @@ skill の編集はリポジトリルート直下の各ディレクトリ(`agent-
 ```powershell
 # ルート直下の配布物を .agents/skills にコピー
 $items = 'agent-workflow','agent-task-plan','agent-dispatch','agent-review-commit',
-         'agent-comprehension-check','agent-quality-gate','agent-branch-guard','agents-md-setup','workflow-update','_templates'
+         'agent-comprehension-check','agent-quality-gate','agent-branch-guard','agents-md-setup','workflow-update'
 foreach ($i in $items) {
   Remove-Item ".agents/skills/$i" -Recurse -Force -ErrorAction SilentlyContinue
   Copy-Item $i ".agents/skills/$i" -Recurse
@@ -208,15 +194,13 @@ foreach ($i in $items) {
 Copy-Item README.md .agents/skills/README.md -Force
 ```
 
-> **利用先との違い**: 利用先プロジェクトでは `.agents/skills/` は `git subtree` で取り込んだ
-> 追跡対象ですが、本リポジトリ(配布元)はルート全体が配布物そのもののため、
-> `.agents/` はローカル実行用のコピーとして未追跡で運用します。
-> なお `git subtree pull` は自己参照で no-op になり、`git subtree split` も最終取込時点の
-> コミットを返すだけのため、git ベースの同期は機能しません(コピー方式に統一した理由)。
+> **利用先との違い**: 利用先では `.agents/skills/` は `npx skills add` で配置して追跡しますが、
+> 本リポジトリ(配布元)はルートが配布物そのもののため、`.agents/` はローカル実行用のコピーとして
+> 未追跡で運用します(`npx skills` は使わず、上のコピーで同期します)。
 
 ### テスト
 
-`_templates/workflow/scripts/` のスクリプトは `tests/` のシナリオテストで検証します。
+`agents-md-setup/templates/workflow/scripts/` のスクリプトは `tests/` のシナリオテストで検証します。
 一時ディレクトリにダミーの利用先プロジェクトを作ってスクリプトを実行するため、
 本リポジトリの `.agents/` には影響しません(gh への実アクセスもしません)。
 
@@ -246,7 +230,7 @@ POSIX 版のシグナル終了のテスト(Python 経由の経路)は Linux で�
 pwsh -NoProfile -File tests/syntax-check.ps1
 ```
 
-- `_templates/workflow/scripts/` と `tests/` の `.ps1` をパースし、`.sh` を `bash -n` で検査する
+- `agents-md-setup/templates/workflow/scripts/` と `tests/` の `.ps1` をパースし、`.sh` を `bash -n` で検査する
 - git 管理下と未追跡(`.gitignore` 対象外)のテキストファイルについて、CRLF を含むもの・
   非 ASCII 文字を含むのに BOM が無い `.ps1`・BOM 付きの `.ps1` 以外のファイル(`.sh`・`.py`・`.md` 等)を失敗にする
 - `tests/skill-size.ps1` を呼び出す(単体でも実行できる)
@@ -286,10 +270,10 @@ git ls-files --eol | grep -c "w/crlf"   # 0 になれば完了
 
 ### ワークフロー設定
 
-`.agents/workflow/config.json` は `_templates/workflow/config.json` をプロジェクトルートにコピーして使用してください。
+`.agents/workflow/config.json` は `agents-md-setup/templates/workflow/config.json` をプロジェクトルートにコピーして使用してください。
 
 ```bash
-cp _templates/workflow/config.json .agents/workflow/config.json
+cp agents-md-setup/templates/workflow/config.json .agents/workflow/config.json
 ```
 
 ## サンドボックス環境での実行注意点

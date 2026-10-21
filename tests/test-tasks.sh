@@ -978,7 +978,7 @@ t_gen_ref_files_none() {
 t_gen_agents_md_at_only_warns() {
     basic_tasks
     write_state "T1:pending"
-    printf '@.agents/skills/_templates/AGENTS.md\n' > "$PROJ/AGENTS.md"
+    printf '@.agents/skills/agents-md-setup/templates/AGENTS.md\n' > "$PROJ/AGENTS.md"
     run_script dispatch-prompt-gen.sh T1
     assert_eq 0 "$CODE" "exit code: $ERR"
     assert_contains "$ERR" "AGENTS.md only contains '@' references" "warning"
@@ -990,7 +990,7 @@ t_gen_agents_md_at_only_warns() {
 t_gen_agents_md_at_only_profile_expands() {
     basic_tasks
     write_state "T1:pending"
-    printf '@.agents/skills/_templates/AGENTS.md\n' > "$PROJ/AGENTS.md"
+    printf '@.agents/skills/agents-md-setup/templates/AGENTS.md\n' > "$PROJ/AGENTS.md"
     run_script dispatch-prompt-gen.sh T1
     assert_contains "$ERR" "the child CLI (profile: auto) does not expand them" "profile name in warning"
     python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" <<'PY'
