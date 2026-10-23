@@ -147,6 +147,42 @@ t_advance_merged() {
     assert_eq "A" "$(state_group)" "state.json group updated to the next group"
 }
 
+t_advance_branch_dash_prefix() {
+    setup_advance
+    gh_stub MERGED "https://example.com/pr/1"
+    run_script group-advance.sh --branch develop-g2
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_eq "develop-g2" "$(cd "$PROJ" && git branch --show-current)" "switched to the new branch"
+    assert_eq "develop-g2" "$(state_branch)" "state.json branch updated"
+}
+
+t_advance_merged_base_branch() {
+    setup_advance
+    (
+        cd "$PROJ"
+        git branch release/v1 main
+        git checkout -q release/v1
+        printf 'r\n' > r.txt; git add r.txt; git commit -q -m "feat: release"
+        git push -q -u origin release/v1
+        git checkout -q develop/g1
+    )
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" <<'PY'
+import json, sys
+p = sys.argv[1]
+with open(p, encoding='utf-8') as f:
+    c = json.load(f)
+c['base_branch'] = 'release/v1'
+with open(p, 'w', encoding='utf-8', newline='\n') as f:
+    json.dump(c, f, ensure_ascii=False, indent=2)
+PY
+    gh_stub MERGED "https://example.com/pr/1"
+    run_script group-advance.sh --branch develop/g2
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_eq "develop/g2" "$(cd "$PROJ" && git branch --show-current)" "switched to the new branch"
+    assert_eq "$(cd "$PROJ" && git rev-parse release/v1)" "$(cd "$PROJ" && git rev-parse HEAD)" "branched from base_branch"
+    assert_not_contains "$(cd "$PROJ" && git rev-parse main)" "$(cd "$PROJ" && git rev-parse HEAD)" "not branched from main"
+}
+
 t_advance_merged_commits_state() {
     setup_advance
     (
@@ -284,6 +320,8 @@ test_case "advance: OPEN で未 push のコミットがあれば exit 10" t_adva
 test_case "advance: OPEN でリモートのブランチが無ければ exit 10" t_advance_open_no_remote_branch
 test_case "advance: CLOSED は exit 9" t_advance_closed
 test_case "advance: MERGED はブランチ作成と state 更新" t_advance_merged
+test_case "advance: --branch は既定で develop- 始まりも受け付ける" t_advance_branch_dash_prefix
+test_case "advance: MERGED は base_branch から次のブランチを切る" t_advance_merged_base_branch
 test_case "advance: 状態ファイルを追跡するリポジトリでは切替後に state.json をコミットする" t_advance_merged_commits_state
 test_case "advance: .agents を追跡しないリポジトリでは state.json をコミットしない" t_advance_merged_untracked_state_no_commit
 test_case "advance: MERGED は main を origin/main まで進める" t_advance_merged_pulls_main
