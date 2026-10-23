@@ -74,13 +74,8 @@ foreach ($t in $stateTasks) { $status[$t.id] = $t.status }
 
 # config.json が無い・読めない場合は branch_per_group の既定値(true)を使う
 $branchPerGroup = $true
-try {
-    $config = Get-Content $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($config.PSObject.Properties['branch_per_group'] -and $null -ne $config.branch_per_group) {
-        $branchPerGroup = [bool]$config.branch_per_group
-    }
-} catch {
-    $branchPerGroup = $true
+if ($null -ne $config -and $config.PSObject.Properties['branch_per_group'] -and $null -ne $config.branch_per_group) {
+    $branchPerGroup = [bool]$config.branch_per_group
 }
 
 $groupOf = @{}
