@@ -2,18 +2,23 @@ name: test
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test-posix:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: bash tests/run-all.sh
+      - run: bash tests/run-all.sh --jobs 4
 
   test-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - run: pwsh -NoProfile -File tests/run-all.ps1
+      - run: pwsh -NoProfile -File tests/run-all.ps1 -Jobs 4
       - run: pwsh -NoProfile -File tests/syntax-check.ps1

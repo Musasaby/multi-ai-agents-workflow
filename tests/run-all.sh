@@ -1,6 +1,8 @@
 #!/bin/bash
 # 全テスト(tests/test-*.sh)を名前順に実行する。
-# --jobs <N> でテストファイル単位の並列実行(既定は 1 = 直列)。
+# --jobs <N> でテストファイル単位の並列実行(既定は tests/run-all.conf の jobs(無ければ 4)。--jobs 1 で直列)。
+# --print-jobs は同時実行数を決めて「Jobs: <同時実行数>」だけを出し、テストを実行せずに終わる。
+# テストファイルの一覧を作った後、1 行目として「Jobs: <同時実行数>」を出す。
 # 直列では各テストの出力をそのまま流し、各ファイルが終わり次第
 # PASS / FAIL と所要秒数を 1 行ずつ出す(作業ディレクトリは作らない)。
 # 並列では各ファイルの出力をログに隔離し、実行後に
@@ -11,7 +13,8 @@
 set -u
 cd "$(dirname "$0")/.." || exit 1
 
-jobs=1
+jobs=""
+print_jobs=0
 prev=""
 for arg in "$@"; do
     if [ "$prev" = "--jobs" ]; then
@@ -20,9 +23,12 @@ for arg in "$@"; do
         esac
         [ "$arg" -ge 1 ] || { echo "ERROR: --jobs requires a positive integer" >&2; exit 2; }
         jobs="$arg"
+        prev=""
+        continue
     elif [ "$prev" = "" ]; then
         case "$arg" in
             --jobs) ;;
+            --print-jobs) print_jobs=1; continue ;;
             *) echo "ERROR: unknown argument: $arg" >&2; exit 2 ;;
         esac
     fi
@@ -31,6 +37,21 @@ done
 if [ "$prev" = "--jobs" ]; then
     echo "ERROR: --jobs requires a value" >&2
     exit 2
+fi
+if [ -z "$jobs" ]; then
+    if grep -q '^jobs=' tests/run-all.conf 2>/dev/null; then
+        jobs="$(sed -n 's/^jobs=//p' tests/run-all.conf 2>/dev/null | tr -d '\r' | head -n 1)"
+        case "$jobs" in
+            ''|*[!0-9]*) echo "ERROR: tests/run-all.conf: jobs requires a positive integer" >&2; exit 2 ;;
+        esac
+        [ "$jobs" -ge 1 ] || { echo "ERROR: tests/run-all.conf: jobs requires a positive integer" >&2; exit 2; }
+    else
+        jobs=4
+    fi
+fi
+if [ "$print_jobs" -eq 1 ]; then
+    echo "Jobs: $jobs"
+    exit 0
 fi
 
 files=""
@@ -43,6 +64,8 @@ total=0
 for f in $files; do
     total=$((total + 1))
 done
+
+echo "Jobs: $jobs"
 
 failed=0
 failed_files=""

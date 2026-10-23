@@ -43,10 +43,10 @@ with open(p, 'w', encoding='utf-8') as f:
 PY
 }
 
-# runs/T1-1/done が現れるまで最大30秒待つ(0.5秒ごと)
+# runs/T1-1/done が現れるまで最大120秒待つ(0.5秒ごと)
 wait_done() {
     local i
-    for i in $(seq 1 60); do
+    for i in $(seq 1 240); do
         [ -f "$PROJ/.agents/workflow/runs/$1/done" ] && return 0
         sleep 0.5
     done
@@ -62,7 +62,7 @@ t_start_ok() {
     assert_file_exists "$PROJ/.agents/workflow/runs/T1-1/prompt.md" "prompt.md"
     assert_eq in_progress "$(state_get T1 status)" "T1 status"
     wait_done T1-1
-    assert_file_exists "$PROJ/.agents/workflow/runs/T1-1/done" "done within 30s"
+    assert_file_exists "$PROJ/.agents/workflow/runs/T1-1/done" "done within 120s"
 }
 
 t_start_guard_ready() {
@@ -129,7 +129,7 @@ t_retry_dirty_with_notes() {
     assert_eq 0 "$CODE" "exit code: $ERR"
     assert_eq "Next: wait" "$(printf '%s\n' "$OUT" | tail -1)" "last line"
     wait_done T1-2
-    assert_file_exists "$PROJ/.agents/workflow/runs/T1-2/done" "done within 30s"
+    assert_file_exists "$PROJ/.agents/workflow/runs/T1-2/done" "done within 120s"
     assert_eq in_progress "$(state_get T1 status)" "T1 status"
 }
 
@@ -245,7 +245,7 @@ t_pr_ok() {
     local run
     run="$(printf '%s\n' "$OUT" | sed -n 's/^Run: //p' | tr -d '\r')"
     wait_done "$run"
-    assert_file_exists "$PROJ/.agents/workflow/runs/$run/done" "done within 30s"
+    assert_file_exists "$PROJ/.agents/workflow/runs/$run/done" "done within 120s"
 }
 
 t_pr_on_main() {

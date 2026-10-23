@@ -39,10 +39,10 @@ function Initialize-StartProject {
     Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
 }
 
-# runs/<ID>/done が現れるまで最大30秒待つ(0.5秒ごと)
+# runs/<ID>/done が現れるまで最大120秒待つ(0.5秒ごと)
 function Wait-Done {
     param([string]$RunId)
-    for ($i = 0; $i -lt 60; $i++) {
+    for ($i = 0; $i -lt 240; $i++) {
         if (Test-Path "$script:Proj/.agents/workflow/runs/$RunId/done") { return }
         Start-Sleep -Milliseconds 500
     }
@@ -61,7 +61,7 @@ Invoke-TestCase "start: 起動して prompt.md・in_progress・done ができる
     Assert-FileExists "$script:Proj/.agents/workflow/runs/T1-1/prompt.md" "prompt.md"
     Assert-Eq in_progress (Get-StateTask T1).status "T1 status"
     Wait-Done T1-1
-    Assert-FileExists "$script:Proj/.agents/workflow/runs/T1-1/done" "done within 30s"
+    Assert-FileExists "$script:Proj/.agents/workflow/runs/T1-1/done" "done within 120s"
 }
 
 Invoke-TestCase "start: 戻った時点で guard.sha256 がある" {
@@ -132,7 +132,7 @@ Invoke-TestCase "start: リトライ(fix-notes あり)は作業ツリーが汚�
     Assert-Eq 0 $script:Code "exit code: $($script:Err)"
     Assert-Eq "Next: wait" (Get-LastLine $script:Out) "last line"
     Wait-Done T1-2
-    Assert-FileExists "$script:Proj/.agents/workflow/runs/T1-2/done" "done within 30s"
+    Assert-FileExists "$script:Proj/.agents/workflow/runs/T1-2/done" "done within 120s"
     Assert-Eq in_progress (Get-StateTask T1).status "T1 status"
 }
 
@@ -231,7 +231,7 @@ Invoke-TestCase "start: -Pr は pr-<N> の run を起動する" {
     Assert-Eq "Next: wait" (Get-LastLine $script:Out) "last line"
     $run = (($script:Out -split "`n" | Where-Object { $_ -match '^Run: ' } | Select-Object -First 1) -replace '^Run: ', '').Trim()
     Wait-Done $run
-    Assert-FileExists "$script:Proj/.agents/workflow/runs/$run/done" "done within 30s"
+    Assert-FileExists "$script:Proj/.agents/workflow/runs/$run/done" "done within 120s"
 }
 
 Invoke-TestCase "start: -Pr で main 上なら exit 12" {
