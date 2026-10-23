@@ -78,7 +78,8 @@
 | `quality_gate.steps` | 品質ゲートのステップ定義。各要素は `name`(表示名)・`command`(実行コマンド)・`blocking`(真なら不合格時に進行停止)を持つ。`command` は bash と pwsh の両方で動く書き方にする(quality-gate の節を参照) | `[{name:typecheck,...},{name:test,...},{name:lint,...}]` |
 | `quality_gate.child_dispatch_command` | 子エージェントへの検証指示に使う統合コマンド。空文字列でなければ blocking ステップの個別列挙に代えてこの1コマンドを子に指示する。Gradle 等のデーモンの多重コールドスタート回避に有効。子にも同じ判定をさせる場合は `bash .agents/workflow/scripts/quality-gate.sh`(Windows の子は `pwsh -NoProfile -File .agents/workflow/scripts/quality-gate.ps1`)を指定できる | `""` |
 | `upstream.url` | upstream(配布元)リポジトリの URL。`upstream-issue` が起票先に使う | `https://github.com/Musasaby/multi-ai-agents-workflow.git` |
-| `base_branch` | 利用先の基準ブランチ(PR のマージ先)。`branch-check` が `main` に加えてこの名前のブランチもコミット禁止にし、`workflow-archive` が PR 未作成のブランチの比較先に使う。値が無い・空なら `main` | `main` |
+| `base_branch` | 利用先の基準ブランチ(PR のマージ先)。`branch-check` が `main` に加えてこの名前のブランチもコミット禁止にし、`workflow-archive` が PR 未作成のブランチの比較先に使う。`dispatch-prompt-gen --pr` が PR の向き先と比較範囲(`origin/<base_branch>..HEAD`)に使い、`group-advance` が MERGED 後に切り替えて次のブランチを切る元に使う。値が無い・空なら `main` | `main` |
+| `branch_prefixes` | `group-advance --branch` と `state-sync --set-branch` が受け付けるブランチ名の接頭辞の配列。無い・空の配列・不正な値なら既定。`develop` ブランチがあると git の仕様で `develop/...` を作れないため、既定に `develop-` を含む | `["develop/", "develop-"]` |
 | `text_refine.skill` | 推敲に使う yomiyasu を呼ぶ名前(入れ方ごとに違う。プラグインなら `yomiyasu:yomiyasu`、skill 単体なら `yomiyasu` など)。`null`・空なら推敲しない。名前は推測せず、`text-refine` の `Found:` 行を見て利用者が決める | `null` |
 | `text_refine.targets` | 推敲する場面。`summary`(完了サマリー報告)・`confirm`(ユーザーへの確認依頼)・`commit`(コミットメッセージの説明の1行)・`pr_body`(PR説明)・`task_done`(タスク1件の完了報告)・`tasks`(agent-task-plan で書く tasks.md)から選ぶ配列。既存の利用先は `"tasks"` を足すと有効になる | 6つすべて |
 | `text_refine.reader` | 推敲後の文章の読み手。`expert`(同じ分野の専門家)・`informed`(分野は違うが技術に詳しい人)・`general`(専門知識のない人)。他の値は `informed` 扱い | `informed` |
@@ -386,11 +387,12 @@ tasks.md や AGENTS.md を直してから dispatch する:
 **PR モード**(`-Pr` / `--pr`): PR 作成を子に単発で依頼するプロンプトを
 `dispatch-pr-prompt-template.md` から生成し、`runs/pr-<N>-1/prompt.md` に書き出す
 (`<N>` は既存の `pr-*` の次の連番)。PR に含めるタスクは、state.json で `done` かつ
-`commit` が `git log origin/main..HEAD` に含まれるものを自動で選ぶ(`git fetch origin main` を
-してから比べるため、ローカルの `main` が古くても、マージ済みの無関係なコミットは混ざらない。
+`commit` が `git log origin/<base_branch>..HEAD`(config.json の `base_branch`。無ければ `main`)に
+含まれるものを自動で選ぶ(`origin` の `<base_branch>` を fetch してから比べるため、ローカルの
+基準ブランチが古くても、マージ済みの無関係なコミットは混ざらない。
 origin が無い・fetch に失敗した場合は exit 1)。stdout に `RunId: pr-<N>` を
 出力するので、`dispatch-run` に `pr-<N>` と `1` を渡して起動する。作業ブランチではなく
-`main` 上で実行した場合や、対象タスクが無い場合は exit 1。
+`main` か `base_branch` の上で実行した場合や、対象タスクが無い場合は exit 1。
 PR が既にある場合は、子が未 push のコミットを push し、PR の全コミットをもとに作り直した本文で
 `gh api -X PATCH repos/{owner}/{repo}/pulls/<N> -F body=@<file>` により更新する
 (`gh pr edit` は旧 Projects 廃止のエラーで失敗するため使わない)。
@@ -694,8 +696,8 @@ JSONを直接書くことはない。
   ```bash
   .agents/workflow/scripts/state-sync.sh --set-branch
   ```
-  名前を省略すると現在のブランチを記録する。`develop/` で始まらない名前と、名前を省略した detached HEAD は
-  拒否する(exit 1)。すでに同じ値なら `Branch unchanged: <名前>` を出して何もしない。
+  名前を省略すると現在のブランチを記録する。config.json の `branch_prefixes`(既定 `develop/`・`develop-`)のどれでも始まらない名前と、
+  名前を省略した detached HEAD は拒否する(exit 1)。すでに同じ値なら `Branch unchanged: <名前>` を出して何もしない。
 
 どのモードでも、state.json を書く前に全タスクの依存欄を検証する(形式違反・存在しないID・
 自己依存・循環依存・依存行の欠落)。あわせて要件の節と要件欄も検証する(検査内容は
@@ -1000,7 +1002,8 @@ stdout の最後の行には `Next:` 行を出す(「Next: 行」の節を参照
 ```
 
 PR が MERGED だった場合のみ `--branch` / `-Branch`(次のグループ用の新ブランチ名。
-`develop/` 始まりが必須)を使い、`git switch main` → `git pull --ff-only` →
+`branch_prefixes` のどれかで始まる名前が必須)を使い、`git switch <base_branch>`
+(config.json の `base_branch`。無ければ `main`) → `git pull --ff-only` →
 `git switch -c <新ブランチ>` で切替し、state.json の `branch` を新ブランチ名、
 `group` を次のグループ(未完了タスクを含む最初のグループ)に更新する。stdout に
 `ADVANCED <新ブランチ名> <新グループ名>` を出力する。state.json を書き換えるのは
@@ -1012,7 +1015,7 @@ PR が MERGED だった場合のみ `--branch` / `-Branch`(次のグループ用
 追跡しないリポジトリではコミットしない。コミットに失敗したら stderr に出して exit 1。
 
 exit code: `0`=切替完了、`1`=使い方・前提不備(グループ未完了・作業ツリー未クリーン・
-`--branch` 未指定や `develop/` 以外の名前 等)、`7`=PR 未作成(stdout `NO_PR`)、
+`--branch` 未指定や `branch_prefixes` に合わない名前 等)、`7`=PR 未作成(stdout `NO_PR`)、
 `8`=PR が OPEN(マージ待ち。stdout `OPEN <PR URL>`)、`9`=PR が未マージのまま閉鎖
 (エスカレーション)、`10`=PR が OPEN だが `origin/<branch>` に未 push のコミットがある、または
 `origin/<branch>` が無い(stdout `OPEN <PR URL>`、`Next: update-pr`。fetch はせず、ローカルの
