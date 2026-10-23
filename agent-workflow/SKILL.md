@@ -28,6 +28,7 @@ description: マルチエージェント実装ワークフローのオーケス�
 - 作業は config.json の `branch_prefixes`(既定 `develop/`・`develop-`)のどれかで始まるブランチで行う。
   `main`(`base_branch` があればその名前)上で開始された場合は
   `develop/<計画に基づく作業名>` ブランチを作成してから進める
+  (`develop/` は `branch_prefixes` の先頭の接頭辞に読み替える。以下の例も同じ)
 - tasks.md のタスク実行**以外**の依頼(タスクの追加・計画の変更・ドキュメントや設定の
   変更 等)では、作業に着手する前に `agent-branch-guard` skill を使ってブランチを
   確かめる。グループ完了時のブランチ切替は従来どおり `group-advance` を使う
@@ -40,7 +41,7 @@ tasks.md にグループ区切りがあり、config の `branch_per_group` が�
 次のグループのタスクに進んではならない**。
 
 1. `group-advance` を実行する。`--branch` には次のグループ用の新ブランチ名(`branch_prefixes` のどれかで始まる名前。
-   MERGED 時のみ使用)を渡す。名前は親が計画・グループ名から決める(例: `develop/<作業名>-<グループ名>`)
+   MERGED 時のみ使用)を渡す。名前は親が計画・グループ名から決める(例: `develop/<作業名>-<グループ名>`。`develop/` は `branch_prefixes` の先頭の接頭辞に読み替える)
    ```bash
    .agents/workflow/scripts/group-advance.sh --branch "develop/<作業名>-<グループ名>"
    ```

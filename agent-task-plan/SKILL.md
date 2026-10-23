@@ -22,7 +22,7 @@ description: GitHub IssueのIDまたは計画ドキュメントのパスを引�
 
 この skill に入ったら、新規・追加のどちらのモードに関わらず、まず
 `agent-branch-guard` skill の手順でブランチを確かめる(`branch-check` を実行し、
-`main` 上やマージ済みブランチなら利用者の承認を得て `develop/<作業名>-plan` 等の
+`main` 上やマージ済みブランチなら利用者の承認を得て `develop/<作業名>-plan` 等(接頭辞は config.json の `branch_prefixes` に従う)の
 専用ブランチを切ってから進む)。
 
 既存の `.agents/workflow/state.json` の有無と状態で分岐する:

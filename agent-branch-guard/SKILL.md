@@ -37,7 +37,8 @@ skill 名の指定がなくても発動するように、AGENTS.md の「マル�
        `develop/<作業名>-plan` を切ることを提案する。config.json の `base_branch` が
        設定されている場合は `main` の代わりにその名前を使う
      - ブランチ名は config.json の `branch_prefixes`(既定 `develop/`・`develop-`)のどれかで
-       始める。そうでないと `state-sync --set-branch` が exit 1 にする
+       始める。そうでないと `state-sync --set-branch` が exit 1 にする。下の例の
+       `develop/<作業名>-plan` と `git switch -c` の `develop/` も、先頭の接頭辞に読み替える
      - `develop` という名前のブランチが既にあると、git の仕様で `develop/...` を作れない。
        その場合だけ `develop-<作業名>` を使う
      - **承認後に** `git switch -c develop/<作業名>-plan origin/main` で作成してから
