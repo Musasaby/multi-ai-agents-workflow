@@ -101,7 +101,7 @@ stdout の最後の `Next:` 行で分岐する(exit code と reason は `.agents
 ### 3. 状態更新
 
 検証を通過したら `task-state <タスクID> review` で `in_review` に更新し、`/agent-review-commit` に引き継ぐ。
-完了報告は `dispatch-check` が `runs/<タスクID>-<試行回数>/report.md` に保存済み(手で保存しない)。
+完了報告は `dispatch-check` が `runs/<タスクID>-<試行回数>/report.md` に保存済み(手で保存しない。親が引き取った場合だけ [引き取り](references/troubleshooting.md#引き取り) の手順で書く)。
 `report.md` は後続タスクの `dispatch-prompt-gen` が引き継ぎ資料として結合するため削除しない。
 `output.log` も残す(リトライ時の比較や事後調査用)。
 
