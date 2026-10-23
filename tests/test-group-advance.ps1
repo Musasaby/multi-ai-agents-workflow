@@ -280,6 +280,21 @@ Invoke-TestCase "advance: develop/ 以外の -Branch は exit 1" {
     Assert-Eq "P" (Get-StateGroup) "state.json unchanged"
 }
 
+Invoke-TestCase "advance: config.json の branch_prefixes に合わない名前は exit 1" {
+    Initialize-AdvanceProject
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg | Add-Member -NotePropertyName branch_prefixes -NotePropertyValue @('feature/') -Force
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+    Set-GhStub MERGED 'https://example.com/pr/1'
+    Invoke-Script group-advance.ps1 '-Branch' 'develop/g2'
+    Assert-Eq 1 $script:Code "exit code"
+    Assert-Contains $script:Err "'feature/'" "stderr shows the configured prefix"
+    Assert-Eq "develop/g1" (Get-CurrentBranch) "still on the work branch"
+    Assert-Eq "develop/g1" (Get-StateBranch) "state.json branch unchanged"
+    Assert-Eq "P" (Get-StateGroup) "group unchanged"
+}
+
 Invoke-TestCase "advance: 作業ツリーが汚れていると exit 1" {
     Initialize-AdvanceProject
     Set-GhStub MERGED 'https://example.com/pr/1'

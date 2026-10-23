@@ -127,6 +127,14 @@ t_pr_base_branch_on_main_rejected() {
     assert_eq 1 "$CODE" "exit code"
 }
 
+t_pr_on_base_branch_rejected() {
+    setup_branch
+    set_base_branch release/v1
+    (cd "$PROJ" && git checkout -q -b release/v1 main)
+    run_script dispatch-prompt-gen.sh --pr
+    assert_eq 1 "$CODE" "exit code"
+}
+
 t_task_id_omitted() {
     run_script dispatch-prompt-gen.sh
     assert_eq 1 "$CODE" "exit code"
@@ -187,6 +195,7 @@ test_case "pr: main上はexit 1" t_pr_on_main_rejected
 test_case "pr: 対象タスクなしはexit 1" t_pr_no_tasks_rejected
 test_case "pr: base_branch があればその向きで比較する" t_pr_base_branch
 test_case "pr: base_branch が main 以外でも main 上は exit 1" t_pr_base_branch_on_main_rejected
+test_case "pr: base_branch の上は exit 1" t_pr_on_base_branch_rejected
 test_case "TaskId省略はexit 1" t_task_id_omitted
 test_case "pr: origin が無ければexit 1" t_pr_no_origin_rejected
 test_case "pr: 要件の対応をプロンプトに載せる" t_pr_requirements

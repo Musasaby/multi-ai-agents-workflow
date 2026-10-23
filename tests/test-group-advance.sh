@@ -257,6 +257,26 @@ t_advance_branch_prefix_rejected() {
     assert_eq "P" "$(state_group)" "state.json unchanged"
 }
 
+t_advance_config_prefix_rejected() {
+    setup_advance
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" <<'PY'
+import json, sys
+p = sys.argv[1]
+with open(p, encoding='utf-8') as f:
+    c = json.load(f)
+c['branch_prefixes'] = ['feature/']
+with open(p, 'w', encoding='utf-8', newline='\n') as f:
+    json.dump(c, f, ensure_ascii=False, indent=2)
+PY
+    gh_stub MERGED "https://example.com/pr/1"
+    run_script group-advance.sh --branch develop/g2
+    assert_eq 1 "$CODE" "exit code"
+    assert_contains "$ERR" "'feature/'" "stderr shows the configured prefix"
+    assert_eq "develop/g1" "$(cd "$PROJ" && git branch --show-current)" "still on the work branch"
+    assert_eq "develop/g1" "$(state_branch)" "state.json branch unchanged"
+    assert_eq "P" "$(state_group)" "group unchanged"
+}
+
 t_advance_dirty_tree_rejected() {
     setup_advance
     gh_stub MERGED "https://example.com/pr/1"
@@ -327,6 +347,7 @@ test_case "advance: .agents を追跡しないリポジトリでは state.json �
 test_case "advance: MERGED は main を origin/main まで進める" t_advance_merged_pulls_main
 test_case "advance: MERGED で --branch 無しは exit 1" t_advance_merged_requires_branch
 test_case "advance: develop/ 以外の --branch は exit 1" t_advance_branch_prefix_rejected
+test_case "advance: config.json の branch_prefixes に合わない名前は exit 1" t_advance_config_prefix_rejected
 test_case "advance: 作業ツリーが汚れていると exit 1" t_advance_dirty_tree_rejected
 test_case "advance: 作業グループ未完了は exit 1" t_advance_group_incomplete_rejected
 test_case "advance: 未知のグループ名は exit 1" t_advance_unknown_group_rejected

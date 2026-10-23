@@ -101,6 +101,14 @@ Invoke-TestCase "pr: base_branch が main 以外でも main 上は exit 1" {
     Assert-Eq 1 $script:Code "exit code"
 }
 
+Invoke-TestCase "pr: base_branch の上は exit 1" {
+    Initialize-Branch
+    Set-BaseBranch 'release/v1'
+    Push-Location $script:Proj; git checkout -q -b release/v1 main 2>$null; Pop-Location
+    Invoke-Script dispatch-prompt-gen.ps1 '-Pr'
+    Assert-Eq 1 $script:Code "exit code"
+}
+
 Invoke-TestCase "TaskId省略はexit 1" {
     Invoke-Script dispatch-prompt-gen.ps1
     Assert-Eq 1 $script:Code "exit code"
