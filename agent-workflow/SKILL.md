@@ -25,7 +25,8 @@ description: マルチエージェント実装ワークフローのオーケス�
 
 - `agents-md-setup` 済みであること(`AGENTS.md` が正本、`.claude` リンク有効)。
   未了なら先に `/agents-md-setup` を実行
-- 作業は `develop/*` ブランチで行う。`main` 上で開始された場合は
+- 作業は config.json の `branch_prefixes`(既定 `develop/`・`develop-`)のどれかで始まるブランチで行う。
+  `main`(`base_branch` があればその名前)上で開始された場合は
   `develop/<計画に基づく作業名>` ブランチを作成してから進める
 - tasks.md のタスク実行**以外**の依頼(タスクの追加・計画の変更・ドキュメントや設定の
   変更 等)では、作業に着手する前に `agent-branch-guard` skill を使ってブランチを
@@ -38,7 +39,7 @@ tasks.md にグループ区切りがあり、config の `branch_per_group` が�
 `Next: group-advance`(作業グループ完了)を出したら、以下の手順に**必ず**従う。**グループ途中で
 次のグループのタスクに進んではならない**。
 
-1. `group-advance` を実行する。`--branch` には次のグループ用の新ブランチ名(`develop/` 始まり。
+1. `group-advance` を実行する。`--branch` には次のグループ用の新ブランチ名(`branch_prefixes` のどれかで始まる名前。
    MERGED 時のみ使用)を渡す。名前は親が計画・グループ名から決める(例: `develop/<作業名>-<グループ名>`)
    ```bash
    .agents/workflow/scripts/group-advance.sh --branch "develop/<作業名>-<グループ名>"
@@ -124,7 +125,7 @@ PR が未マージなどで `workflow-archive` が止まった場合、残課題
 ## 要件の充足確認
 
 PR 作成の前に、要件が満たされているかを親が確かめる(`req-status` と
-`git diff origin/main...HEAD` を使い、要件ごとに「満たした / 部分 / 未対応」を判断する。
+`git diff origin/<base_branch>...HEAD`(`base_branch` が無ければ `main`)を使い、要件ごとに「満たした / 部分 / 未対応」を判断する。
 部分・未対応があれば PR 作成に進まず停止する)。手順は `references/pr.md` を読む。
 
 ## PR作成(子への単発依頼)

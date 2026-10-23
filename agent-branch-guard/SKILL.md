@@ -36,10 +36,12 @@ skill 名の指定がなくても発動するように、AGENTS.md の「マル�
      - `git fetch origin` の後、最新の main(`origin/main`)から専用ブランチ
        `develop/<作業名>-plan` を切ることを提案する。config.json の `base_branch` が
        設定されている場合は `main` の代わりにその名前を使う
+     - ブランチ名は config.json の `branch_prefixes`(既定 `develop/`・`develop-`)のどれかで
+       始める。そうでないと `state-sync --set-branch` が exit 1 にする
      - `develop` という名前のブランチが既にあると、git の仕様で `develop/...` を作れない。
        その場合だけ `develop-<作業名>` を使う
      - **承認後に** `git switch -c develop/<作業名>-plan origin/main` で作成してから
-       作業を始める(承認なく作らない)
+       作業を始める(`base_branch` があれば `origin/<base_branch>` から切る。承認なく作らない)
      - 作業ツリーに未コミット変更(`git status --porcelain` が空でない)がある場合は、
        切替前にその扱い(残す・退避(stash)・破棄 等)を利用者に確認する
    - **`Next: escalate reason=gh-unavailable`**(gh が無い・認証切れ等で

@@ -14,7 +14,7 @@ PR 作成の前に、要件が満たされているかを親が確かめる。�
    .agents/workflow/scripts/req-status.sh
    ```
 2. 対象は、この PR のタスクを含む要件(グループ完了時)または全要件(サイクル完了時)。
-   要件ごとに、要件の本文を `git diff origin/main...HEAD` と対応タスクの完了報告に照らし、
+   要件ごとに、要件の本文を `git diff origin/<base_branch>...HEAD` と対応タスクの完了報告に照らし、
    「満たした / 部分 / 未対応」を判断する。`partial` の要件で未完了タスクが後のグループにあるものは、
    このグループで担う分だけを判断する。`## 対象外` 節に記録済みの要件・要件の一部は除外する
 3. 部分・未対応があれば PR 作成に進まず停止する。要件と判断の根拠を報告し、追加モード
@@ -32,15 +32,16 @@ PR 作成の前に、要件が満たされているかを親が確かめる。�
 0. 先に「要件の充足確認」を行い、満たしていなければここで停止する
 1. `git status --porcelain` が空であることを確認する
 2. `dispatch-start --pr` を実行する。対象タスク(state.json で `done` かつ commit が
-   `git log origin/main..HEAD` に含まれるもの)は自動で選ばれ、プロンプト生成・疎通確認・
-   デタッチ起動までが行われる。スクリプトが `git fetch origin main` を行い、ローカルの `main` ではなく
-   最新の `origin/main` と比べる(origin が無い・fetch に失敗した場合は失敗する)
+   `git log origin/<base_branch>..HEAD` に含まれるもの)は自動で選ばれ、プロンプト生成・疎通確認・
+   デタッチ起動までが行われる。`base_branch` は config.json の値で、無ければ `main`。
+   スクリプトが `git fetch origin <base_branch>` を行い、ローカルの `<base_branch>` ではなく
+   最新の `origin/<base_branch>` と比べる(origin が無い・fetch に失敗した場合は失敗する)
    ```bash
    .agents/workflow/scripts/dispatch-start.sh --pr
    ```
    `Next: wait` なら stdout の `Run: pr-<N>-1` を控える。それ以外は reason と stderr を
    ユーザーに報告する(`main` 上で実行した、対象タスクが無い 等)。プロンプトには、
-   push(`git push -u`)、`gh pr create --base main`、日本語のタイトル・本文、既存 PR の
+   push(`git push -u`)、`gh pr create --base <base_branch>`、日本語のタイトル・本文、既存 PR の
    確認、既存 PR があれば push して本文を作り直し、`gh api -X PATCH` で更新すること、
    マージ禁止が含まれている
 3. `dispatch-wait`(`pr-<N> 1`)で完了を待つ。出力の `Next:` 行で分岐する。
@@ -50,7 +51,7 @@ PR 作成の前に、要件が満たされているかを親が確かめる。�
    - それ以外(`Next: escalate reason=...` 等) → reason と stderr、`output.log` の末尾を
      ユーザーに報告して停止する
 4. **PR の検証**: `gh pr view <作業ブランチ> --json url,state,baseRefName` を実行し、
-   PR が存在し、`baseRefName` が `main` であることを確認する。確認できなければ、
+   PR が存在し、`baseRefName` が `<base_branch>` であることを確認する。確認できなければ、
    `output.log` の末尾を添えてユーザーに報告する
 5. **PR 本文の推敲**: `text-refine pr_body .agents/workflow/runs/pr-<N>-1/pr-body.md` を実行する。
    `Next: refine` なら、`Request:` の依頼文どおりに推敲させ、テンプレートの「日本語の推敲」の
