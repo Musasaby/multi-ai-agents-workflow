@@ -42,7 +42,7 @@ function Get-BranchPrefixes {
     param($Config)
     if ($null -ne $Config) {
         $v = $Config.branch_prefixes
-        if ($null -ne $v) {
+        if ($v -is [array]) {
             $items = @($v)
             $ok = ($items.Count -gt 0)
             foreach ($p in $items) {
