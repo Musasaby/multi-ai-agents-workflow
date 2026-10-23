@@ -156,6 +156,47 @@ Invoke-TestCase "advance: MERGED はブランチ作成と state 更新" {
     Assert-Eq "A" (Get-StateGroup) "state.json group updated to the next group"
 }
 
+Invoke-TestCase "advance: --branch は既定で develop- 始まりも受け付ける" {
+    Initialize-AdvanceProject
+    Set-GhStub MERGED 'https://example.com/pr/1'
+    Invoke-Script group-advance.ps1 '-Branch' 'develop-g2'
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "develop-g2" (Get-CurrentBranch) "switched to the new branch"
+    Assert-Eq "develop-g2" (Get-StateBranch) "state.json branch updated"
+}
+
+Invoke-TestCase "advance: MERGED は base_branch から次のブランチを切る" {
+    Initialize-AdvanceProject
+    Push-Location $script:Proj
+    try {
+        git branch release/v1 main
+        git checkout -q release/v1 2>$null
+        Set-Content r.txt 'r'; git add r.txt; git commit -q -m "feat: release"
+        git push -q -u origin release/v1 2>$null
+        git checkout -q develop/g1 2>$null
+    } finally {
+        Pop-Location
+    }
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg | Add-Member -NotePropertyName base_branch -NotePropertyValue 'release/v1' -Force
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+    Set-GhStub MERGED 'https://example.com/pr/1'
+    Invoke-Script group-advance.ps1 '-Branch' 'develop/g2'
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "develop/g2" (Get-CurrentBranch) "switched to the new branch"
+    Push-Location $script:Proj
+    try {
+        $head = (git rev-parse HEAD).Trim()
+        $release = (git rev-parse release/v1).Trim()
+        $mainSha = (git rev-parse main).Trim()
+    } finally {
+        Pop-Location
+    }
+    Assert-Eq $release $head "branched from base_branch"
+    Assert-NotContains $mainSha $head "not branched from main"
+}
+
 Invoke-TestCase "advance: 状態ファイルを追跡するリポジトリでは切替後に state.json をコミットする" {
     Initialize-AdvanceProject
     Push-Location $script:Proj
@@ -237,6 +278,21 @@ Invoke-TestCase "advance: develop/ 以外の -Branch は exit 1" {
     Assert-Eq 1 $script:Code "exit code"
     Assert-Contains $script:Err "develop/" "stderr explains the prefix rule"
     Assert-Eq "P" (Get-StateGroup) "state.json unchanged"
+}
+
+Invoke-TestCase "advance: config.json の branch_prefixes に合わない名前は exit 1" {
+    Initialize-AdvanceProject
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg | Add-Member -NotePropertyName branch_prefixes -NotePropertyValue @('feature/') -Force
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+    Set-GhStub MERGED 'https://example.com/pr/1'
+    Invoke-Script group-advance.ps1 '-Branch' 'develop/g2'
+    Assert-Eq 1 $script:Code "exit code"
+    Assert-Contains $script:Err "'feature/'" "stderr shows the configured prefix"
+    Assert-Eq "develop/g1" (Get-CurrentBranch) "still on the work branch"
+    Assert-Eq "develop/g1" (Get-StateBranch) "state.json branch unchanged"
+    Assert-Eq "P" (Get-StateGroup) "group unchanged"
 }
 
 Invoke-TestCase "advance: 作業ツリーが汚れていると exit 1" {

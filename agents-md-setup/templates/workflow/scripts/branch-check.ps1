@@ -66,7 +66,8 @@ if (-not $branch) { Fail 'HEAD is detached (switch to a work branch first)' }
 # --- 2. main 上 ---
 $baseBranch = Get-JsonField $configPath 'base_branch'
 if ($branch -ceq 'main' -or ($baseBranch -and $branch -ceq $baseBranch)) {
-    Fail "On '$branch': do not work on the main branch (create a develop/<name> branch from the latest origin/main)" 2 'Next: switch-branch reason=main'
+    $baseName = if ($baseBranch) { $baseBranch } else { 'main' }
+    Fail "On '$branch': do not work on the main branch (create a work branch from the latest origin/$baseName; its name must start with one of config.json branch_prefixes, default 'develop/', 'develop-')" 2 'Next: switch-branch reason=main'
 }
 
 # --- 3. state.json の branch との一致(-State 指定時のみ) ---

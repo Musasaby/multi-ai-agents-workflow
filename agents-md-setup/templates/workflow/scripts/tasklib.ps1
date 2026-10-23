@@ -14,6 +14,59 @@ $script:ReqLinePattern = '^- (R\d+):[ \t]*(\S.*?)[ \t]*$'
 $script:ReqFieldPattern = '^(\s*-\s+\*\*要件\*\*:)[ \t]*(.*?)[ \t]*$'
 $script:ReqFormatHint = "expected 'なし' or comma-separated requirement IDs like 'R1, R2'"
 
+$script:DefaultBaseBranch = 'main'
+$script:DefaultBranchPrefixes = @('develop/', 'develop-')
+
+# config.json を読む。無い・読めないときは $null
+function Read-WorkflowConfig {
+    param([string]$Path)
+    try {
+        return (Get-Content $Path -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop)
+    } catch {
+        return $null
+    }
+}
+
+# base_branch が空でない文字列ならそれ、それ以外は 'main'
+function Get-BaseBranch {
+    param($Config)
+    if ($null -ne $Config) {
+        $v = $Config.base_branch
+        if ($v -is [string] -and $v) { return $v }
+    }
+    return $script:DefaultBaseBranch
+}
+
+# branch_prefixes が空でない文字列だけの空でない配列ならそれ、それ以外は既定。呼び出し側は @(...) で受ける
+function Get-BranchPrefixes {
+    param($Config)
+    if ($null -ne $Config) {
+        $v = $Config.branch_prefixes
+        if ($v -is [array]) {
+            $items = @($v)
+            $ok = ($items.Count -gt 0)
+            foreach ($p in $items) {
+                if (-not ($p -is [string]) -or -not $p) { $ok = $false; break }
+            }
+            if ($ok) { return $items }
+        }
+    }
+    return @($script:DefaultBranchPrefixes)
+}
+
+function Test-BranchPrefix {
+    param([string]$Branch, [string[]]$Prefixes)
+    foreach ($p in $Prefixes) {
+        if ($Branch.StartsWith($p, [System.StringComparison]::Ordinal)) { return $true }
+    }
+    return $false
+}
+
+function Format-BranchPrefixes {
+    param([string[]]$Prefixes)
+    return (($Prefixes | ForEach-Object { "'$_'" }) -join ', ')
+}
+
 # 改行コードを保持したまま行に分割する(CRLF の tasks.md をそのまま書き戻すため)
 function Split-TaskLines {
     param([string]$Content)

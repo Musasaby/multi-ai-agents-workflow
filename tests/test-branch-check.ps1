@@ -59,6 +59,8 @@ Invoke-TestCase "branch-check: main 上は exit 2" {
     Assert-Eq 2 $script:Code "exit code: $($script:Err)"
     Assert-Eq "Next: switch-branch reason=main" $script:Out "stdout has only the Next: line"
     Assert-Contains $script:Err "main" "stderr explains"
+    Assert-Contains $script:Err "origin/main" "stderr names the base branch"
+    Assert-Contains $script:Err "branch_prefixes" "stderr names branch_prefixes"
     Assert-Eq "" (Get-GhStubLog) "gh not called"
 }
 
@@ -71,6 +73,7 @@ Invoke-TestCase "branch-check: config の base_branch 上も exit 2" {
     Set-GhStub NONE
     Invoke-Script branch-check.ps1
     Assert-Eq 2 $script:Code "base_branch is treated as main: $($script:Err)"
+    Assert-Contains $script:Err "origin/trunk" "stderr names the configured base branch"
 }
 
 Invoke-TestCase "branch-check: マージ済み PR ありは exit 3 と MERGED <URL>" {

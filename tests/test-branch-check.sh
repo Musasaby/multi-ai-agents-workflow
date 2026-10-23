@@ -49,6 +49,8 @@ t_main_rejected() {
     assert_eq 2 "$CODE" "exit code: $ERR"
     assert_eq "Next: switch-branch reason=main" "$OUT" "stdout has only the Next: line"
     assert_contains "$ERR" "main" "stderr explains"
+    assert_contains "$ERR" "origin/main" "stderr names the base branch"
+    assert_contains "$ERR" "branch_prefixes" "stderr names branch_prefixes"
     assert_eq "" "$(gh_stub_log)" "gh not called"
 }
 
@@ -66,6 +68,7 @@ PY
     gh_stub NONE
     run_script branch-check.sh
     assert_eq 2 "$CODE" "base_branch is treated as main: $ERR"
+    assert_contains "$ERR" "origin/trunk" "stderr names the configured base branch"
 }
 
 t_merged() {

@@ -80,7 +80,7 @@ fi
 # --- 2. main 上 ---
 BASE_BRANCH="$(json_field "$CONFIG_PATH" base_branch)"
 if [ "$BRANCH" = "main" ] || { [ -n "$BASE_BRANCH" ] && [ "$BRANCH" = "$BASE_BRANCH" ]; }; then
-    echo "On '$BRANCH': do not work on the main branch (create a develop/<name> branch from the latest origin/main)" >&2
+    echo "On '$BRANCH': do not work on the main branch (create a work branch from the latest origin/${BASE_BRANCH:-main}; its name must start with one of config.json branch_prefixes, default 'develop/', 'develop-')" >&2
     echo "Next: switch-branch reason=main"
     exit 2
 fi

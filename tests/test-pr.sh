@@ -93,6 +93,48 @@ t_pr_no_tasks_rejected() {
     assert_eq 1 "$CODE" "exit code"
 }
 
+set_base_branch() {
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" "$1" <<'PY'
+import json, sys
+p = sys.argv[1]
+with open(p, encoding='utf-8') as f:
+    c = json.load(f)
+c['base_branch'] = sys.argv[2]
+with open(p, 'w', encoding='utf-8', newline='\n') as f:
+    json.dump(c, f, ensure_ascii=False, indent=2)
+PY
+}
+
+t_pr_base_branch() {
+    setup_branch
+    (cd "$PROJ" && git push -q origin main:release/v1)
+    set_base_branch release/v1
+    run_script dispatch-prompt-gen.sh --pr
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    local prompt
+    prompt="$(cat "$PROJ/.agents/workflow/runs/pr-1-1/prompt.md")"
+    assert_contains "$prompt" "--base release/v1" "base branch"
+    assert_contains "$prompt" "origin/release/v1" "compares with origin/release/v1"
+    assert_contains "$prompt" "T1:" "branch task listed"
+    assert_contains "$prompt" "T4:" "T4 included because range changed"
+}
+
+t_pr_base_branch_on_main_rejected() {
+    setup_branch
+    set_base_branch release/v1
+    (cd "$PROJ" && git checkout -q main)
+    run_script dispatch-prompt-gen.sh --pr
+    assert_eq 1 "$CODE" "exit code"
+}
+
+t_pr_on_base_branch_rejected() {
+    setup_branch
+    set_base_branch release/v1
+    (cd "$PROJ" && git checkout -q -b release/v1 main)
+    run_script dispatch-prompt-gen.sh --pr
+    assert_eq 1 "$CODE" "exit code"
+}
+
 t_task_id_omitted() {
     run_script dispatch-prompt-gen.sh
     assert_eq 1 "$CODE" "exit code"
@@ -151,6 +193,9 @@ test_case "pr: プロンプト生成" t_pr_generates
 test_case "pr: 連番" t_pr_increments
 test_case "pr: main上はexit 1" t_pr_on_main_rejected
 test_case "pr: 対象タスクなしはexit 1" t_pr_no_tasks_rejected
+test_case "pr: base_branch があればその向きで比較する" t_pr_base_branch
+test_case "pr: base_branch が main 以外でも main 上は exit 1" t_pr_base_branch_on_main_rejected
+test_case "pr: base_branch の上は exit 1" t_pr_on_base_branch_rejected
 test_case "TaskId省略はexit 1" t_task_id_omitted
 test_case "pr: origin が無ければexit 1" t_pr_no_origin_rejected
 test_case "pr: 要件の対応をプロンプトに載せる" t_pr_requirements

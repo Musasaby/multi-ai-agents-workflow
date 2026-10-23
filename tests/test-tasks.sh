@@ -658,6 +658,55 @@ t_sync_set_branch_rejects_non_develop() {
     assert_eq "main" "$(state_branch)" "branch unchanged"
 }
 
+t_sync_set_branch_default_dash() {
+    basic_tasks
+    write_state "T1:done" "T2:pending" "T3:pending" "T4:pending"
+    run_script state-sync.sh --set-branch develop-fix
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_eq "develop-fix" "$(state_branch)" "branch written"
+}
+
+t_sync_set_branch_config_prefixes() {
+    basic_tasks
+    write_state "T1:done" "T2:pending" "T3:pending" "T4:pending"
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" <<'PY'
+import json, sys
+p = sys.argv[1]
+with open(p, encoding='utf-8') as f:
+    c = json.load(f)
+c['branch_prefixes'] = ['feature/']
+with open(p, 'w', encoding='utf-8', newline='\n') as f:
+    json.dump(c, f, ensure_ascii=False, indent=2)
+PY
+    run_script state-sync.sh --set-branch develop/x
+    assert_eq 1 "$CODE" "exit code on develop/x"
+    assert_contains "$ERR" "'feature/'" "stderr"
+    assert_eq "main" "$(state_branch)" "branch unchanged"
+    run_script state-sync.sh --set-branch feature/x
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_eq "feature/x" "$(state_branch)" "branch written"
+}
+
+t_sync_set_branch_prefixes_not_array() {
+    basic_tasks
+    write_state "T1:done" "T2:pending" "T3:pending" "T4:pending"
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" <<'PY'
+import json, sys
+p = sys.argv[1]
+with open(p, encoding='utf-8') as f:
+    c = json.load(f)
+c['branch_prefixes'] = 'feature/'
+with open(p, 'w', encoding='utf-8', newline='\n') as f:
+    json.dump(c, f, ensure_ascii=False, indent=2)
+PY
+    run_script state-sync.sh --set-branch feature/x
+    assert_eq 1 "$CODE" "exit code on feature/x"
+    assert_eq "main" "$(state_branch)" "branch unchanged"
+    run_script state-sync.sh --set-branch develop/x
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_eq "develop/x" "$(state_branch)" "branch written"
+}
+
 # ---------- state-sync: 挿入 (#13) ----------
 
 append_t8() { # $1 = T8 の依存
@@ -1119,6 +1168,9 @@ test_case "sync: group欄の無い旧stateには足さない" t_sync_group_absen
 test_case "sync: --set-branch は現在のブランチを state.json に書く" t_sync_set_branch_current
 test_case "sync: --set-branch に名前を渡せばその名前を書く" t_sync_set_branch_named
 test_case "sync: --set-branch は develop/ 以外を拒否する" t_sync_set_branch_rejects_non_develop
+test_case "sync: --set-branch は既定で develop- 始まりも受け付ける" t_sync_set_branch_default_dash
+test_case "sync: --set-branch は config.json の branch_prefixes に従う" t_sync_set_branch_config_prefixes
+test_case "sync: --set-branch は branch_prefixes が配列でなければ既定を使う" t_sync_set_branch_prefixes_not_array
 test_case "insert: pendingの前に挿入" t_insert_before_pending
 test_case "insert: なし→T8、複数指定" t_insert_before_none_dep
 test_case "insert: pending以外は拒否" t_insert_before_non_pending_rejected

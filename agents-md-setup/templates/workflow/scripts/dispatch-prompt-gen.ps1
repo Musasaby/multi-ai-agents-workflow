@@ -18,9 +18,9 @@ $RunsBase = "$Root/.agents/workflow/runs"
 # 対象タスク = state.json で done かつ commit が git log origin/<base>..HEAD に含まれるもの。
 # 出力先は runs/pr-<連番>-1/prompt.md。stdout に "RunId: pr-<連番>" を出す。
 if ($Pr) {
-    $baseBranch = 'main'
+    $baseBranch = Get-BaseBranch (Read-WorkflowConfig $ConfigPath)
     $branch = "$(git branch --show-current)".Trim()
-    if (-not $branch -or $branch -eq $baseBranch) {
+    if (-not $branch -or $branch -eq 'main' -or $branch -eq $baseBranch) {
         [Console]::Error.WriteLine("PR mode must be run on a work branch (current: '$branch')")
         exit 1
     }

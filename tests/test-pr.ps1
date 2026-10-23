@@ -72,6 +72,43 @@ Invoke-TestCase "pr: 対象タスクなしはexit 1" {
     Assert-Eq 1 $script:Code "exit code"
 }
 
+function Set-BaseBranch {
+    param([string]$Name)
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg | Add-Member -NotePropertyName base_branch -NotePropertyValue $Name -Force
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+}
+
+Invoke-TestCase "pr: base_branch があればその向きで比較する" {
+    Initialize-Branch
+    Push-Location $script:Proj; git push -q origin main:release/v1 2>$null; Pop-Location
+    Set-BaseBranch 'release/v1'
+    Invoke-Script dispatch-prompt-gen.ps1 '-Pr'
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    $prompt = [System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/pr-1-1/prompt.md")
+    Assert-Contains $prompt "--base release/v1" "base branch"
+    Assert-Contains $prompt "origin/release/v1" "compares with origin/release/v1"
+    Assert-Contains $prompt "T1:" "branch task listed"
+    Assert-Contains $prompt "T4:" "T4 included because range changed"
+}
+
+Invoke-TestCase "pr: base_branch が main 以外でも main 上は exit 1" {
+    Initialize-Branch
+    Set-BaseBranch 'release/v1'
+    Push-Location $script:Proj; git checkout -q main; Pop-Location
+    Invoke-Script dispatch-prompt-gen.ps1 '-Pr'
+    Assert-Eq 1 $script:Code "exit code"
+}
+
+Invoke-TestCase "pr: base_branch の上は exit 1" {
+    Initialize-Branch
+    Set-BaseBranch 'release/v1'
+    Push-Location $script:Proj; git checkout -q -b release/v1 main 2>$null; Pop-Location
+    Invoke-Script dispatch-prompt-gen.ps1 '-Pr'
+    Assert-Eq 1 $script:Code "exit code"
+}
+
 Invoke-TestCase "TaskId省略はexit 1" {
     Invoke-Script dispatch-prompt-gen.ps1
     Assert-Eq 1 $script:Code "exit code"

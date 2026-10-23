@@ -10,8 +10,9 @@
 #              ブランチに origin/<branch> へ未 push のコミットがある、または origin/<branch> が
 #              無ければ exit 10(Next: update-pr)
 #   - CLOSED → PR がマージされずに閉じている。stderr に説明、exit 9(エスカレーション)
-#   - MERGED → main を最新化(git switch main + git pull --ff-only)し、-Branch で指定した
-#              名前(develop/ 始まり。必須)のブランチを作成・切替。state.json の branch を
+#   - MERGED → base_branch(config.json。既定 main)を最新化(git switch <base_branch> +
+#              git pull --ff-only)し、-Branch で指定した名前(config.json の
+#              branch_prefixes のいずれかで始まること。既定 develop/ と develop-。必須)のブランチを作成・切替。state.json の branch を
 #              新ブランチ名、group を次のグループ(未完了タスクを含む最初のグループ)に更新
 #              して exit 0。stdout に "ADVANCED <新ブランチ名> <新グループ名>"
 # exit: 0=切替完了 / 1=使い方・前提不備 / 7=PR 未作成 / 8=マージ待ち / 9=PR 閉鎖(未マージ) /
@@ -37,10 +38,6 @@ function Set-StateField {
     else { $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value }
 }
 
-if ($Branch -and $Branch -cnotmatch '^develop/') {
-    Fail "Invalid -Branch: '$Branch' (must start with 'develop/')"
-}
-
 Set-Location $PSScriptRoot\..\..\..
 $tasksPath = '.agents/workflow/tasks.md'
 $statePath = '.agents/workflow/state.json'
@@ -49,6 +46,15 @@ foreach ($p in @($tasksPath, $statePath)) {
     if (-not (Test-Path $p)) { Fail "not found: $p" }
 }
 . "$PSScriptRoot/tasklib.ps1"
+
+# -Branch の接頭辞を config.json の branch_prefixes で検査する(不一致なら何も書き換えず exit 1)
+$config = Read-WorkflowConfig $configPath
+if ($Branch) {
+    $prefixes = @(Get-BranchPrefixes $config)
+    if (-not (Test-BranchPrefix $Branch $prefixes)) {
+        Fail "Invalid -Branch: '$Branch' (must start with one of $(Format-BranchPrefixes $prefixes); config.json branch_prefixes)"
+    }
+}
 
 # --- 前提チェック: 作業グループの完了判定(next-task と同じグループ判定) ---
 $lines = @(Split-TaskLines ([System.IO.File]::ReadAllText((Join-Path (Get-Location) $tasksPath), [System.Text.Encoding]::UTF8)))
@@ -68,13 +74,8 @@ foreach ($t in $stateTasks) { $status[$t.id] = $t.status }
 
 # config.json が無い・読めない場合は branch_per_group の既定値(true)を使う
 $branchPerGroup = $true
-try {
-    $config = Get-Content $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($config.PSObject.Properties['branch_per_group'] -and $null -ne $config.branch_per_group) {
-        $branchPerGroup = [bool]$config.branch_per_group
-    }
-} catch {
-    $branchPerGroup = $true
+if ($null -ne $config -and $config.PSObject.Properties['branch_per_group'] -and $null -ne $config.branch_per_group) {
+    $branchPerGroup = [bool]$config.branch_per_group
 }
 
 $groupOf = @{}
@@ -191,9 +192,10 @@ try {
         Fail 'No group with unfinished tasks remains; nothing to advance to'
     }
 
-    & git switch main 1> $null 2> $errFile
+    $baseBranch = Get-BaseBranch $config
+    & git switch $baseBranch 1> $null 2> $errFile
     $gitCode = $LASTEXITCODE
-    if ($gitCode -ne 0) { Fail "git switch main failed (exit $gitCode): $([System.IO.File]::ReadAllText($errFile))" $gitCode }
+    if ($gitCode -ne 0) { Fail "git switch $baseBranch failed (exit $gitCode): $([System.IO.File]::ReadAllText($errFile))" $gitCode }
 
     & git pull --ff-only 1> $null 2> $errFile
     $gitCode = $LASTEXITCODE

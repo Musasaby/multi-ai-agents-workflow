@@ -493,6 +493,45 @@ Invoke-TestCase "sync: --set-branch は develop/ 以外を拒否する" {
     Assert-Eq "main" (Get-StateBranch) "branch unchanged"
 }
 
+Invoke-TestCase "sync: --set-branch は既定で develop- 始まりも受け付ける" {
+    Set-Tasks $basicTasks
+    Set-State 'T1:done' 'T2:pending' 'T3:pending' 'T4:pending'
+    Invoke-Script state-sync.ps1 -SetBranch -Branch develop-fix
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "develop-fix" (Get-StateBranch) "branch written"
+}
+
+Invoke-TestCase "sync: --set-branch は config.json の branch_prefixes に従う" {
+    Set-Tasks $basicTasks
+    Set-State 'T1:done' 'T2:pending' 'T3:pending' 'T4:pending'
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg | Add-Member -NotePropertyName branch_prefixes -NotePropertyValue @('feature/') -Force
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+    Invoke-Script state-sync.ps1 -SetBranch -Branch develop/x
+    Assert-Eq 1 $script:Code "exit code on develop/x"
+    Assert-Contains $script:Err "'feature/'" "stderr"
+    Assert-Eq "main" (Get-StateBranch) "branch unchanged"
+    Invoke-Script state-sync.ps1 -SetBranch -Branch feature/x
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "feature/x" (Get-StateBranch) "branch written"
+}
+
+Invoke-TestCase "sync: --set-branch は branch_prefixes が配列でなければ既定を使う" {
+    Set-Tasks $basicTasks
+    Set-State 'T1:done' 'T2:pending' 'T3:pending' 'T4:pending'
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg | Add-Member -NotePropertyName branch_prefixes -NotePropertyValue 'feature/' -Force
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+    Invoke-Script state-sync.ps1 -SetBranch -Branch feature/x
+    Assert-Eq 1 $script:Code "exit code on feature/x"
+    Assert-Eq "main" (Get-StateBranch) "branch unchanged"
+    Invoke-Script state-sync.ps1 -SetBranch -Branch develop/x
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "develop/x" (Get-StateBranch) "branch written"
+}
+
 # ---------- state-sync: 挿入 (#13) ----------
 
 Invoke-TestCase "insert: pendingの前に挿入" {

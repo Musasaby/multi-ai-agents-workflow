@@ -13,8 +13,9 @@ set -uo pipefail
 #              ただしローカルのブランチに origin/<branch> へ未 push のコミットがある、または
 #              origin/<branch> が無い場合は exit 10(PR の更新へ。fetch はしない)
 #   - CLOSED → PR がマージされずに閉じている。stderr に説明、exit 9(エスカレーション)
-#   - MERGED → main を最新化(git switch main + git pull --ff-only)し、--branch で指定した
-#              名前(develop/ 始まり。必須)のブランチを作成・切替。state.json の branch を
+#   - MERGED → base_branch(config.json。既定 main)を最新化(git switch <base_branch> +
+#              git pull --ff-only)し、--branch で指定した名前(config.json の
+#              branch_prefixes のいずれかで始まること。既定 develop/ と develop-。必須)のブランチを作成・切替。state.json の branch を
 #              新ブランチ名、group を次のグループ(未完了タスクを含む最初のグループ)に更新
 #              して exit 0。stdout に "ADVANCED <新ブランチ名> <新グループ名>"
 # exit: 0=切替完了 / 1=使い方・前提不備 / 7=PR 未作成 / 8=マージ待ち / 9=PR 閉鎖(未マージ) /
@@ -39,10 +40,6 @@ while [ $# -gt 0 ]; do
 $USAGE" >&2; exit 1 ;;
     esac
 done
-if [ -n "$NEW_BRANCH" ] && [ "${NEW_BRANCH#develop/}" = "$NEW_BRANCH" ]; then
-    echo "Invalid --branch: '$NEW_BRANCH' (must start with 'develop/')" >&2
-    exit 1
-fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/../../.."
@@ -51,6 +48,23 @@ ROOT="$(pwd)"
 TASKS_PATH="$ROOT/.agents/workflow/tasks.md"
 STATE_PATH="$ROOT/.agents/workflow/state.json"
 CONFIG_PATH="$ROOT/.agents/workflow/config.json"
+
+# --branch の接頭辞を config.json の branch_prefixes で検査する(不一致なら何も書き換えず exit 1)
+if [ -n "$NEW_BRANCH" ]; then
+    PREFIX_ERR="$(python3 - "$(cygpath -m "$SCRIPT_DIR" 2>/dev/null || echo "$SCRIPT_DIR")" "$(cygpath -m "$CONFIG_PATH" 2>/dev/null || echo "$CONFIG_PATH")" "$NEW_BRANCH" <<'PY' | tr -d '\r'
+import sys
+sys.path.insert(0, sys.argv[1])
+import tasklib
+prefixes = tasklib.branch_prefixes(tasklib.load_config(sys.argv[2]))
+if not tasklib.has_branch_prefix(sys.argv[3], prefixes):
+    print(tasklib.format_branch_prefixes(prefixes))
+PY
+)"
+    if [ -n "$PREFIX_ERR" ]; then
+        echo "Invalid --branch: '$NEW_BRANCH' (must start with one of $PREFIX_ERR; config.json branch_prefixes)" >&2
+        exit 1
+    fi
+fi
 
 for p in "$TASKS_PATH" "$STATE_PATH"; do
     if [ ! -f "$p" ]; then
@@ -248,10 +262,18 @@ fi
 
 GIT_ERR_FILE="$(mktemp)"
 
-git switch main > /dev/null 2> "$GIT_ERR_FILE"
+BASE_BRANCH="$(python3 - "$(to_py_path "$SCRIPT_DIR")" "$(to_py_path "$CONFIG_PATH")" <<'PY' | tr -d '\r'
+import sys
+sys.path.insert(0, sys.argv[1])
+import tasklib
+print(tasklib.base_branch(tasklib.load_config(sys.argv[2])))
+PY
+)"
+
+git switch "$BASE_BRANCH" > /dev/null 2> "$GIT_ERR_FILE"
 GIT_CODE=$?
 if [ "$GIT_CODE" -ne 0 ]; then
-    echo "git switch main failed (exit $GIT_CODE): $(cat "$GIT_ERR_FILE")" >&2
+    echo "git switch $BASE_BRANCH failed (exit $GIT_CODE): $(cat "$GIT_ERR_FILE")" >&2
     exit "$GIT_CODE"
 fi
 
