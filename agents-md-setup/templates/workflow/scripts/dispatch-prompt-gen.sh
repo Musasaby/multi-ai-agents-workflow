@@ -55,9 +55,10 @@ PROMPT_PATH_PY="$(to_py_path "$PROMPT_PATH")"
 # 対象タスク = state.json で done かつ commit が git log origin/<base>..HEAD に含まれるもの。
 # 出力先は runs/pr-<連番>-1/prompt.md。stdout に "RunId: pr-<連番>" を出す。
 if [ "$PR_MODE" = true ]; then
-    BASE_BRANCH="main"
+    BASE_BRANCH="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import tasklib; print(tasklib.base_branch(tasklib.load_config(sys.argv[2])))' \
+        "$(to_py_path "$SCRIPT_DIR")" "$CONFIG_PATH_PY" | tr -d '\r')"
     BRANCH="$(git branch --show-current)"
-    if [ -z "$BRANCH" ] || [ "$BRANCH" = "$BASE_BRANCH" ]; then
+    if [ -z "$BRANCH" ] || [ "$BRANCH" = "main" ] || [ "$BRANCH" = "$BASE_BRANCH" ]; then
         echo "PR mode must be run on a work branch (current: '${BRANCH:-detached HEAD}')" >&2
         exit 1
     fi
