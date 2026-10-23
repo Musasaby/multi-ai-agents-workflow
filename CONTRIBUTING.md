@@ -69,11 +69,23 @@ pwsh -NoProfile -File tests/run-all.ps1
 1 行ずつ出力します。最後に失敗したファイルの一覧を出し、1 本でも失敗すれば exit 1、
 すべて成功なら exit 0 になります。
 
-既定は直列実行ですが、`--jobs <N>`(`run-all.ps1` は `-Jobs <N>`)を付けると
-テストファイル単位の並列実行になります。並列実行時も各ファイルの出力は混ぜず、
-実行後にファイルごとにまとめて出します。
+既定はテストファイル単位の並列実行で、同時実行数は論理 CPU 数です。1 行目に `Jobs: <同時実行数>` を出します。
+`--jobs <N>`(`run-all.ps1` は `-Jobs <N>`)で同時実行数を指定でき、直列にするときは
+`--jobs 1`(`-Jobs 1`)を付けます。直列のときは各ファイルの出力をそのまま流し、
+並列のときは各ファイルの出力を混ぜず、実行後にファイルごとにまとめて出します。
 
 POSIX 版のシグナル終了のテスト(Python 経由の経路)は Linux でのみ実行されます(Windows ではスキップ)。
+
+## どこで何を確かめるか
+
+テスト一式(`run-all`)は直列で 13〜18 分かかり、子エージェントの Bash は 10 分で打ち切られます。
+そのため、確かめる場所を次のように分けます。タスクの受け入れ基準にはテスト一式(`run-all`)を書きません。
+
+- 子エージェント: 変更したスクリプトに対応するテストファイル(`tests/test-<名前>.sh` と `.ps1`。
+  1 つずつ別のコマンドで実行する)と `tests/syntax-check.ps1`
+- 親エージェント: 子の完了報告のテスト結果を確かめる。レビューでテスト一式を再実行しない。
+  `tests/` の共通部分(`lib.*`・`run-all.*`)を変えたときなど影響が広いときだけ、並列で実行する
+- GitHub Actions: テスト一式
 
 ## 品質ゲートと skill のサイズ
 
@@ -101,10 +113,11 @@ pwsh -NoProfile -File tests/skill-size.ps1
 
 ## CI
 
-GitHub Actions(`.github/workflows/test.yml`)が push と pull_request で全テストを実行します。
-`ubuntu-latest` では `bash tests/run-all.sh` を、`windows-latest` では `pwsh -NoProfile -File tests/run-all.ps1` と
-`pwsh -NoProfile -File tests/syntax-check.ps1` を実行します。POSIX 版のシグナル終了テストなど Linux でしか
-通らない経路の結果は、この CI で確認します。
+GitHub Actions(`.github/workflows/test.yml`)が、`main` への push と pull_request を起動条件にして、全テストを実行します。
+PR に続けて push すると、古い実行は取り消されます。
+`ubuntu-latest` では `bash tests/run-all.sh --jobs 4` を、`windows-latest` では
+`pwsh -NoProfile -File tests/run-all.ps1 -Jobs 4` と `pwsh -NoProfile -File tests/syntax-check.ps1` を実行します。
+POSIX 版のシグナル終了テストなど Linux でしか通らない経路の結果は、この CI で確認します。
 
 ## 改行コード
 
