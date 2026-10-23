@@ -5,8 +5,11 @@ state-sync.sh / next-task.sh / dispatch-prompt-gen.sh から import して使う
 グループ区切り行の厳密フォーマット: `<!-- グループ <名前> -->` または
 `<!-- グループ <名前>: <説明> -->`(<名前> は空白と ':' を含まない文字列)
 """
+import json
 import re
 
+DEFAULT_BASE_BRANCH = 'main'
+DEFAULT_BRANCH_PREFIXES = ['develop/', 'develop-']
 HEADING_RE = re.compile(r'^## (T\d+):\s*(.+)')
 DEP_LINE_RE = re.compile(r'^(\s*-\s+\*\*依存\*\*:)[ \t]*(.*?)[ \t]*$')
 TASK_ID_RE = re.compile(r'^T\d+$')
@@ -23,6 +26,41 @@ REQ_FORMAT_HINT = "expected 'なし' or comma-separated requirement IDs like 'R1
 
 class TaskFileError(Exception):
     pass
+
+
+def load_config(config_path):
+    """config.json を dict で返す。無い・読めない・dict でないときは {}。"""
+    try:
+        with open(config_path, encoding='utf-8-sig') as f:
+            config = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return config if isinstance(config, dict) else {}
+
+
+def base_branch(config):
+    """base_branch が空でない文字列ならそれ、それ以外は 'main'。"""
+    value = config.get('base_branch')
+    if isinstance(value, str) and value:
+        return value
+    return DEFAULT_BASE_BRANCH
+
+
+def branch_prefixes(config):
+    """branch_prefixes が空でない文字列だけの空でない list ならそのコピー、それ以外は既定のコピー。"""
+    value = config.get('branch_prefixes')
+    if (isinstance(value, list) and value
+            and all(isinstance(p, str) and p for p in value)):
+        return list(value)
+    return list(DEFAULT_BRANCH_PREFIXES)
+
+
+def has_branch_prefix(branch, prefixes):
+    return any(branch.startswith(p) for p in prefixes)
+
+
+def format_branch_prefixes(prefixes):
+    return ', '.join("'" + p + "'" for p in prefixes)
 
 
 def split_lines(content):

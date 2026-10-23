@@ -33,8 +33,9 @@ if ($SetBranch) {
         $newBranch = ("$(git branch --show-current)").Trim()
         if (-not $newBranch) { Fail "Cannot determine the branch (detached HEAD?); pass a branch name with -Branch" }
     }
-    if (-not $newBranch.StartsWith('develop/', [System.StringComparison]::Ordinal)) {
-        Fail "Branch must start with 'develop/': $newBranch"
+    $prefixes = @(Get-BranchPrefixes (Read-WorkflowConfig "$Root/.agents/workflow/config.json"))
+    if (-not (Test-BranchPrefix $newBranch $prefixes)) {
+        Fail "Branch must start with one of $(Format-BranchPrefixes $prefixes) (config.json branch_prefixes): $newBranch"
     }
     $state = Get-Content $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json
     $old = $state.branch

@@ -4,7 +4,8 @@
 #   state-sync.sh                                 tasks.md の新規タスク・タイトル変更を state.json に反映する
 #   state-sync.sh --insert <ID> --before <ID,...> 新タスクを pending の後続タスクの依存欄に挿入する
 #   state-sync.sh --set-branch [<名前>]           state.json の branch を <名前>(省略時は現在のブランチ)にする。
-#                                                 develop/ で始まる名前のみ。tasks.md は読まない
+#                                                 config.json の branch_prefixes(既定 develop/, develop-)で
+#                                                 始まる名前のみ。tasks.md は読まない
 set -euo pipefail
 
 # On Windows (Git Bash + native python3), argv/file I/O default to the
@@ -73,15 +74,28 @@ if [ "$SET_BRANCH" = true ]; then
             exit 1
         fi
     fi
-    case "$NEW_BRANCH" in
-        develop/*) ;;
-        *) echo "Branch must start with 'develop/': $NEW_BRANCH" >&2; exit 1 ;;
-    esac
     if command -v cygpath > /dev/null 2>&1; then
         STATE_PATH_SB="$(cygpath -m "$STATE_PATH")"
+        SCRIPT_DIR_SB="$(cygpath -m "$SCRIPT_DIR")"
+        CONFIG_PATH_SB="$(cygpath -m "$ROOT/.agents/workflow/config.json")"
     else
         STATE_PATH_SB="$STATE_PATH"
+        SCRIPT_DIR_SB="$SCRIPT_DIR"
+        CONFIG_PATH_SB="$ROOT/.agents/workflow/config.json"
     fi
+    python3 - "$SCRIPT_DIR_SB" "$CONFIG_PATH_SB" "$NEW_BRANCH" <<'PY' || exit 1
+import sys
+
+script_dir, config_path, branch = sys.argv[1:4]
+sys.path.insert(0, script_dir)
+import tasklib
+
+prefixes = tasklib.branch_prefixes(tasklib.load_config(config_path))
+if not tasklib.has_branch_prefix(branch, prefixes):
+    sys.stderr.write('Branch must start with one of ' + tasklib.format_branch_prefixes(prefixes)
+                     + ' (config.json branch_prefixes): ' + branch + '\n')
+    sys.exit(1)
+PY
     python3 - "$STATE_PATH_SB" "$NEW_BRANCH" <<'PY'
 import datetime, json, sys
 
