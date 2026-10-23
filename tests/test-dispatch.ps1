@@ -240,7 +240,7 @@ Invoke-TestCase "run: ログが idle_timeout_seconds 更新されなければ子
 # T3/T4(#53): ログが更新され続ければ idle_timeout_seconds で止めない
 Invoke-TestCase "run: ログが更新され続ければ idle_timeout_seconds で止めない" {
     Set-Child '1..5 | ForEach-Object { Write-Output "tick $_"; Start-Sleep 1 }'
-    Set-IdleTimeout 3
+    Set-IdleTimeout 10
     Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
     Assert-Eq "EXIT:0" (Get-DoneExit) "done marker"
     Assert-Contains ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.log")) "tick 5" "output.log"

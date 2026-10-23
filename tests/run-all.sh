@@ -1,6 +1,7 @@
 #!/bin/bash
 # 全テスト(tests/test-*.sh)を名前順に実行する。
-# --jobs <N> でテストファイル単位の並列実行(既定は 1 = 直列)。
+# --jobs <N> でテストファイル単位の並列実行(既定は論理 CPU 数。--jobs 1 で直列)。
+# テストファイルの一覧を作った後、1 行目として「Jobs: <同時実行数>」を出す。
 # 直列では各テストの出力をそのまま流し、各ファイルが終わり次第
 # PASS / FAIL と所要秒数を 1 行ずつ出す(作業ディレクトリは作らない)。
 # 並列では各ファイルの出力をログに隔離し、実行後に
@@ -11,7 +12,7 @@
 set -u
 cd "$(dirname "$0")/.." || exit 1
 
-jobs=1
+jobs=""
 prev=""
 for arg in "$@"; do
     if [ "$prev" = "--jobs" ]; then
@@ -32,6 +33,13 @@ if [ "$prev" = "--jobs" ]; then
     echo "ERROR: --jobs requires a value" >&2
     exit 2
 fi
+if [ -z "$jobs" ]; then
+    jobs="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
+    case "$jobs" in
+        ''|*[!0-9]*) jobs=1 ;;
+    esac
+    [ "$jobs" -ge 1 ] || jobs=1
+fi
 
 files=""
 for f in tests/test-*.sh; do
@@ -43,6 +51,8 @@ total=0
 for f in $files; do
     total=$((total + 1))
 done
+
+echo "Jobs: $jobs"
 
 failed=0
 failed_files=""

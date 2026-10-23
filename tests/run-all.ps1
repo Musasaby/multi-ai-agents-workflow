@@ -1,5 +1,6 @@
 ﻿# 全テスト(tests/test-*.ps1)を名前順に実行する。
-# -Jobs <N> でテストファイル単位の並列実行(既定は 1 = 直列)。
+# -Jobs <N> でテストファイル単位の並列実行(既定は論理 CPU 数。-Jobs 1 で直列)。
+# テストファイルの一覧を作った後、1 行目として「Jobs: <同時実行数>」を出す。
 # 直列では各テストの出力をそのまま流し、各ファイルが終わり次第
 # PASS / FAIL と所要秒数を 1 行ずつ出す(作業ディレクトリは作らない)。
 # 並列では各ファイルの出力をログに隔離し、実行後に
@@ -7,7 +8,7 @@
 # 最後に失敗したファイルの一覧(または ALL PASSED)を出す。
 # 1 本でも失敗すれば exit 1、すべて成功なら exit 0。
 # (syntax-check.ps1 は品質ゲートとして別に実行するため、ここには含めない)
-param([int]$Jobs = 1)
+param([int]$Jobs = [Environment]::ProcessorCount)
 $ErrorActionPreference = "Stop"
 Set-Location (Resolve-Path "$PSScriptRoot/..")
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -68,6 +69,8 @@ $invokeTestText = @'
     [pscustomobject]@{ ExitCode = $exitCode; Seconds = $secs }
 '@
 $invokeTest = [scriptblock]::Create($invokeTestText)
+
+Write-Host "Jobs: $Jobs"
 
 $failed = 0
 $failedFiles = @()

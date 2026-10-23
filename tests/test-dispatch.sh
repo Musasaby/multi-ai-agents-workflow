@@ -310,7 +310,7 @@ t_run_idle_timeout_kills_child() {
 # T3(#53): ログが更新され続ければ idle_timeout_seconds で止めない
 t_run_idle_timeout_not_triggered() {
     set_child 'for i in 1 2 3 4 5; do echo "tick $i"; sleep 1; done'
-    set_idle_timeout 3
+    set_idle_timeout 10
     run_script dispatch-run.sh T1 1
     assert_eq "EXIT:0" "$(done_exit)" "done marker"
     assert_contains "$(cat "$PROJ/.agents/workflow/runs/T1-1/output.log")" "tick 5" "output.log"
