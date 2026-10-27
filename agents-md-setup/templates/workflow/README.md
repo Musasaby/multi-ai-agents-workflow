@@ -30,6 +30,7 @@
 │   ├── workflow-setup.ps1 / .sh  セットアップ(テンプレート側から実行)
 │   ├── workflow-update.ps1 / .sh  `npx skills update` 後の確認(テンプレート側から実行)
 │   ├── workflow-sync-scripts.ps1 / .sh
+│   ├── workflow-logs.ps1 / .sh  複数の run のログを1つの画面に流す
 │   └── workflow-archive.ps1 / .sh
 ├── runs/<タスクID>-<試行回数>/   ← 実行単位の生成物(.gitignore対象。PR作成の単発依頼は pr-<N>-1/)
 │   ├── prompt.md        生成プロンプト
@@ -457,7 +458,8 @@ exit 0 の場合も生成されたプロンプト全文は会話に読み込ま�
 `healthcheck_command` / `warmup_command` は sh 版では `bash -c`、ps1 版では `pwsh -Command` で実行する。
 
 stdout は成功時に `Run: <ID>-<N>`・`Log: <output.log のパス>`・`Watch:`(sh 版は `tail -f <パス>`、
-ps1 版は `Get-Content <パス> -Wait -Tail 20`)・`Next: wait` を出す。失敗時は最後の行に `Next: escalate reason=<理由>` を出す(使い方不備の exit 1 を除く)。
+ps1 版は `Get-Content <パス> -Wait -Tail 20`)・`Watch all:`(全 run のログをまとめて流す `workflow-logs` のコマンド。
+sh 版は `bash .agents/workflow/scripts/workflow-logs.sh`、ps1 版は `pwsh -NoProfile -File .agents/workflow/scripts/workflow-logs.ps1`)・`Next: wait` を出す。失敗時は最後の行に `Next: escalate reason=<理由>` を出す(使い方不備の exit 1 を除く)。
 
 ### dispatch-run — 子エージェントCLIのデタッチ実行
 
@@ -630,6 +632,40 @@ run の完了をポーリングで待つ。1回の呼び出しで `--max-wait` �
 | `1` | 使い方不備、または run が起動されていない |
 | `2` | まだ実行中(この呼び出しの待ちが `--max-wait` に達した)。最後の行は `Next: wait`。再度呼んで待ちを続ける |
 | `3` | 経過が `child_agent.timeout_seconds` を超えた。最後の行は `Next: escalate reason=timeout` |
+
+### workflow-logs — 複数の run のログを1つの画面に流す
+
+`tail -f` の複数 run 版。実行中の子エージェント run の `output.log` を1つの画面にまとめて流す。
+何も書き換えない。sh 版は python3 が必要(ps1 版は不要)。
+
+```powershell
+.agents/workflow/scripts/workflow-logs.ps1 [-Run <ID>-<N>[,...]] [-Tail 20] [-Interval 1] [-Duration <秒>] [-Once]
+```
+```bash
+.agents/workflow/scripts/workflow-logs.sh [--run <ID>-<N>]... [--tail 20] [--interval 1] [--duration <秒>] [--once]
+```
+
+- `--run`: 指定した名前の run だけを追う(複数指定可。ps1 版は `-Run` にカンマ区切りで渡す。形式は `^[A-Za-z0-9_-]+-[0-9]+$`)。
+  ディレクトリがまだ無ければ現れるまで待つ
+- `--tail`: run を初めて見つけたとき、`output.log` の末尾から出す行数(既定 20)
+- `--interval`: run の探し直しとログ確認の間隔(秒、既定 1)
+- `--duration`: 指定した秒数で終了する
+- `--once`: 対象の run の末尾を出して終了する
+- 対象の run: `--run` があればその名前の run。無ければ `.agents/workflow/runs/*/` のうち
+  `guard.sha256` があり `done` が無いもの(`--interval` ごとに探し直し、新しい run を加える)。
+  1回起動すれば、以後に dispatch した run のログもまとめて流れる
+- 出力: 各行の先頭に `[<run>] ` を付ける。stdout が端末で環境変数 `NO_COLOR` が無ければ、接頭辞に
+  run ごとに違う色(ANSI 31〜36)を付ける。初回は末尾の `--tail` 行、以後は追記された完成した行だけ。
+  `output.log` が短くなったら先頭から読み直し `[<run>] --- log truncated` を出す。
+  `done` が現れたら残りの行(末尾の改行の無い行を含む)と `[<run>] --- finished (<EXIT の値>)` を出し、
+  その run の追跡をやめる。開始時に stderr へ `Watching: ...` を出す
+- 終わり方: `--once` は末尾を出して終了 / `--duration` は指定秒数で終了 /
+  `--run` 指定時は指定した run がすべて終わったら終了 / それ以外は Ctrl+C まで続ける(traceback は出さない)
+
+| exit | 意味 |
+|------|------|
+| `0` | 正常に終わった(Ctrl+C を含む) |
+| `1` | 使い方不備(未知の引数・値の無いオプション・形式不正・数値でない値)、または python3 が無い(sh 版) |
 
 ### git-state — git 状態の4行出力
 
