@@ -189,5 +189,6 @@ done
 echo "Run: ${TASK_ID}-${ATTEMPT}"
 echo "Log: $RUN_DIR/output.log"
 echo "Watch: tail -f $RUN_DIR/output.log"
+echo "Watch all: bash .agents/workflow/scripts/workflow-logs.sh"
 echo "Next: wait"
 exit 0
