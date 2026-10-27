@@ -70,6 +70,8 @@
 | `branch_per_group` | tasks.md にグループ区切り(`<!-- グループ <名前> -->`)がある場合に、グループ単位の PR 作成・ブランチ切替(next-task の exit 6 と `group-advance`)を必須手順にする。`false` ならグループを解釈せず全タスクを1つのまとまりとして扱う。config.json が無い・読めない場合の既定値も `true` | `true` |
 | `verify_before_commit` | コミット直前に親がテストコマンドを1回実行する最終ゲート | `false` |
 | `max_fix_retries` | レビュー不合格時の子エージェントへの再依頼上限。超過で親のサブエージェントにフォールバック | `2` |
+| `max_parallel` | 同時に実行するタスク数の上限。2 以上にすると next-task が、依存がすべて完了していて変更対象のファイルが互いに(実行中のタスクとも)重ならないタスクを同時に選び、各 run を worktree で実行する。provider の利用上限に当たりやすくなるので、2 から試す | `1` |
+| `parallel_exclusive_files` | 単独で実行するファイルの配列(ルート相対のパスで完全一致)。変更対象(参照ファイル欄で `(変更対象` が付いたパス)にこれらのファイルを1つでも含むタスクは、ほかのタスクが実行中のときは選ばれず、選ばれたときはほかのタスクと一緒に選ばれない。変更対象が1つも無いタスクも同じく単独になる。テンプレートの config.json には書かれていないので、変えたいときに足す | `["AGENTS.md", "README.md"]` |
 | `comprehension_check.enabled` | タスク合格時に理解確認質問を生成するか | `false` |
 | `comprehension_check.questions_per_task` | タスクあたりの質問数 | `3` |
 | `task_sizing.max_acceptance_criteria` | 受け入れ基準のチェックボックス数のしきい値。`dispatch-prompt-gen` が、これを超えると WARN を出す。1以上の整数。値が無ければ既定値、不正値は WARN を出して既定値 | `5` |

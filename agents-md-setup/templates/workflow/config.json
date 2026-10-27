@@ -20,6 +20,7 @@
     "child_dispatch_command": ""
   },
   "max_fix_retries": 2,
+  "max_parallel": 1,
   "comprehension_check": {
     "enabled": false,
     "questions_per_task": 3
