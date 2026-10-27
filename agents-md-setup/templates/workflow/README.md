@@ -37,6 +37,9 @@
 │   ├── fix-notes.md     リトライ時のレビュー指摘(親が作成)
 │   ├── guard.sha256     起動時の管理ファイルの SHA-256(dispatch-run が作成、dispatch-check が改ざん検知に使う)
 │   ├── git-state.txt    起動時の git 状態の4行(git-state の出力。dispatch-run が作成、dispatch-check が改ざん検知に使う)
+│   ├── worktree/        max_parallel が 2 以上のとき、その run の子が作業する git worktree(collect で消える)
+│   ├── worktree.txt     worktree の path / branch / base の3行(dispatch-worktree create が作成、dispatch-run・dispatch-check が読む)
+│   ├── changes.patch    collect が worktree の変更から作る差分(本体へ git apply する)
 │   ├── tmp/             子エージェントの一時ディレクトリ(TMPDIR・TEMP・TMP がここを指す。GIT_CEILING_DIRECTORIES はその親の runs/<タスクID>-<試行回数>/ を指す)
 │   ├── output.log       子エージェントの出力
 │   ├── done             完了マーカー(EXIT/END の2行)
@@ -303,6 +306,9 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 | 行動 | 意味 | 出すスクリプト |
 |------|------|----------------|
 | `dispatch <ID>` | そのタスクを dispatch する | next-task(exit 0) |
+| `dispatch <ID> <ID>...` | 同時に実行できる複数のタスクを dispatch する(`max_parallel` が 2 以上のとき) | next-task(exit 0) |
+| `wait <ID>...` | 実行中のタスクの完了を待つ(同時に始められるタスクが無い) | next-task(exit 5) |
+| `collect <ID>` | worktree の run の変更を本体へ取り込む(`dispatch-worktree collect`)。その後 review する | dispatch-check(exit 0、worktree の run) |
 | `review <ID>` | そのタスクをレビューする | next-task(exit 0、`in_review`)・dispatch-check(exit 0。PR 作成の run を除く) |
 | `wait` | 子がまだ実行中。完了を待つ | dispatch-start(exit 0)・dispatch-wait(exit 2)・dispatch-check(exit 2)・workflow-status(実行中の run があるとき) |
 | `finish` | 全タスク完了。サマリー報告へ | next-task(exit 3)・workflow-status |
@@ -691,6 +697,11 @@ config <git config ファイルの SHA-256(16進小文字)>
 ```
 
 `refs` は push で正当に変わる `refs/remotes` を含めない。
+
+`--ref <refname>`(ps1 は `-Ref <refname>`)を付けると、`refs` 行はその参照だけの
+`git for-each-ref` の出力の SHA-256 になる(参照が無ければ空の出力のハッシュ)。worktree の run が
+自分のブランチだけを見て、並列の他の run が作るブランチや参照の変化を改ざんと誤検知しないために使う。
+未知の引数や値の無い `--ref` は stderr に `Usage: git-state.sh [--ref <refname>]` を出して exit 1。
 `dispatch-run` が子の起動時にこの出力を `git-state.txt` に記録し、`dispatch-check` が実行後の
 出力と比べて、子がリポジトリのどこを変えたか(HEAD・ブランチ・参照・設定)を特定する。
 
@@ -1012,6 +1023,17 @@ state.json の並び順ではなく依存関係を見るため、挿入したタ
 1. `in_progress` / `in_review` のタスク(中断からの再開対象)があれば、その最初のもの
 2. なければ、依存タスクがすべて `done` の最初の `pending` タスク
 
+`max_parallel` が 2 以上のとき(config.json。整数で 1 以上のとき以外は 1 として扱う)は、
+`in_review` のタスクを先に返し、全 `done`(exit 3)・グループ完了(exit 6)の判定を通ったあと、
+依存がすべて `done` の `pending` タスクから、実行中のタスク(`in_progress`)とも互いにも
+変更対象のファイルが重ならないものを `max_parallel` から実行中の数を引いた数まで選ぶ。
+`parallel_exclusive_files`(文字列の配列。既定 `["AGENTS.md", "README.md"]`、空配列も有効)に
+挙げたファイルを変更対象に持つタスク(変更対象が1つも無いタスクも同じ)は単独で実行し、
+他のタスクが実行中のときは選ばず、選ぶときも他のタスクと一緒には選ばない。
+選べたら `Next: dispatch <ID> <ID>...`(exit 0)、選べず実行中のタスクがあれば
+`Next: wait <ID>...`(exit 5)、どちらも無ければ blocked(exit 4)になる。
+`max_parallel` が 1 のときは従来どおり。
+
 ```powershell
 .agents/workflow/scripts/next-task.ps1
 ```
@@ -1029,6 +1051,7 @@ stdout に `<タスクID> <status>`(例: `T8 pending`)を出力する。config �
 exit code: `0`=該当タスクあり、`1`=tasks.md/state.json 不在・依存欄の不正(形式違反・
 存在しないID・自己依存・循環依存)、`3`=全タスク `done`、
 `4`=実行可能なタスクが無い(`failed` や未完了の依存で止まっている。原因を stderr に列挙)、
+`5`=実行中のタスクの完了待ち(`max_parallel` が 2 以上のとき。`Next: wait <ID>...`)、
 `6`=作業グループ完了(他グループに未完了あり。`group-advance` で分岐する)。
 
 stdout の最後の行には `Next:` 行を出す(「Next: 行」の節を参照)。
