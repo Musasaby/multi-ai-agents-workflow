@@ -117,6 +117,64 @@ t_collect_dirty() {
     assert_eq 1 "$([ -d "$WTDIR" ] && echo 1 || echo 0)" "worktree は残る"
 }
 
+# ---------- dispatch-run・dispatch-check(worktree の run) ----------
+
+WT_REPORT='echo "## 完了報告"; echo "- 変更ファイル: a.txt"; echo "- テスト結果: 全件パス"'
+
+# 子の本文 $1 を child.sh にして config の command_template に設定し、T1-1 の worktree を作る
+setup_wt_child() {
+    run_script dispatch-worktree.sh create T1 1
+    assert_eq 0 "$CODE" "create exit: $ERR"
+    printf '#!/bin/bash
+%s
+' "$1" > "$PROJ/.agents/workflow/runs/T1-1/worktree/child.sh"
+    # Windows では PATH 上の bash が WSL 版のことがあり、worktree の .git(Windows パス)を辿れない。
+    # git を使う子のため、今の bash の絶対パスで起動する
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" "$(py_path "$(command -v bash)")" <<'PY'
+import json, sys
+p = sys.argv[1]
+with open(p, encoding='utf-8') as f:
+    cfg = json.load(f)
+cfg['child_agent']['command_template'] = '"' + sys.argv[2] + '" ./child.sh "{prompt}"'
+with open(p, 'w', encoding='utf-8') as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+PY
+    printf 'prompt
+' > "$PROJ/.agents/workflow/runs/T1-1/prompt.md"
+}
+
+t_run_check_ok() {
+    setup_wt_child "echo hello > a.txt; $WT_REPORT"
+    run_script dispatch-run.sh T1 1
+    local run="$PROJ/.agents/workflow/runs/T1-1"
+    assert_eq "EXIT:0" "$(head -1 "$run/done")" "done marker"
+    assert_file_exists "$run/worktree/a.txt" "子は worktree の中で a.txt を作る"
+    assert_file_absent "$PROJ/a.txt" "本体の作業ツリーは変わらない"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "check exit: $ERR"
+    assert_contains "$OUT" "Guard: ok" "guard ok"
+    assert_eq "Next: collect T1" "$(last_line)" "最後の行は Next: collect T1"
+}
+
+t_run_check_main_git() {
+    setup_wt_child "git -C \"$PROJ\" branch other; git -C \"$PROJ\" commit -q --allow-empty -m other; echo hello > a.txt; $WT_REPORT"
+    run_script dispatch-run.sh T1 1
+    assert_eq "EXIT:0" "$(head -1 "$PROJ/.agents/workflow/runs/T1-1/done")" "done marker"
+    assert_eq 1 "$(has_branch other && echo 1 || echo 0)" "子の実行中に本体で other ブランチができた"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "本体の git 変更では tampered にならない: $OUT"
+    assert_not_contains "$OUT" "git changed" "git changed は出ない"
+    assert_eq "Next: collect T1" "$(last_line)" "最後の行は Next: collect T1"
+}
+
+t_run_check_commit() {
+    setup_wt_child "echo hello > a.txt; git add a.txt; git commit -q -m child; $WT_REPORT"
+    run_script dispatch-run.sh T1 1
+    run_script dispatch-check.sh T1 1
+    assert_eq 8 "$CODE" "worktree で commit すると exit 8"
+    assert_contains "$OUT" "git changed: head" "git changed: head"
+}
+
 echo "test-dispatch-worktree.sh"
 test_case "dispatch-worktree: create で worktree・ブランチ・worktree.txt ができる" t_create
 test_case "dispatch-worktree: remove で worktree とブランチが消える" t_remove
@@ -124,4 +182,7 @@ test_case "dispatch-worktree: 試行 2 の create で前の変更を持ち越す
 test_case "dispatch-worktree: collect で変更が本体に入り worktree が消える" t_collect
 test_case "dispatch-worktree: collect で本体と衝突すると exit 40 で worktree が残る" t_collect_conflict
 test_case "dispatch-worktree: collect で本体が dirty だと exit 20" t_collect_dirty
+test_case "dispatch-worktree: worktree の run を dispatch-run で動かし dispatch-check が collect を返す" t_run_check_ok
+test_case "dispatch-worktree: 子の実行中に本体で branch・commit しても tampered にならない" t_run_check_main_git
+test_case "dispatch-worktree: 子が worktree で commit すると tampered(exit 8)" t_run_check_commit
 summary

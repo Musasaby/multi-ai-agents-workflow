@@ -34,6 +34,21 @@ function Initialize-Collect {
     return "$script:Proj/.agents/workflow/runs/T1-1/worktree"
 }
 
+# 子の本文 $Body を worktree の child.ps1 にして config の command_template に設定し、T1-1 の worktree を作る
+function Initialize-WtChild {
+    param([string]$Body)
+    Invoke-Script dispatch-worktree.ps1 create T1 1
+    Assert-Eq 0 $script:Code "create exit: $($script:Err)"
+    Write-Plain "$script:Proj/.agents/workflow/runs/T1-1/worktree/child.ps1" $Body
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg.child_agent.command_template = 'pwsh -NoProfile -File ./child.ps1 "{prompt}"'
+    Write-Plain $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+    Write-Plain "$script:Proj/.agents/workflow/runs/T1-1/prompt.md" "prompt`n"
+}
+
+$WtReport = 'Write-Output "## 完了報告"; Write-Output "- 変更ファイル: a.txt"; Write-Output "- テスト結果: 全件パス"'
+
 Write-Host "test-dispatch-worktree.ps1"
 
 Invoke-TestCase "dispatch-worktree: create で worktree・ブランチ・worktree.txt ができる" {
@@ -125,6 +140,38 @@ Invoke-TestCase "dispatch-worktree: collect で本体が dirty だと exit 20" {
     Assert-Eq 20 $script:Code "exit 20"
     Assert-Eq "Next: escalate reason=dirty-tree" (Get-LastLine) "escalate reason=dirty-tree"
     Add-Result (Test-Path -LiteralPath $wt -PathType Container) "worktree は残る"
+}
+
+Invoke-TestCase "dispatch-worktree: worktree の run を dispatch-run で動かし dispatch-check が collect を返す" {
+    Initialize-WtChild "Set-Content a.txt hello; $WtReport"
+    Invoke-Script dispatch-run.ps1 T1 1
+    $run = "$script:Proj/.agents/workflow/runs/T1-1"
+    Assert-Eq "EXIT:0" (Get-Content "$run/done" -Encoding utf8)[0] "done marker"
+    Assert-FileExists "$run/worktree/a.txt" "子は worktree の中で a.txt を作る"
+    Assert-FileAbsent "$script:Proj/a.txt" "本体の作業ツリーは変わらない"
+    Invoke-Script dispatch-check.ps1 T1 1
+    Assert-Eq 0 $script:Code "check exit: $($script:Err)"
+    Assert-Contains $script:Out "Guard: ok" "guard ok"
+    Assert-Eq "Next: collect T1" (Get-LastLine) "最後の行は Next: collect T1"
+}
+
+Invoke-TestCase "dispatch-worktree: 子の実行中に本体で branch・commit しても tampered にならない" {
+    Initialize-WtChild "git -C '$script:Proj' branch other; git -C '$script:Proj' commit -q --allow-empty -m other; Set-Content a.txt hello; $WtReport"
+    Invoke-Script dispatch-run.ps1 T1 1
+    Assert-Eq "EXIT:0" (Get-Content "$script:Proj/.agents/workflow/runs/T1-1/done" -Encoding utf8)[0] "done marker"
+    Add-Result (Test-Branch 'other') "子の実行中に本体で other ブランチができた"
+    Invoke-Script dispatch-check.ps1 T1 1
+    Assert-Eq 0 $script:Code "本体の git 変更では tampered にならない: $($script:Out)"
+    Assert-NotContains $script:Out "git changed" "git changed は出ない"
+    Assert-Eq "Next: collect T1" (Get-LastLine) "最後の行は Next: collect T1"
+}
+
+Invoke-TestCase "dispatch-worktree: 子が worktree で commit すると tampered(exit 8)" {
+    Initialize-WtChild "Set-Content a.txt hello; git add a.txt; git commit -q -m child; $WtReport"
+    Invoke-Script dispatch-run.ps1 T1 1
+    Invoke-Script dispatch-check.ps1 T1 1
+    Assert-Eq 8 $script:Code "worktree で commit すると exit 8"
+    Assert-Contains $script:Out "git changed: head" "git changed: head"
 }
 
 Show-Summary
