@@ -202,6 +202,18 @@ PY
     assert_file_absent "$PROJ/.agents/workflow/state.json" "state.json moved"
 }
 
+t_worktree_removed() {
+    write_state "T1:done"
+    run_script dispatch-worktree.sh create T1 1
+    assert_eq 0 "$CODE" "create: $ERR"
+    assert_contains "$(git -C "$PROJ" worktree list)" "T1-1" "worktree exists"
+    run_script workflow-archive.sh myslug --force
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_not_contains "$(git -C "$PROJ" worktree list)" "T1-1" "worktree removed"
+    assert_eq "" "$(git -C "$PROJ" branch --list 'agents-run/T1-1')" "branch removed"
+    assert_file_absent "$PROJ/.agents/workflow/runs" "runs moved"
+}
+
 echo "test-workflow-archive.sh"
 test_case "全対象の移動と Archived: の出力" t_all_targets
 test_case "一部の対象だけ移動" t_partial_targets
@@ -217,4 +229,5 @@ test_case "PR 未作成で未マージのコミットがあれば exit 5" t_no_p
 test_case "PR 未作成で未マージのコミットが無ければアーカイブする" t_no_pr_no_new_commits
 test_case "PR 未作成でブランチが無ければアーカイブする" t_no_pr_no_branch
 test_case "PR 未作成のとき比較先は base_branch" t_no_pr_base_branch
+test_case "run の worktree とブランチも消してアーカイブする" t_worktree_removed
 summary

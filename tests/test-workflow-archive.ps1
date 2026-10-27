@@ -183,4 +183,16 @@ Invoke-TestCase "PR 未作成のとき比較先は base_branch" {
     Assert-FileAbsent "$script:Proj/.agents/workflow/state.json" "state.json moved"
 }
 
+Invoke-TestCase "run の worktree とブランチも消してアーカイブする" {
+    Set-State 'T1:done'
+    Invoke-Script dispatch-worktree.ps1 create T1 1
+    Assert-Eq 0 $script:Code "create: $($script:Err)"
+    Assert-Contains ("$(git -C $script:Proj worktree list)") "T1-1" "worktree exists"
+    Invoke-Script workflow-archive.ps1 myslug -Force
+    Assert-Eq 0 $script:Code "exit: $($script:Err)"
+    Assert-NotContains ("$(git -C $script:Proj worktree list)") "T1-1" "worktree removed"
+    Assert-Eq "" ("$(git -C $script:Proj branch --list 'agents-run/T1-1')".Trim()) "branch removed"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/runs" "runs moved"
+}
+
 Show-Summary

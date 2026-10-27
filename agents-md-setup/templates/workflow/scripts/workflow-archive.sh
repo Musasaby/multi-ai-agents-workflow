@@ -188,10 +188,32 @@ fi
 
 [ "$FORCE" -eq 1 ] || check_pr
 
+# runs/*/worktree.txt がある run の worktree とブランチを消す(失敗しても続ける)
+drop_run_worktrees() {
+    local txt wt branch
+    for txt in "$WORKFLOW_DIR"/runs/*/worktree.txt; do
+        [ -f "$txt" ] || continue
+        wt="$(sed -n 's/^path //p' "$txt" | head -n 1 | tr -d '\r')"
+        branch="$(sed -n 's/^branch //p' "$txt" | head -n 1 | tr -d '\r')"
+        branch="${branch#refs/heads/}"
+        [ -n "$branch" ] || branch="agents-run/$(basename "$(dirname "$txt")")"
+        if [ -n "$wt" ] && [ -d "$wt" ]; then
+            git worktree remove --force "$wt" >&2 || echo "worktree の削除に失敗しました: $wt" >&2
+        fi
+        if git rev-parse --verify -q "refs/heads/$branch" > /dev/null; then
+            git branch -D -q "$branch" >&2 || echo "ブランチの削除に失敗しました: $branch" >&2
+        fi
+    done
+}
+
+drop_run_worktrees
+
 mkdir -p "$ARCHIVE_DIR"
 
 for name in $EXISTING; do
     mv "$WORKFLOW_DIR/$name" "$ARCHIVE_DIR/$name"
 done
+
+git worktree prune >&2 || true
 
 echo "Archived: $ARCHIVE_DIR ($(echo "$EXISTING" | sed 's/^ //;s/ /, /g'))"
