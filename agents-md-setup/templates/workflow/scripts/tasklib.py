@@ -72,10 +72,15 @@ def strip_eol(line):
     return line.rstrip('\r\n')
 
 
+CHANGED_PATH_RE = re.compile(r'`([^`]+)`[(（]変更対象')
+CHANGED_LINENO_RE = re.compile(r':\d+(?:-\d+)?$')
+
+
 def parse_tasks(content):
     """tasks.md を解析し、出現順の [{'id','title','dep_raw','dep_line','group','group_raw','req_raw'}] を返す。
 
     req_raw は要件欄 '- **要件**: ...' の値(欄が無ければ None)。
+    changed は本文の `パス`(変更対象 ...) の行から取り出したパス(末尾の :行番号 は除く。出現順・重複なし)。
 
     dep_raw は依存欄の値(依存行が無ければ None)、dep_line は lines 上の行番号。
     group は所属グループ名: タスク見出しより前にある直近のグループ区切りの名前(区切りが
@@ -104,7 +109,7 @@ def parse_tasks(content):
                 if tid not in tasks:
                     order.append(tid)
                 current = {'id': tid, 'title': m.group(2).strip(), 'dep_raw': None, 'dep_line': None,
-                           'group': current_group, 'group_raw': None, 'req_raw': None}
+                           'group': current_group, 'group_raw': None, 'req_raw': None, 'changed': []}
                 tasks[tid] = current
             else:
                 current = None
@@ -123,6 +128,10 @@ def parse_tasks(content):
                 m = REQ_FIELD_RE.match(line)
                 if m:
                     current['req_raw'] = m.group(2)
+            for m in CHANGED_PATH_RE.finditer(line):
+                path = CHANGED_LINENO_RE.sub('', m.group(1))
+                if path not in current['changed']:
+                    current['changed'].append(path)
     # グループ欄による上書き(欄の名前が区切りに存在する場合のみ)
     for t in (tasks[tid] for tid in order):
         if t['group_raw'] is not None and t['group_raw'] in declared:
