@@ -9,7 +9,11 @@
 #       (exit 0=dispatch/review <タスクID>、exit 3=finish、exit 4=escalate reason=blocked、
 #       exit 6=group-advance。exit 1 では出さない)
 # exit: 0=該当あり / 1=使い方・tasks.md/state.json 不備 / 3=全タスク done /
-#       4=実行可能なタスクなし / 6=作業グループ完了(他グループに未完了あり)
+#       4=実行可能なタスクなし / 5=実行中のタスクの完了待ち(max_parallel が 2 以上) /
+#       6=作業グループ完了(他グループに未完了あり)
+# max_parallel(config.json)が 2 以上のときは、in_review があればそれを優先し、なければ
+# in_progress を active として空きの分だけ、変更対象(changed)が重ならない pending を
+# "Next: dispatch <ID> <ID> ..." で複数選ぶ
 Set-Location $PSScriptRoot\..\..\..
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
@@ -48,13 +52,30 @@ if ($stateTasks.Count -eq 0) {
 
 # config.json が無い・読めない場合は branch_per_group の既定値(true)を使う
 $branchPerGroup = $true
+# max_parallel: 整数で 2 以上のときだけ並列選択を行う(無い・1 未満・整数でなければ 1)
+$maxParallel = 1
+$exclusiveFiles = @('AGENTS.md', 'README.md')
 try {
     $config = Get-Content $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($config.PSObject.Properties['branch_per_group'] -and $null -ne $config.branch_per_group) {
         $branchPerGroup = [bool]$config.branch_per_group
     }
+    if ($config.PSObject.Properties['max_parallel']) {
+        $mp = $config.max_parallel
+        if (($mp -is [int] -or $mp -is [long]) -and $mp -ge 1) { $maxParallel = [int]$mp }
+    }
+    if ($config.PSObject.Properties['parallel_exclusive_files']) {
+        $ef = $config.parallel_exclusive_files
+        if ($ef -is [array] -and @($ef | Where-Object { $_ -isnot [string] }).Count -eq 0) {
+            $exclusiveFiles = @($ef)
+        }
+    }
 } catch {
     $branchPerGroup = $true
+}
+$changedOf = @{}
+foreach ($t in $tasks) {
+    $changedOf[$t.id] = if ($null -eq $t.changed) { @() } else { @($t.changed) }
 }
 
 $groupOf = @{}
@@ -76,7 +97,7 @@ function Get-UnfinishedGroup {
 }
 
 foreach ($t in $stateTasks) {
-    if ($t.status -in @('in_progress', 'in_review')) {
+    if ($t.status -eq 'in_review' -or ($maxParallel -lt 2 -and $t.status -eq 'in_progress')) {
         Write-Output "$($t.id) $($t.status)"
         if ($t.status -eq 'in_review') {
             Write-Output "Next: review $($t.id)"
@@ -115,6 +136,56 @@ if ($groupMode) {
     }
 } else {
     $candidates = $stateTasks
+}
+
+if ($maxParallel -ge 2) {
+    $active = @($stateTasks | Where-Object { $_.status -eq 'in_progress' } | ForEach-Object { $_.id })
+    function Test-Solo([string]$id) {
+        $ch = @($changedOf[$id])
+        if ($ch.Count -eq 0) { return $true }
+        foreach ($f in $ch) { if ($exclusiveFiles -ccontains $f) { return $true } }
+        return $false
+    }
+    $chosen = @()
+    $activeSolo = $false
+    foreach ($a in $active) { if (Test-Solo $a) { $activeSolo = $true } }
+    if (-not $activeSolo) {
+        $busy = New-Object 'System.Collections.Generic.HashSet[string]'
+        foreach ($a in $active) { foreach ($f in @($changedOf[$a])) { [void]$busy.Add($f) } }
+        foreach ($t in $candidates) {
+            if ($t.status -ne 'pending') { continue }
+            if (-not $graph.Contains($t.id)) {
+                [Console]::Error.WriteLine("Task '$($t.id)' is in state.json but not in tasks.md")
+                exit 1
+            }
+            if ($maxParallel - $active.Count - $chosen.Count -le 0) { break }
+            if (@($graph[$t.id] | Where-Object { $status[$_] -ne 'done' }).Count -gt 0) { continue }
+            $ch = @($changedOf[$t.id])
+            if (Test-Solo $t.id) {
+                if ($active.Count -eq 0 -and $chosen.Count -eq 0) {
+                    $chosen += $t.id
+                    break
+                }
+                continue
+            }
+            $overlap = $false
+            foreach ($f in $ch) { if ($busy.Contains($f)) { $overlap = $true } }
+            if (-not $overlap) {
+                $chosen += $t.id
+                foreach ($f in $ch) { [void]$busy.Add($f) }
+            }
+        }
+    }
+    if ($chosen.Count -gt 0 -or $active.Count -gt 0) {
+        foreach ($a in $active) { Write-Output "$a in_progress" }
+        foreach ($c in $chosen) { Write-Output "$c pending" }
+        if ($chosen.Count -gt 0) {
+            Write-Output ('Next: dispatch ' + ($chosen -join ' '))
+            exit 0
+        }
+        Write-Output ('Next: wait ' + ($active -join ' '))
+        exit 5
+    }
 }
 
 $blocked = @()
