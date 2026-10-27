@@ -1,5 +1,5 @@
 #!/bin/bash
-# dispatch-worktree の create・remove(POSIX版)
+# dispatch-worktree の create・remove・collect(POSIX版)
 source "$(dirname "$0")/lib.sh"
 
 # OUT の最後の行を返す
@@ -65,8 +65,63 @@ t_carry() {
     assert_file_exists "$PROJ/.agents/workflow/runs/T1-2/worktree/a.txt" "新しい worktree に a.txt がある"
 }
 
+# 本体に base.txt(2行)を足して履歴に残し、T1 の変更対象を base.txt だけにして create する
+setup_collect() {
+    printf 'line1\nline2\n' > "$PROJ/base.txt"
+    git -C "$PROJ" add base.txt
+    git -C "$PROJ" commit -q -m "add base"
+    write_tasks <<'TASKS'
+## T1: 一番目
+- **目的**: a
+- **依存**: なし
+- **対象**: `base.txt`(変更対象)
+TASKS
+    run_script dispatch-worktree.sh create T1 1
+    assert_eq 0 "$CODE" "create exit: $ERR"
+    WTDIR="$PROJ/.agents/workflow/runs/T1-1/worktree"
+}
+
+t_collect() {
+    setup_collect
+    printf 'line1\nfromwt\n' > "$WTDIR/base.txt"
+    printf 'new\n' > "$WTDIR/new.txt"
+    run_script dispatch-worktree.sh collect T1 1
+    assert_eq 0 "$CODE" "collect exit: $ERR"
+    assert_eq "Next: review T1" "$(last_line)" "最後の行は Next: review T1"
+    assert_eq "line1 fromwt" "$(tr -d '\r' < "$PROJ/base.txt" | tr '\n' ' ' | sed 's/ $//')" "既存ファイルの変更が本体に入る"
+    assert_file_exists "$PROJ/new.txt" "新規ファイルが本体に入る"
+    assert_contains "$OUT" "Undeclared: new.txt" "変更対象に無い new.txt は Undeclared に出る"
+    assert_not_contains "$OUT" "Undeclared: base.txt" "base.txt は Undeclared に出ない"
+    assert_file_absent "$WTDIR" "worktree が消える"
+    assert_eq 0 "$(has_branch agents-run/T1-1 && echo 1 || echo 0)" "ブランチが消える"
+}
+
+t_collect_conflict() {
+    setup_collect
+    printf 'line1\nfromwt\n' > "$WTDIR/base.txt"
+    printf 'line1\nfrommain\n' > "$PROJ/base.txt"
+    git -C "$PROJ" commit -q -a -m "main change"
+    run_script dispatch-worktree.sh collect T1 1
+    assert_eq 40 "$CODE" "exit 40"
+    assert_eq "Next: escalate reason=conflict" "$(last_line)" "escalate reason=conflict"
+    assert_eq 1 "$([ -d "$WTDIR" ] && echo 1 || echo 0)" "worktree は残る"
+}
+
+t_collect_dirty() {
+    setup_collect
+    printf 'line1\nfromwt\n' > "$WTDIR/base.txt"
+    printf 'dirty\n' > "$PROJ/base.txt"
+    run_script dispatch-worktree.sh collect T1 1
+    assert_eq 20 "$CODE" "exit 20"
+    assert_eq "Next: escalate reason=dirty-tree" "$(last_line)" "escalate reason=dirty-tree"
+    assert_eq 1 "$([ -d "$WTDIR" ] && echo 1 || echo 0)" "worktree は残る"
+}
+
 echo "test-dispatch-worktree.sh"
 test_case "dispatch-worktree: create で worktree・ブランチ・worktree.txt ができる" t_create
 test_case "dispatch-worktree: remove で worktree とブランチが消える" t_remove
 test_case "dispatch-worktree: 試行 2 の create で前の変更を持ち越す" t_carry
+test_case "dispatch-worktree: collect で変更が本体に入り worktree が消える" t_collect
+test_case "dispatch-worktree: collect で本体と衝突すると exit 40 で worktree が残る" t_collect_conflict
+test_case "dispatch-worktree: collect で本体が dirty だと exit 20" t_collect_dirty
 summary
