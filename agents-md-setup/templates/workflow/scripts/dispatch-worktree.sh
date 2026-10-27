@@ -6,10 +6,11 @@ set -uo pipefail
 #   RUN=.agents/workflow/runs/<TaskId>-<Attempt>、WT=$RUN/worktree、ブランチ=agents-run/<TaskId>-<Attempt>
 #   create : WT を HEAD から作る。試行回数が 2 以上なら、前の試行の変更を取り除いてから、
 #            新しい WT に 3way で持ち越す。$RUN/worktree.txt(path / branch / base の3行)を書く
-#   collect: (未実装)
+#   collect: WT の変更を $RUN/changes.patch にして本体へ git apply し、WT を消す。
+#            tasks.md の changed に無いファイルは `Undeclared: <path>` で出す
 #   remove : WT とブランチと $RUN/worktree.txt を消す(無くてもエラーにしない)
-# exit: 0=成功 / 1=使い方不備 / 20=dirty-tree(前の試行の変更を本体から取り除けない) /
-#   30=worktree(WT が既にある・作成に失敗) / 40=conflict(collect)
+# exit: 0=成功 / 1=使い方不備 / 20=dirty-tree(前の試行の変更を本体から取り除けない・collect では本体の作業ツリーが clean でない) /
+#   30=worktree(WT が既にある・作成に失敗・collect では worktree.txt または WT のディレクトリが無い) / 40=conflict(collect)
 # stdout の最後の行には次のアクションを示す `Next:` 行を出す(continue / escalate reason=<理由>。
 # 使い方不備の exit 1 では出さない)
 
@@ -49,7 +50,7 @@ abs_path() {
 make_patch() {
     local wt="$1" out="$2"
     git -C "$wt" add -A
-    git -C "$wt" diff --cached --binary HEAD -- . ':(exclude).agents/workflow' > "$out"
+    git -C "$wt" diff --cached --binary --no-renames HEAD -- . ':(exclude).agents/workflow' > "$out"
     git -C "$wt" reset -q
 }
 
@@ -72,8 +73,79 @@ case "$ACTION" in
         exit 0
         ;;
     collect)
-        echo "collect: not implemented" >&2
-        exit 1
+        WT_PATH=""
+        if [ -f "$RUN/worktree.txt" ]; then
+            WT_PATH="$(sed -n 's/^path //p' "$RUN/worktree.txt" | head -n 1 | tr -d '\r')"
+        fi
+        if [ -z "$WT_PATH" ] || [ ! -d "$WT_PATH" ]; then
+            echo "worktree not found: $RUN" >&2
+            echo "Next: escalate reason=worktree"
+            exit 30
+        fi
+        DIRTY="$(git status --porcelain -- . ':(exclude).agents/workflow')"
+        if [ -n "$DIRTY" ]; then
+            echo "main working tree is not clean:" >&2
+            echo "$DIRTY" >&2
+            echo "Next: escalate reason=dirty-tree"
+            exit 20
+        fi
+
+        PATCH="$RUN/changes.patch"
+        make_patch "$WT_PATH" "$PATCH"
+        CHANGED_FILES=""
+        if [ -s "$PATCH" ]; then
+            CHANGED_FILES="$(git -c core.quotepath=false apply --numstat "$PATCH" | cut -f3-)"
+        fi
+
+        # tasks.md の対象タスクが宣言した変更対象(changed)
+        DECLARED=""
+        if [ -f .agents/workflow/tasks.md ]; then
+            DECLARED="$(PYTHONUTF8=1 PYTHONDONTWRITEBYTECODE=1 python3 - "$(abs_path "$SCRIPT_DIR")" "$(abs_path .agents/workflow/tasks.md)" "$TASK_ID" <<'PY'
+import sys
+
+sys.stdout.reconfigure(newline='\n')
+
+script_dir, tasks_path, task_id = sys.argv[1:4]
+sys.path.insert(0, script_dir)
+import tasklib
+
+with open(tasks_path, encoding='utf-8', newline='') as f:
+    tasks = tasklib.parse_tasks(f.read())
+for t in tasks:
+    if t['id'] == task_id:
+        for p in t['changed']:
+            print(p)
+PY
+)"
+        fi
+        UNDECLARED=0
+        while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            if ! printf '%s\n' "$DECLARED" | tr -d '\r' | grep -Fxq -- "$f"; then
+                echo "Undeclared: $f"
+                UNDECLARED=1
+            fi
+        done <<< "$CHANGED_FILES"
+        if [ "$UNDECLARED" -eq 0 ]; then
+            echo "Undeclared: none"
+        fi
+
+        if [ ! -s "$PATCH" ]; then
+            echo "Applied: 0 files"
+        else
+            if ! CHECK_OUT="$(git apply --check "$PATCH" 2>&1)"; then
+                echo "$CHECK_OUT" >&2
+                echo "Next: escalate reason=conflict"
+                exit 40
+            fi
+            git apply "$PATCH"
+            echo "Applied: $(printf '%s\n' "$CHANGED_FILES" | grep -c .) files"
+        fi
+
+        drop_worktree "$WT" "$BRANCH"
+        echo "Patch: $PATCH"
+        echo "Next: review $TASK_ID"
+        exit 0
         ;;
 esac
 

@@ -3,10 +3,11 @@
 #   RUN=.agents/workflow/runs/<TaskId>-<Attempt>、WT=$RUN/worktree、ブランチ=agents-run/<TaskId>-<Attempt>
 #   create : WT を HEAD から作る。試行回数が 2 以上なら、前の試行の変更を取り除いてから、
 #            新しい WT に 3way で持ち越す。$RUN/worktree.txt(path / branch / base の3行)を書く
-#   collect: (未実装)
+#   collect: WT の変更を $RUN/changes.patch にして本体へ git apply し、WT を消す。
+#            tasks.md の changed に無いファイルは `Undeclared: <path>` で出す
 #   remove : WT とブランチと $RUN/worktree.txt を消す(無くてもエラーにしない)
-# exit: 0=成功 / 1=使い方不備 / 20=dirty-tree(前の試行の変更を本体から取り除けない) /
-#   30=worktree(WT が既にある・作成に失敗) / 40=conflict(collect)
+# exit: 0=成功 / 1=使い方不備 / 20=dirty-tree(前の試行の変更を本体から取り除けない・collect では本体の作業ツリーが clean でない) /
+#   30=worktree(WT が既にある・作成に失敗・collect では worktree.txt または WT のディレクトリが無い) / 40=conflict(collect)
 # stdout の最後の行には次のアクションを示す `Next:` 行を出す(continue / escalate reason=<理由>。
 # 使い方不備の exit 1 では出さない)
 param(
@@ -41,7 +42,7 @@ function New-Patch {
     # git -C は wt に移ってから動くので、--output には本体側の絶対パスを渡す
     $absOut = Get-AbsPath $Out
     git -C $Wt add -A
-    git -C $Wt diff --cached --binary "--output=$absOut" HEAD -- . ':(exclude).agents/workflow'
+    git -C $Wt diff --cached --binary --no-renames "--output=$absOut" HEAD -- . ':(exclude).agents/workflow'
     git -C $Wt reset -q
 }
 
@@ -64,8 +65,67 @@ if ($Action -ceq 'remove') {
     exit 0
 }
 if ($Action -ceq 'collect') {
-    [Console]::Error.WriteLine("collect: not implemented")
-    exit 1
+    $wtPath = ''
+    if (Test-Path -LiteralPath "$run/worktree.txt") {
+        foreach ($l in ([System.IO.File]::ReadAllText((Resolve-Path "$run/worktree.txt"), [System.Text.Encoding]::UTF8) -split "`r?`n")) {
+            if ($l.StartsWith('path ')) { $wtPath = $l.Substring(5); break }
+        }
+    }
+    if (-not $wtPath -or -not (Test-Path -LiteralPath $wtPath)) {
+        [Console]::Error.WriteLine("worktree not found: $run")
+        Write-Output "Next: escalate reason=worktree"
+        exit 30
+    }
+    $dirty = @(git status --porcelain -- . ':(exclude).agents/workflow')
+    if ($dirty.Count -gt 0) {
+        [Console]::Error.WriteLine("main working tree is not clean:")
+        [Console]::Error.WriteLine(($dirty -join "`n"))
+        Write-Output "Next: escalate reason=dirty-tree"
+        exit 20
+    }
+
+    $patch = "$run/changes.patch"
+    New-Patch $wtPath $patch
+    $hasPatch = (Test-Path -LiteralPath $patch) -and (Get-Item -LiteralPath $patch).Length -gt 0
+    $changedFiles = @()
+    if ($hasPatch) {
+        $changedFiles = @(git -c core.quotepath=false apply --numstat (Get-AbsPath $patch) | ForEach-Object { ($_ -split "`t", 3)[2] } | Where-Object { $_ })
+    }
+
+    # tasks.md の対象タスクが宣言した変更対象(changed)
+    $declared = @()
+    if (Test-Path -LiteralPath '.agents/workflow/tasks.md') {
+        . "$PSScriptRoot/tasklib.ps1"
+        $taskLines = @(Split-TaskLines ([System.IO.File]::ReadAllText((Get-AbsPath '.agents/workflow/tasks.md'), [System.Text.Encoding]::UTF8)))
+        $self = @(Read-TaskList $taskLines) | Where-Object { $_.id -ceq $TaskId } | Select-Object -First 1
+        if ($self) { $declared = @($self.changed) }
+    }
+    $undeclared = $false
+    foreach ($f in $changedFiles) {
+        if ($declared -cnotcontains $f) {
+            Write-Output "Undeclared: $f"
+            $undeclared = $true
+        }
+    }
+    if (-not $undeclared) { Write-Output "Undeclared: none" }
+
+    if (-not $hasPatch) {
+        Write-Output "Applied: 0 files"
+    } else {
+        $checkOut = git apply --check $patch 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            [Console]::Error.WriteLine(($checkOut | ForEach-Object { "$_" }) -join "`n")
+            Write-Output "Next: escalate reason=conflict"
+            exit 40
+        }
+        git apply $patch
+        Write-Output "Applied: $($changedFiles.Count) files"
+    }
+
+    Remove-RunWorktree $wt $branch
+    Write-Output "Patch: $patch"
+    Write-Output "Next: review $TaskId"
+    exit 0
 }
 
 # --- create ---
