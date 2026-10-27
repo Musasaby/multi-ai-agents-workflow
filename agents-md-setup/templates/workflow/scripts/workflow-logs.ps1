@@ -33,6 +33,8 @@ function Exit-Usage {
 }
 
 # --- 引数の検証 ---
+# param に無い引数は $args に入って黙って無視されるので、未知の引数として弾く
+if ($args.Count -gt 0) { Exit-Usage "Unknown argument: $($args[0])" }
 $runNames = New-Object System.Collections.Generic.List[string]
 foreach ($item in $Run) {
     foreach ($r in $item.Split(',')) {
