@@ -446,6 +446,11 @@ exit 0 の場合も生成されたプロンプト全文は会話に読み込ま�
 .agents/workflow/scripts/dispatch-start.sh --pr
 ```
 
+**並列実行(`max_parallel` が 2 以上、`--pr` でないとき)**: 手順2(作業ツリーの確認)は行わない。
+手順3の後に `dispatch-worktree create` で worktree の run にする(手順4以降はその WT を使う run になる)。
+成功時の stdout には `Carried:` 行(前の試行の変更の持ち越し結果)と `Worktree: <パス>` 行を、
+`Next: wait` の前に出す。
+
 `--pr` / `-Pr` は PR 作成の run(`pr-<N>-1`)を起動する。手順3・5・7は行わず、手順6は
 `dispatch-prompt-gen --pr` になる(stdout の `RunId` で起動する)。
 
@@ -460,7 +465,9 @@ exit 0 の場合も生成されたプロンプト全文は会話に読み込ま�
 | `21` | タスクの状態が不正(`pending` / `in_progress` 以外、タスク無しを含む。`reason=task-status`) |
 | `30` / `31` | 疎通確認 / ウォームアップの失敗(`reason=healthcheck` / `warmup`。出力の末尾20行を stderr に出す) |
 | `41`〜`43` | `dispatch-prompt-gen` の exit 1〜3(`reason=prompt-gen`。依存未完了・report.md の欠落は 42。`--pr` で RunId が取れない場合は 41) |
+| `22` | `max_parallel` が 2 以上で、worktree の作成が dirty-tree(`dispatch-worktree` の exit 20。`reason=dirty-tree`) |
 | `50` | `task-state` の失敗(`reason=task-state`) |
+| `61` | `max_parallel` が 2 以上で、worktree の作成に失敗(`dispatch-worktree` の exit 20 以外。`reason=worktree`) |
 | `60` | `dispatch-run` の起動を確認できない(`reason=launch`。state.json は `in_progress` のまま) |
 
 `healthcheck_command` / `warmup_command` は sh 版では `bash -c`、ps1 版では `pwsh -Command` で実行する。
@@ -506,6 +513,14 @@ Windows にはシグナルの仕組みが無いため、PowerShell 版での強�
 ディレクトリが cwd のときも探索を止めないため、その下の `tmp/` で実行された `git` が本物の
 リポジトリを探索でたどり着かないようにする。PowerShell 版は
 呼び出し元の `TEMP` 系環境変数の元の値を保存しておき、ラッパーの終了時(finally)に元に戻す。
+
+**worktree の run**: `runs/<ID>-<N>/worktree.txt` があるとき、子は本体ではなく WT(`path` の行)を作業
+ディレクトリにして実行する。`TMPDIR`・`TEMP`・`TMP` は WT の中の
+`.agents/workflow/runs/<ID>-<N>/tmp/`(`dispatch-worktree create` が作る)に設定し、`GIT_CEILING_DIRECTORIES` も
+WT 側にする。`guard.sha256` の対象のうち `state.json`・`tasks.md` は、子が触れる WT 側のコピー
+(`runs/<ID>-<N>/worktree/.agents/workflow/` の下)にする(`prompt.md`・`config.json`・`child-profiles.json` は本体のまま)。
+`git-state.txt` は WT の中で `git-state --ref <branch>` を実行した値を記録する。`output.log`・`done` などの
+記録は本体の `runs/<ID>-<N>/` に書く。
 
 起動時の git 状態(HEAD・ブランチ・参照・config の SHA-256。「git-state」節の4行)を
 `runs/<タスクID>-<試行回数>/git-state.txt` に記録する(失敗しても起動は止めない)。
@@ -613,6 +628,14 @@ exit code(複数に当たる場合は上の行を優先する):
 
 この版から、done マーカーが無いときは exit 1 ではなく exit 2 を返す(#69)。
 
+**worktree の run**: run のディレクトリに `worktree.txt` があるとき、次が変わる。
+- `git-state` の比較は、`worktree.txt` の `path` の WT の中で `git-state --ref <branch>` を実行した値と
+  `git-state.txt` を比べる
+- `Changes:`・`git status --porcelain`・`git diff --stat` は WT の中で取る
+- WT のディレクトリが無いときは `Guard:` に `worktree not found: <path>` を加え(Verdict は `tampered`)、
+  git 状態の比較は行わず、`Changes:` は本体で取る
+- Verdict が `ok` のときの `Next:` は `collect <ID>`(`dispatch-worktree collect` で本体へ集める)
+
 `0` 以外の場合はレビューに進まず、出力された内容をユーザーに報告する(`7` は、変更が無いのが
 正しいタスクに限り検証に進んでよい。詳細は `agent-dispatch` skill §2)。
 
@@ -640,6 +663,47 @@ run の完了をポーリングで待つ。1回の呼び出しで `--max-wait` �
 | `1` | 使い方不備、または run が起動されていない |
 | `2` | まだ実行中(この呼び出しの待ちが `--max-wait` に達した)。最後の行は `Next: wait`。再度呼んで待ちを続ける |
 | `3` | 経過が `child_agent.timeout_seconds` を超えた。最後の行は `Next: escalate reason=timeout` |
+
+### dispatch-worktree — 子エージェントの run 用 git worktree の作成・回収・削除
+
+`max_parallel` が 2 以上のとき、`dispatch-start` が呼ぶ。run ごとに git worktree を作り、
+子はその中で作業する。`RUN=.agents/workflow/runs/<ID>-<N>`、`WT=$RUN/worktree`、
+ブランチは `agents-run/<ID>-<N>`。
+
+```powershell
+.agents/workflow/scripts/dispatch-worktree.ps1 -Action <create|collect|remove> -TaskId T1 -Attempt 1
+```
+```bash
+.agents/workflow/scripts/dispatch-worktree.sh <create|collect|remove> T1 1
+```
+
+- `create`: WT を HEAD から作る。試行回数が 2 以上なら、前の試行の変更(前の WT から `changes.patch` に取る)を
+  本体から取り除いてから、新しい WT に 3way で持ち越す。stdout に `Carried: <パッチ>` /
+  `Carried: conflict <パッチ>` / `Carried: none`、`Worktree: <パス>`、`Branch: <名前>` を出す
+- `collect`: WT の変更(未追跡を含む。`.agents/workflow` は除く)を `$RUN/changes.patch` にして本体へ
+  `git apply` し、WT・ブランチ・`worktree.txt` を消す。tasks.md の `changed` に無いファイルは
+  `Undeclared: <path>`(無ければ `Undeclared: none`)で出す。成功時は `Applied: <N> files`・
+  `Patch: <パス>`・`Next: review <ID>`
+- `remove`: WT・ブランチ・`worktree.txt` を消す(無くてもエラーにしない)
+
+`worktree.txt` は `$RUN/` に書く3行(`dispatch-run` と `dispatch-check` が読む):
+
+```
+path <WT の絶対パス>
+branch refs/heads/agents-run/<ID>-<N>
+base <作成時の HEAD>
+```
+
+| exit | 意味 |
+|------|------|
+| `0` | 成功 |
+| `1` | 使い方不備 |
+| `20` | `reason=dirty-tree`。`create` では前の試行の変更を本体から取り除けない、`collect` では本体の作業ツリーが clean でない |
+| `30` | `reason=worktree`。WT が既にある・作成に失敗した。`collect` では `worktree.txt` または WT のディレクトリが無い |
+| `40` | `reason=conflict`。`collect` で `changes.patch` を本体に当てられない |
+
+使い方不備の exit 1 を除き、stdout の最後の行に `Next:`(`continue` / `review <ID>` /
+`escalate reason=<理由>`)を出す。
 
 ### workflow-logs — 複数の run のログを1つの画面に流す
 
