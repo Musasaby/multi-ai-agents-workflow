@@ -183,5 +183,6 @@ while (-not (Test-Path -LiteralPath "$runDir/guard.sha256" -PathType Leaf)) {
 Write-Output "Run: $TaskId-$Attempt"
 Write-Output "Log: $runDir/output.log"
 Write-Output "Watch: Get-Content $runDir/output.log -Wait -Tail 20"
+Write-Output "Watch all: pwsh -NoProfile -File .agents/workflow/scripts/workflow-logs.ps1"
 Write-Output "Next: wait"
 exit 0
