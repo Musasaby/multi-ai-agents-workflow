@@ -66,6 +66,37 @@ t_branch_changes_refs() {
     assert_eq "$before_config" "$(out_line 4)" "config 行は変わらない"
 }
 
+t_ref_ignores_other_branches() {
+    run_script git-state.sh --ref refs/heads/main
+    assert_eq 0 "$CODE" "exit: $ERR"
+    local before_refs before_head
+    before_refs="$(out_line 3)"
+    before_head="$(out_line 1)"
+    git -C "$PROJ" branch x
+    run_script git-state.sh --ref refs/heads/main
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_eq "$before_refs" "$(out_line 3)" "ほかのブランチ作成で --ref の refs 行は変わらない"
+    assert_eq "$before_head" "$(out_line 1)" "head 行は変わらない"
+}
+
+t_ref_follows_own_branch() {
+    run_script git-state.sh --ref refs/heads/main
+    local before_refs
+    before_refs="$(out_line 3)"
+    git -C "$PROJ" commit -q --allow-empty -m x
+    run_script git-state.sh --ref refs/heads/main
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_ne "$before_refs" "$(out_line 3)" "自分のブランチのコミットで --ref の refs 行が変わる"
+}
+
+t_ref_usage_error() {
+    run_script git-state.sh --ref
+    assert_eq 1 "$CODE" "--ref の値が無いと exit 1"
+    assert_eq "Usage: git-state.sh [--ref <refname>]" "$ERR" "使い方を stderr に出す"
+    run_script git-state.sh --bogus
+    assert_eq 1 "$CODE" "未知の引数は exit 1"
+}
+
 t_detached_branch_dash() {
     git -C "$PROJ" checkout -q --detach
     run_script git-state.sh
@@ -79,5 +110,8 @@ test_case "git-state: 4 項目を出力する" t_four_items
 test_case "git-state: コミットで head が変わる" t_commit_changes_head
 test_case "git-state: git config で config が変わる" t_config_changes_config
 test_case "git-state: ブランチ作成で refs が変わる" t_branch_changes_refs
+test_case "git-state: --ref はほかのブランチの変化を無視する" t_ref_ignores_other_branches
+test_case "git-state: --ref は自分のブランチの変化に追従する" t_ref_follows_own_branch
+test_case "git-state: 不正な引数は exit 1" t_ref_usage_error
 test_case "git-state: detached HEAD では branch が -" t_detached_branch_dash
 summary

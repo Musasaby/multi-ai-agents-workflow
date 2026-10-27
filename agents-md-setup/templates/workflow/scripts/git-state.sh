@@ -14,6 +14,32 @@ set -uo pipefail
 # git リポジトリの中でなければ(git rev-parse --git-dir が失敗したら)stderr に
 # "not a git repository" を出して exit 1 する。
 
+#   --ref <refname> を付けると、refs 行はその参照だけ
+#   (git for-each-ref --format='%(objectname) %(refname)' <refname> の出力。無ければ空の出力)のハッシュにする。
+#   ほかのブランチの参照が変わっても変わらない。ほかの行は変わらない
+# 未知の引数・--ref の値が無いときは stderr に使い方を出して exit 1 する。
+
+# --- 引数 ---
+REF_ARG=""
+USE_REF=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --ref)
+            if [ $# -lt 2 ]; then
+                echo "Usage: git-state.sh [--ref <refname>]" >&2
+                exit 1
+            fi
+            REF_ARG="$2"
+            USE_REF=1
+            shift 2
+            ;;
+        *)
+            echo "Usage: git-state.sh [--ref <refname>]" >&2
+            exit 1
+            ;;
+    esac
+done
+
 # --- リポジトリ判定 ---
 if ! git rev-parse --git-dir > /dev/null 2>&1; then
     echo "not a git repository" >&2
@@ -29,10 +55,15 @@ BRANCH="$(git symbolic-ref -q HEAD)"
 [ -n "$BRANCH" ] || BRANCH=-
 
 # --- refs(sha256sum が無ければ shasum -a 256。dispatch-run.sh と同じ分岐) ---
-if command -v sha256sum > /dev/null 2>&1; then
-    REFS_SHA="$(git for-each-ref --format='%(objectname) %(refname)' refs/heads refs/tags refs/stash | sha256sum | cut -d' ' -f1)"
+if [ "$USE_REF" -eq 1 ]; then
+    REF_LIST() { git for-each-ref --format='%(objectname) %(refname)' "$REF_ARG"; }
 else
-    REFS_SHA="$(git for-each-ref --format='%(objectname) %(refname)' refs/heads refs/tags refs/stash | shasum -a 256 | cut -d' ' -f1)"
+    REF_LIST() { git for-each-ref --format='%(objectname) %(refname)' refs/heads refs/tags refs/stash; }
+fi
+if command -v sha256sum > /dev/null 2>&1; then
+    REFS_SHA="$(REF_LIST | sha256sum | cut -d' ' -f1)"
+else
+    REFS_SHA="$(REF_LIST | shasum -a 256 | cut -d' ' -f1)"
 fi
 
 # --- config(git rev-parse --git-path config が指すファイル。無ければ -) ---

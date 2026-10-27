@@ -67,6 +67,35 @@ Invoke-TestCase "git-state: ブランチ作成で refs が変わる" {
     Assert-Eq $beforeConfig (Get-OutLine 4) "config 行は変わらない"
 }
 
+Invoke-TestCase "git-state: -Ref はほかのブランチの変化を無視する" {
+    Invoke-Script git-state.ps1 -Ref refs/heads/main
+    Assert-Eq 0 $script:Code "exit: $($script:Err)"
+    $beforeRefs = Get-OutLine 3
+    $beforeHead = Get-OutLine 1
+    git -C $script:Proj branch x
+    Invoke-Script git-state.ps1 -Ref refs/heads/main
+    Assert-Eq 0 $script:Code "exit: $($script:Err)"
+    Assert-Eq $beforeRefs (Get-OutLine 3) "ほかのブランチ作成で -Ref の refs 行は変わらない"
+    Assert-Eq $beforeHead (Get-OutLine 1) "head 行は変わらない"
+}
+
+Invoke-TestCase "git-state: -Ref は自分のブランチの変化に追従する" {
+    Invoke-Script git-state.ps1 -Ref refs/heads/main
+    $beforeRefs = Get-OutLine 3
+    git -C $script:Proj commit -q --allow-empty -m x
+    Invoke-Script git-state.ps1 -Ref refs/heads/main
+    Assert-Eq 0 $script:Code "exit: $($script:Err)"
+    Assert-Ne $beforeRefs (Get-OutLine 3) "自分のブランチのコミットで -Ref の refs 行が変わる"
+}
+
+Invoke-TestCase "git-state: 不正な引数は exit 1" {
+    Invoke-Script git-state.ps1 -Ref
+    Assert-Eq 1 $script:Code "-Ref の値が無いと exit 1"
+    Assert-Eq 'Usage: git-state.sh [--ref <refname>]' $script:Err.Trim() "使い方を stderr に出す"
+    Invoke-Script git-state.ps1 --bogus
+    Assert-Eq 1 $script:Code "未知の引数は exit 1"
+}
+
 Invoke-TestCase "git-state: detached HEAD では branch が -" {
     git -C $script:Proj checkout -q --detach
     Invoke-Script git-state.ps1

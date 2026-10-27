@@ -10,8 +10,25 @@
 #   config <git rev-parse --git-path config が指すファイルの SHA-256(16進小文字)>
 # git リポジトリの中でなければ(git rev-parse --git-dir が失敗したら)stderr に
 # "not a git repository" を出して exit 1 する。
+#   -Ref <refname> を付けると、refs 行はその参照だけ
+#   (git for-each-ref --format='%(objectname) %(refname)' <refname> の出力。無ければ空の出力)のハッシュにする。
+#   ほかのブランチの参照が変わっても変わらない。ほかの行は変わらない
+# 未知の引数・-Ref の値が無いときは stderr に使い方を出して exit 1 する。
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
+
+# --- 引数 ---
+$refArg = $null
+$i = 0
+while ($i -lt $args.Count) {
+    if ("$($args[$i])" -ceq '-Ref' -and ($i + 1) -lt $args.Count) {
+        $refArg = "$($args[$i + 1])"
+        $i += 2
+    } else {
+        [Console]::Error.WriteLine('Usage: git-state.sh [--ref <refname>]')
+        exit 1
+    }
+}
 
 # --- リポジトリ判定 ---
 $null = git rev-parse --git-dir 2> $null
@@ -29,7 +46,11 @@ $branch = "$(git symbolic-ref -q HEAD)".Trim()
 if ($LASTEXITCODE -ne 0 -or -not $branch) { $branch = '-' }
 
 # --- refs ---
-$lines = @(git for-each-ref --format='%(objectname) %(refname)' refs/heads refs/tags refs/stash)
+$lines = if ($null -ne $refArg) {
+    @(git for-each-ref --format='%(objectname) %(refname)' $refArg)
+} else {
+    @(git for-each-ref --format='%(objectname) %(refname)' refs/heads refs/tags refs/stash)
+}
 $text = if ($lines.Count -gt 0) { ($lines -join "`n") + "`n" } else { '' }
 $refs = [System.Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes($text))).ToLowerInvariant()
 
