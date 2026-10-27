@@ -15,6 +15,7 @@ set -uo pipefail
 #   7=変更0件(完了報告はあるが作業ツリーに変更が無い。PR 作成の run(pr-*)では判定しない)
 #   0=正常終了かつ完了報告あり / 2=done マーカーが無い(まだ実行中) / 1=使い方不備
 # stdout の最後の行には次のアクションを示す `Next:` 行を出す(wait / review <TaskId> /
+# collect <TaskId>(worktree の run で正常のとき)/
 # escalate reason=<理由>。使い方不備の exit 1 では出さない)
 
 TASK_ID="${1:?Usage: dispatch-check.sh <TaskId> [Attempt]}"
@@ -121,14 +122,34 @@ case "$TASK_ID" in
     pr-*) IS_PR=true; REQUIRED='PR URL' ;;
     *) IS_PR=false; REQUIRED='変更ファイル|テスト結果' ;;
 esac
+# worktree.txt がある run(dispatch-worktree create 済み)は、worktree の中で git-state --ref <branch> を
+# 実行した値で比べ、変更の取得も worktree の中で行う(WT_DIR が空でなければ worktree の run)
+WT_DIR=""
+WT_BRANCH=""
+WT_MISSING=false
+if [ -f "$RUN_DIR/worktree.txt" ]; then
+    WT_DIR="$(sed -n 's/^path //p' "$RUN_DIR/worktree.txt" | head -n 1 | tr -d '\r')"
+    WT_BRANCH="$(sed -n 's/^branch //p' "$RUN_DIR/worktree.txt" | head -n 1 | tr -d '\r')"
+    if [ -z "$WT_DIR" ] || [ ! -d "$WT_DIR" ]; then
+        WT_MISSING=true
+        GUARD_ISSUES="${GUARD_ISSUES}worktree not found: $WT_DIR
+"
+    fi
+fi
 GIT_STATE_PATH="$RUN_DIR/git-state.txt"
 if [ ! -f "$GIT_STATE_PATH" ]; then
     GUARD_ISSUES="${GUARD_ISSUES}git-state.txt not found (deleted, or the run was not started by dispatch-run)
 "
+elif [ "$WT_MISSING" = true ]; then
+    :
 else
     RECORDED_STATE="$(LC_ALL=C tr -d '\r' < "$GIT_STATE_PATH")"
     # 実行権限に頼らず bash で呼ぶ(リポジトリ上のスクリプトは mode 100644 のため)
-    CURRENT_STATE="$(bash "$SCRIPT_DIR/git-state.sh" 2> /dev/null | LC_ALL=C tr -d '\r')"
+    if [ -n "$WT_DIR" ]; then
+        CURRENT_STATE="$(cd "$WT_DIR" && bash "$SCRIPT_DIR/git-state.sh" --ref "$WT_BRANCH" 2> /dev/null | LC_ALL=C tr -d '\r')"
+    else
+        CURRENT_STATE="$(bash "$SCRIPT_DIR/git-state.sh" 2> /dev/null | LC_ALL=C tr -d '\r')"
+    fi
     for name in head branch refs config; do
         if [ "$IS_PR" = true ] && [ "$name" = config ]; then continue; fi
         recorded="$(printf '%s\n' "$RECORDED_STATE" | LC_ALL=C awk -v name="$name" '$1 == name { print $2 }')"
@@ -271,7 +292,15 @@ REPORT_RESULT="$(printf '%s\n' "$RAW_LOG" | TOOL_ACTIVITY_RE="$TOOL_ACTIVITY_RE"
         print "found"
     }')"
 
-CHANGES="$(git status --porcelain)"
+# worktree の run は worktree の中で変更を取る(worktree が無いときは本体で取る)
+git_in_wt() {
+    if [ -n "$WT_DIR" ] && [ "$WT_MISSING" = false ]; then
+        git -C "$WT_DIR" "$@"
+    else
+        git "$@"
+    fi
+}
+CHANGES="$(git_in_wt status --porcelain)"
 CHANGE_COUNT=0
 [ -n "$CHANGES" ] && CHANGE_COUNT="$(printf '%s\n' "$CHANGES" | wc -l | tr -d ' ')"
 
@@ -364,9 +393,9 @@ fi
 echo "Changes: ${CHANGE_COUNT}"
 echo "Verdict: ${VERDICT}"
 echo "--- git status --porcelain"
-git status --porcelain
+git_in_wt status --porcelain
 echo "--- git diff --stat"
-git diff --stat
+git_in_wt diff --stat
 echo "--- output.log (last ${TAIL_LINES} lines)"
 if [ -f "$LOG_PATH" ]; then
     # 切り詰められた output.log(先頭の NUL)をそのまま tail に渡すと stdout に NUL が流れるため除く
@@ -378,7 +407,15 @@ fi
 # --- 次のアクションの判定(stdout の最後の行に出す) ---
 # PR 作成の run(pr-*)はレビューしない。PR を検証して報告し、マージを待つ
 case "$CODE" in
-    0) if [ "$IS_PR" = true ]; then NEXT="wait-merge"; else NEXT="review $TASK_ID"; fi ;;
+    0)
+        if [ "$IS_PR" = true ]; then
+            NEXT="wait-merge"
+        elif [ -n "$WT_DIR" ]; then
+            NEXT="collect $TASK_ID"
+        else
+            NEXT="review $TASK_ID"
+        fi
+        ;;
     8) NEXT="escalate reason=tampered" ;;
     4)
         if [ "$PROVIDER_ERROR" = yes ]; then

@@ -10,7 +10,7 @@
 #     最後のツール実行の後に出力が無い場合は、その旨を理由に書く
 #   7=変更0件(完了報告はあるが作業ツリーに変更が無い。PR 作成の run(pr-*)では判定しない)
 #   0=正常終了かつ完了報告あり / 2=done マーカーが無い(まだ実行中) / 1=使い方不備
-# stdout の最後の行には次のアクションを示す `Next:` 行を出す(wait / review <TaskId> /
+# stdout の最後の行には次のアクションを示す `Next:` 行を出す(wait / review <TaskId> / collect <TaskId>(worktree の run で正常のとき)/
 # escalate reason=<理由>。使い方不備の exit 1 では出さない)
 # Windows にはシグナルの仕組みが無いため、dispatch-run.ps1 は signal:* を書き出さない
 # (強制終了は通常の非0終了として記録される)。POSIX 版が書き出した done も同じ規則で判定する。
@@ -110,13 +110,37 @@ function ConvertTo-StateMap {
     }
     return $map
 }
+# worktree.txt がある run(dispatch-worktree create 済み)は、worktree の中で git-state -Ref <branch> を
+# 実行した値で比べ、変更の取得も worktree の中で行う($wtDir が空でなければ worktree の run)
+$wtDir = ''
+$wtBranch = ''
+$wtMissing = $false
+$wtTxt = "$runDir/worktree.txt"
+if (Test-Path $wtTxt -PathType Leaf) {
+    foreach ($wl in @([System.IO.File]::ReadAllText((Resolve-Path $wtTxt), [System.Text.Encoding]::UTF8) -split "`r?`n")) {
+        if (-not $wtDir -and $wl.StartsWith('path ')) { $wtDir = $wl.Substring(5) }
+        if (-not $wtBranch -and $wl.StartsWith('branch ')) { $wtBranch = $wl.Substring(7) }
+    }
+    if (-not $wtDir -or -not (Test-Path $wtDir -PathType Container)) {
+        $wtMissing = $true
+        $guardIssues += "worktree not found: $wtDir"
+    }
+}
 $gitStatePath = "$runDir/git-state.txt"
 if (-not (Test-Path $gitStatePath)) {
     $guardIssues += 'git-state.txt not found (deleted, or the run was not started by dispatch-run)'
+} elseif ($wtMissing) {
+    # worktree が無いので比べない(Guard には worktree not found を出している)
 } else {
     $recordedState = ConvertTo-StateMap @([System.IO.File]::ReadAllText((Resolve-Path $gitStatePath), [System.Text.Encoding]::UTF8) -split "`r?`n")
     # git-state.ps1 の stderr は捨てる(失敗時は空出力になり、全項目が変わったと判定される)
-    $currentState = ConvertTo-StateMap @(& pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1" 2> $null)
+    if ($wtDir) {
+        Push-Location $wtDir
+        try { $currentState = ConvertTo-StateMap @(& pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1" -Ref $wtBranch 2> $null) }
+        finally { Pop-Location }
+    } else {
+        $currentState = ConvertTo-StateMap @(& pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1" 2> $null)
+    }
     foreach ($name in @('head', 'branch', 'refs', 'config')) {
         if ($isPr -and $name -eq 'config') { continue }
         if ("$($recordedState[$name])" -ne "$($currentState[$name])") {
@@ -256,7 +280,9 @@ function Get-ReportResult {
 }
 $reportResult = Get-ReportResult $cleanLines $toolFlags $required
 
-$changes = @(git status --porcelain | Where-Object { $_ })
+# worktree の run は worktree の中で変更を取る(worktree が無いときは本体で取る)
+$gitArgs = if ($wtDir -and -not $wtMissing) { @('-C', $wtDir) } else { @() }
+$changes = @(git @gitArgs status --porcelain | Where-Object { $_ })
 $changeCount = $changes.Count
 
 if ($guardIssues.Count -gt 0) {
@@ -344,9 +370,9 @@ if ($reportSaved) {
 Write-Output "Changes: $changeCount"
 Write-Output "Verdict: $verdict"
 Write-Output "--- git status --porcelain"
-git status --porcelain
+git @gitArgs status --porcelain
 Write-Output "--- git diff --stat"
-git diff --stat
+git @gitArgs diff --stat
 Write-Output "--- output.log (last $tailLines lines)"
 if (Test-Path $logPath) {
     # 切り詰められた output.log(先頭の NUL)がそのまま出力されるため行ごとに除く(sh 版と揃える)
@@ -358,7 +384,12 @@ if (Test-Path $logPath) {
 # --- 次のアクションの判定(stdout の最後の行に出す) ---
 # PR 作成の run(pr-*)はレビューしない。PR を検証して報告し、マージを待つ
 $next = switch ($code) {
-    0 { if ($isPr) { 'wait-merge' } else { "review $TaskId" }; break }
+    0 {
+        if ($isPr) { 'wait-merge' }
+        elseif ($wtDir) { "collect $TaskId" }
+        else { "review $TaskId" }
+        break
+    }
     8 { 'escalate reason=tampered'; break }
     4 {
         if ($providerError -eq 'yes') { 'escalate reason=provider-error' }
