@@ -22,14 +22,36 @@ Remove-Item -Force -ErrorAction SilentlyContinue $donePath, $idlePath
 $promptPath = "$runDir/prompt.md"
 # 子が管理ファイルを変更・削除していないかを dispatch-check が確かめられるよう、起動時の
 # SHA-256 を記録する(存在しないファイルは "-")。形式は sha256sum と同じ "<hash>  <path>"
-$guardLines = foreach ($f in @($promptPath, '.agents/workflow/state.json', '.agents/workflow/tasks.md', '.agents/workflow/config.json', '.agents/workflow/child-profiles.json')) {
+# worktree.txt があるとき(dispatch-worktree create 済み)は、子を worktree の中で動かす。
+# 出力ファイル(output.log・done 等)は本体の runs/ に置いたまま、tmp と ceiling だけ worktree 側にする
+$wtPath = ''
+$wtBranch = ''
+if (Test-Path -LiteralPath "$runDir/worktree.txt") {
+    foreach ($l in ([System.IO.File]::ReadAllText((Resolve-Path "$runDir/worktree.txt"), [System.Text.Encoding]::UTF8) -split "`r?`n")) {
+        if (-not $wtPath -and $l.StartsWith('path ')) { $wtPath = $l.Substring(5) }
+        elseif (-not $wtBranch -and $l.StartsWith('branch ')) { $wtBranch = $l.Substring(7) }
+    }
+}
+$guardState = '.agents/workflow/state.json'
+$guardTasks = '.agents/workflow/tasks.md'
+if ($wtPath) {
+    # worktree の run では、子が触れる worktree 側のコピーを守る
+    $guardState = "$runDir/worktree/.agents/workflow/state.json"
+    $guardTasks = "$runDir/worktree/.agents/workflow/tasks.md"
+}
+$guardLines = foreach ($f in @($promptPath, $guardState, $guardTasks, '.agents/workflow/config.json', '.agents/workflow/child-profiles.json')) {
     $h = if (Test-Path -LiteralPath $f -PathType Leaf) { (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash.ToLowerInvariant() } else { '-' }
     "$h  $f"
 }
 [System.IO.File]::WriteAllText((Join-Path (Get-Location) "$runDir/guard.sha256"), (($guardLines -join "`n") + "`n"), [System.Text.UTF8Encoding]::new($false))
 # 起動時の git 状態(HEAD・ブランチ・参照・設定)を git-state.txt に記録する。dispatch-check が
 # 実行後の状態と比べて、子がリポジトリのどこを変えたかを特定する(失敗しても起動は止めない)
-$gitState = & pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1"
+if ($wtPath) {
+    Push-Location -LiteralPath $wtPath
+    try { $gitState = & pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1" -Ref $wtBranch } finally { Pop-Location }
+} else {
+    $gitState = & pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1"
+}
 [System.IO.File]::WriteAllText((Join-Path (Get-Location) "$runDir/git-state.txt"), (($gitState -join "`n") + "`n"), [System.Text.UTF8Encoding]::new($false))
 $prompt = Get-Content $promptPath -Raw
 $config = Get-Content ".agents/workflow/config.json" -Raw | ConvertFrom-Json
@@ -37,8 +59,10 @@ $config = Get-Content ".agents/workflow/config.json" -Raw | ConvertFrom-Json
 # (sandbox で ~/.config 等に書けない環境向け)。既定(未指定・false)は呼び出し元の XDG をそのまま使う。
 # 切り替えると ~/.local/share/<CLI>/auth.json 等の認証情報が見えなくなる点に注意。
 if ($config.child_agent.isolate_xdg -eq $true) {
-    $env:XDG_CONFIG_HOME = ".agents/workflow/.config"
-    $env:XDG_DATA_HOME = ".agents/workflow/.config"
+    # worktree の run では cwd が変わるので絶対パスにする
+    $xdgDir = if ($wtPath) { Join-Path (Get-Location).Path ".agents/workflow/.config" } else { ".agents/workflow/.config" }
+    $env:XDG_CONFIG_HOME = $xdgDir
+    $env:XDG_DATA_HOME = $xdgDir
 }
 
 function Split-CommandLine {
@@ -117,9 +141,10 @@ function ConvertTo-HumanLine {
 # 子の一時ファイルをプロジェクト内(runs/<ID>-<試行>/tmp/)に置かせ、そこで実行された git が
 # 本物のリポジトリにたどり着かないようにする(#46)。git は ceiling と同じディレクトリが
 # カレントのときは探索を止めないため、tmp/ の親(runs/<ID>-<試行>/)を上限にする
-$childTmp = Join-Path (Get-Location).Path "$runDir/tmp"
+$childBase = if ($wtPath) { Join-Path $wtPath $runDir } else { Join-Path (Get-Location).Path $runDir }
+$childTmp = Join-Path $childBase "tmp"
 $null = New-Item -ItemType Directory -Force $childTmp
-$childCeiling = Join-Path (Get-Location).Path $runDir
+$childCeiling = $childBase
 # 子の起動中だけ TEMP 系環境変数を差し替えるため、元の値を保存してから設定する
 # 同じプロセス内で & dispatch-run.ps1 と呼ばれたとき(tests/test-exitcode.ps1 等)に呼び出し元に書き換えが
 # 残らないよう、finally で戻す(catch の exit 1 でも実行される)
@@ -190,6 +215,7 @@ try {
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
         $psi.UseShellExecute = $false
+        if ($wtPath) { $psi.WorkingDirectory = $wtPath }
         $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
         $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
         if ($useStdin) { $psi.StandardInputEncoding = [System.Text.UTF8Encoding]::new($false) }
@@ -242,10 +268,17 @@ try {
         }
     } else {
         $stdinText = if ($useStdin) { $prompt } else { $null }
-        if ($rest.Count -gt 0) {
-            $stdinText | & $exe @rest *> $logPath
-        } else {
-            $stdinText | & $exe *> $logPath
+        # cwd を変えるので、ログは絶対パスで指定する
+        $logFull = Join-Path (Get-Location).Path $logPath
+        if ($wtPath) { Push-Location -LiteralPath $wtPath }
+        try {
+            if ($rest.Count -gt 0) {
+                $stdinText | & $exe @rest *> $logFull
+            } else {
+                $stdinText | & $exe *> $logFull
+            }
+        } finally {
+            if ($wtPath) { Pop-Location }
         }
         $exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
     }

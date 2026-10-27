@@ -26,9 +26,26 @@ mkdir -p "$RUN_DIR"
 # 子の一時ファイルをプロジェクト内(runs/<ID>-<試行>/tmp/)に置かせ、そこで実行された git が
 # 本物のリポジトリにたどり着かないようにする(#46)。git は ceiling と同じディレクトリが
 # カレントのときは探索を止めないため、tmp/ の親(runs/<ID>-<試行>/)を上限にする
-CHILD_TMP="$(pwd)/$RUN_DIR/tmp"
+# worktree.txt があるとき(dispatch-worktree create 済み)は、子を worktree の中で動かす。
+# 出力ファイル(output.log・done 等)は本体の runs/ に置いたまま、tmp と ceiling だけ worktree 側にする
+WT_PATH=""
+WT_BRANCH=""
+if [ -f "$RUN_DIR/worktree.txt" ]; then
+  WT_PATH="$(sed -n 's/^path //p' "$RUN_DIR/worktree.txt" | head -n 1 | tr -d '\r')"
+  WT_BRANCH="$(sed -n 's/^branch //p' "$RUN_DIR/worktree.txt" | head -n 1 | tr -d '\r')"
+fi
+if [ -n "$WT_PATH" ]; then
+  CHILD_BASE="$WT_PATH/$RUN_DIR"
+  # cwd が変わるので、相対パスの XDG は本体の絶対パスにする
+  if [ "$ISOLATE_XDG" = true ]; then
+    export XDG_CONFIG_HOME="$(pwd)/.agents/workflow/.config" XDG_DATA_HOME="$(pwd)/.agents/workflow/.config"
+  fi
+else
+  CHILD_BASE="$(pwd)/$RUN_DIR"
+fi
+CHILD_TMP="$CHILD_BASE/tmp"
 mkdir -p "$CHILD_TMP"
-CHILD_CEILING="$(pwd)/$RUN_DIR"
+CHILD_CEILING="$CHILD_BASE"
 # Windows ネイティブの子プロセスは /c/... 形式を解釈できないため C:/... 形式にする
 if command -v cygpath > /dev/null 2>&1; then
   CHILD_TMP="$(cygpath -m "$CHILD_TMP")"
@@ -49,7 +66,14 @@ PROMPT_PATH="$RUN_DIR/prompt.md"
 # SHA-256 を記録する(存在しないファイルは "-")。形式は sha256sum と同じ "<hash>  <path>"
 GUARD_PATH="$RUN_DIR/guard.sha256"
 : > "$GUARD_PATH"
-for f in "$PROMPT_PATH" .agents/workflow/state.json .agents/workflow/tasks.md .agents/workflow/config.json .agents/workflow/child-profiles.json; do
+GUARD_STATE=.agents/workflow/state.json
+GUARD_TASKS=.agents/workflow/tasks.md
+if [ -n "$WT_PATH" ]; then
+  # worktree の run では、子が触れる worktree 側のコピーを守る
+  GUARD_STATE="$RUN_DIR/worktree/.agents/workflow/state.json"
+  GUARD_TASKS="$RUN_DIR/worktree/.agents/workflow/tasks.md"
+fi
+for f in "$PROMPT_PATH" "$GUARD_STATE" "$GUARD_TASKS" .agents/workflow/config.json .agents/workflow/child-profiles.json; do
   if [ ! -f "$f" ]; then
     h=-
   elif command -v sha256sum > /dev/null 2>&1; then
@@ -63,7 +87,11 @@ done
 # 起動時の git 状態(HEAD・ブランチ・参照・設定)を git-state.txt に記録する。dispatch-check が
 # 実行後の状態と比べて、子がリポジトリのどこを変えたかを特定する(失敗しても起動は止めない)。
 # 実行権限に頼らず bash で呼ぶ(リポジトリ上のスクリプトは mode 100644 のため)
-bash "$SCRIPT_DIR/git-state.sh" > "$RUN_DIR/git-state.txt"
+if [ -n "$WT_PATH" ]; then
+  (cd "$WT_PATH" && bash "$SCRIPT_DIR/git-state.sh" --ref "$WT_BRANCH") > "$RUN_DIR/git-state.txt"
+else
+  bash "$SCRIPT_DIR/git-state.sh" > "$RUN_DIR/git-state.txt"
+fi
 
 CMD_TEMPLATE=$(jq -r '.child_agent.command_template' .agents/workflow/config.json 2>/dev/null || \
   python3 -c "import json; print(json.load(open('.agents/workflow/config.json'))['child_agent']['command_template'])" 2>/dev/null || \
@@ -75,7 +103,7 @@ if command -v cygpath > /dev/null 2>&1; then
 fi
 
 if command -v python3 > /dev/null 2>&1; then
-  python3 -c "
+  WT_PATH="$WT_PATH" python3 -c "
 import json, subprocess, sys, shlex, os, threading, time, signal
 sys.dont_write_bytecode = True
 sys.path.insert(0, '$SCRIPT_DIR_PY')
@@ -156,6 +184,8 @@ def feed_stdin(proc):
     threading.Thread(target=write, daemon=True).start()
 
 stdin_mode = subprocess.PIPE if use_stdin else subprocess.DEVNULL
+# worktree の run では子の作業ディレクトリを worktree にする(未指定なら今の cwd のまま)
+child_cwd = os.environ.get('WT_PATH') or None
 
 if is_stream:
     jsonl_path = '$JSONL_PATH'
@@ -205,7 +235,7 @@ if is_stream:
         return '[' + str(t) + '] ' + compact
 
     with open(jsonl_path, 'w', encoding='utf-8') as jf, open(log_path, 'w', encoding='utf-8') as lf:
-        proc = subprocess.Popen(tokens, stdin=stdin_mode, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', bufsize=1, start_new_session=(os.name != 'nt'))
+        proc = subprocess.Popen(tokens, stdin=stdin_mode, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', bufsize=1, cwd=child_cwd, start_new_session=(os.name != 'nt'))
         if use_stdin:
             feed_stdin(proc)
         start_watchdog(proc)
@@ -225,7 +255,7 @@ if is_stream:
         finish(proc.returncode)
 else:
     with open(log_path, 'w', encoding='utf-8') as lf:
-        proc = subprocess.Popen(tokens, stdin=stdin_mode, stdout=lf, stderr=subprocess.STDOUT, start_new_session=(os.name != 'nt'))
+        proc = subprocess.Popen(tokens, stdin=stdin_mode, stdout=lf, stderr=subprocess.STDOUT, cwd=child_cwd, start_new_session=(os.name != 'nt'))
         if use_stdin:
             feed_stdin(proc)
         start_watchdog(proc)
@@ -243,7 +273,11 @@ elif [[ "$CMD_TEMPLATE" == *'"{prompt}"'* ]]; then
     IFS=' ' read -ra SA <<< "$SUFFIX"
     ARGS+=("${SA[@]}")
   fi
-  "${ARGS[@]}" < /dev/null > "$LOG_PATH" 2>&1
+  if [ -n "$WT_PATH" ]; then
+    (cd "$WT_PATH" && "${ARGS[@]}" < /dev/null > "$OLDPWD/$LOG_PATH" 2>&1)
+  else
+    "${ARGS[@]}" < /dev/null > "$LOG_PATH" 2>&1
+  fi
   EXIT_CODE=$?
   # bash はシグナル N で終了した子の終了コードを 128+N で返す
   if [ "$EXIT_CODE" -gt 128 ]; then
