@@ -456,7 +456,10 @@ exit 0 の場合も生成されたプロンプト全文は会話に読み込ま�
 `Next: wait` の前に出す。
 worktree を作った後、子の起動前の手順(疎通確認・ウォームアップ・prompt 生成・`task-state`)で失敗したときは、
 `dispatch-worktree abort` で worktree・ブランチを消し、持ち越しで取り除いた前の試行の変更を本体に戻してから止める。
-`dispatch-run` の起動を確認できない exit 60 では abort しない(子が動いている可能性があるため)。
+`dispatch-run` の起動を確認できない exit 60 では abort しない(子が動いている可能性があるため。WT・ブランチは残る)。
+exit 60 のときは、`dispatch-run` のプロセスが動いていないことを確かめる(`$RUN/output.log` が伸びていない、
+`$RUN/done` が無い)。動いていなければ `dispatch-worktree abort <ID> <試行回数>` で片付け、同じ試行で
+`dispatch-start` をやり直す(片付けずにやり直すと WT が残っているため exit 61 になる)。動いていれば `dispatch-wait` で待つ。
 
 `--pr` / `-Pr` は PR 作成の run(`pr-<N>-1`)を起動する。手順3・5・7は行わず、手順6は
 `dispatch-prompt-gen --pr` になる(stdout の `RunId` で起動する)。
@@ -636,9 +639,20 @@ exit code(複数に当たる場合は上の行を優先する):
 この版から、done マーカーが無いときは exit 1 ではなく exit 2 を返す(#69)。
 
 **worktree の run**: run のディレクトリに `worktree.txt` があるとき、次が変わる。
-- `git-state` の比較は、`worktree.txt` の `path` の WT の中で `git-state --run <branch> --parent <親の作業ブランチ>` を
-  実行した値と `git-state.txt` を比べる(ほかの run のブランチと親の作業ブランチの変化は検知しない。
-  共有の参照のタグ等を子が作れば検知する)
+- `git-state` の比較は、`worktree.txt` の `path` の WT の中で
+  `git-state --run <branch> --parent <親の作業ブランチ> --other-runs <実行中のタスクの ID>` を
+  実行した値と `git-state.txt` を比べる(`in_progress`・`in_review` のタスクの run のブランチと、親の作業ブランチの
+  進みは検知しない。共有の参照のタグ等や、実行中でないタスクの run のブランチを子が作れば検知する)
+- 親の作業ブランチは、`dispatch-run` が起動時に `parent-head.txt`(1行目に参照名、2行目に SHA)へ記録した値と比べる。
+  参照名が変わった、または SHA が記録した値の子孫でない(巻き戻し・付け替え)ときは `git changed: parent` を出す。
+  親が新しいコミットを積んで進んだだけなら検知しない(`parent-head.txt` が無いのも改ざん)
+- 本体の `state.json` の自分以外のタスクの欄は、`dispatch-run` が起動時に `state-tasks.json`
+  (全タスクの `id`・`status`・`retries`・`commit`)へ記録した値と比べる(`state-tasks.json` が無いのも改ざん)。
+  親の正規の遷移(`task-state`・`state-sync --insert`。`pending` → `in_progress` → `in_review` → `done` と、
+  `commit` が HEAD の祖先である `done`、新しい `pending` のタスクの追加)は許す。次は不正として、
+  タスクごとに `changed: .agents/workflow/state.json (<ID>)` を出す: 起動時に `done` だったタスクの
+  `status`・`commit` が変わった、タスクが消えた、`retries` が減った(`failed` からの `pending` を除く)、
+  `commit` が HEAD の祖先でない `done`、起動後に追加されたタスクが `pending` 以外
 - `Changes:`・`git status --porcelain`・`git diff --stat` は WT の中で取る
 - WT のディレクトリが無いときは `Guard:` に `worktree not found: <path>` を加え(Verdict は `tampered`)、
   git 状態の比較は行わず、`Changes:` は本体で取る
@@ -700,7 +714,8 @@ run の完了をポーリングで待つ。1回の呼び出しで `--max-wait` �
   ファイルは `Undeclared: <path>`(無ければ `Undeclared: none`)で出す。成功時は `Applied: <N> files`・
   `Patch: <パス>`・`Next: review <ID>`。WT の中の git(`git add` 等)が失敗したときは exit 30 で、
   WT・ブランチ・`worktree.txt` を残す(原因を直して collect し直せる)
-- `remove`: WT・ブランチ・`worktree.txt` を消す(無くてもエラーにしない)
+- `remove`: WT・ブランチ・`worktree.txt` を消す(無くてもエラーにしない)。`create` が取り除いた前の試行の変更は
+  本体に当て直さない(試行 2 以降で引き取らない run には `abort` を使う)
 - `abort`: `remove` と同じく消したうえで、`$RUN/reverted` があれば、そこに書かれた前のパッチを本体に
   `git apply` で当て直して `reverted` を消す(`create` で取り除いた前の試行の変更を戻す)。
   当て直せなければ stderr にパッチのパスを出して exit 20。`dispatch-start` が起動前の失敗で呼ぶ
@@ -794,9 +809,14 @@ config <git config ファイルの SHA-256(16進小文字)>
 次の行を除いたものの SHA-256 になる: 参照名が `refs/heads/agents-run/` で始まり `--run` の値と一致しない行
 (ほかの run のブランチ)、`--parent` の値と一致する行(親の作業ブランチ。`-` か空なら除かない)。
 worktree の run が、並列の他の run や親のコミットを改ざんと誤検知せず、タグなど共有の参照の変化は検知するために使う。
+`--other-runs <ID,ID,...>`(ps1 は `-OtherRuns`)は `--run` のときだけ使え、ほかの run のブランチの除外を
+`refs/heads/agents-run/<ID>-<数字>` で `<ID>` が一覧にある行に限る。`dispatch-run`・`dispatch-check` は
+一覧に、自分以外の `in_progress`・`in_review` のタスク(=実行中または回収待ちの run)の ID を渡す。
+実行中でないタスクの run のブランチを子が作ると、除かれずに `refs` の変化として検知される。
+一覧が無い・空なら、自分以外の `agents-run/*` を何も除かない。
 `--run` と `--parent` は両方そろって使い、`--ref` とは併用できない。
 未知の引数・値の無いオプション・上の組み合わせの誤りは stderr に
-`Usage: git-state.sh [--ref <refname> | --run <refname> --parent <refname>]` を出して exit 1。
+`Usage: git-state.sh [--ref <refname> | --run <refname> --parent <refname> [--other-runs <ID,ID,...>]]` を出して exit 1。
 `dispatch-run` が子の起動時にこの出力を `git-state.txt` に記録し、`dispatch-check` が実行後の
 出力と比べて、子がリポジトリのどこを変えたか(HEAD・ブランチ・参照・設定)を特定する。
 

@@ -28,9 +28,16 @@ config.json の `max_parallel` が 2 以上のとき、`next-task` は `Next: di
 - `dispatch-start` の `dispatch-worktree create` が exit 40(前の試行の持ち越しの衝突)で止まったら、
   ユーザーに報告する(WT・ブランチは残らず、本体は元に戻っている)
 - `Undeclared:` に出たファイルは、tasks.md の `changed` に無い変更。レビューで内容を確かめる
-- 異常終了などで引き取らない run は、WT とブランチを残さないよう `dispatch-worktree remove` で消す
+- `dispatch-start` が exit 60(起動待ちのタイムアウト)で止まったときは、WT を片付けていない。
+  `dispatch-run` のプロセスが動いていないこと(`runs/<ID>-<N>/output.log` が伸びていない、`done` が無い)を
+  確かめてから `dispatch-worktree abort` で片付け、同じ試行で `dispatch-start` をやり直す
+  (片付けないと exit 61 になる)。動いているなら `dispatch-wait` で待つ
+- 並列中(`in_progress` の run があるあいだ)は、本体の `tasks.md` を変えない。`state-sync --insert` などで
+  修正タスクを足すのは、すべての run を collect してからにする(変えると実行中のすべての run が `tampered` になる)
+- 異常終了などで引き取らない run は、`remove` ではなく `dispatch-worktree abort` で消す。
+  試行 2 以降では、`create` が本体から取り除いた前の試行の変更を本体に当て直す(`reverted` が無ければ `remove` と同じ)
   ```bash
-  .agents/workflow/scripts/dispatch-worktree.sh remove <ID> <試行回数>
+  .agents/workflow/scripts/dispatch-worktree.sh abort <ID> <試行回数>
   ```
 
 ## ログの見方
