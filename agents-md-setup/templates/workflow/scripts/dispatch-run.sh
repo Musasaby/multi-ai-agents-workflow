@@ -88,7 +88,10 @@ done
 # 実行後の状態と比べて、子がリポジトリのどこを変えたかを特定する(失敗しても起動は止めない)。
 # 実行権限に頼らず bash で呼ぶ(リポジトリ上のスクリプトは mode 100644 のため)
 if [ -n "$WT_PATH" ]; then
-  (cd "$WT_PATH" && bash "$SCRIPT_DIR/git-state.sh" --ref "$WT_BRANCH") > "$RUN_DIR/git-state.txt"
+  # 親の作業ブランチは本体で取る(detached なら "-")
+  PARENT_REF="$(git symbolic-ref -q HEAD 2> /dev/null || true)"
+  [ -n "$PARENT_REF" ] || PARENT_REF=-
+  (cd "$WT_PATH" && bash "$SCRIPT_DIR/git-state.sh" --run "$WT_BRANCH" --parent "$PARENT_REF") > "$RUN_DIR/git-state.txt"
 else
   bash "$SCRIPT_DIR/git-state.sh" > "$RUN_DIR/git-state.txt"
 fi

@@ -122,7 +122,7 @@ case "$TASK_ID" in
     pr-*) IS_PR=true; REQUIRED='PR URL' ;;
     *) IS_PR=false; REQUIRED='変更ファイル|テスト結果' ;;
 esac
-# worktree.txt がある run(dispatch-worktree create 済み)は、worktree の中で git-state --ref <branch> を
+# worktree.txt がある run(dispatch-worktree create 済み)は、worktree の中で git-state --run <branch> --parent <親の作業ブランチ> を
 # 実行した値で比べ、変更の取得も worktree の中で行う(WT_DIR が空でなければ worktree の run)
 WT_DIR=""
 WT_BRANCH=""
@@ -146,7 +146,9 @@ else
     RECORDED_STATE="$(LC_ALL=C tr -d '\r' < "$GIT_STATE_PATH")"
     # 実行権限に頼らず bash で呼ぶ(リポジトリ上のスクリプトは mode 100644 のため)
     if [ -n "$WT_DIR" ]; then
-        CURRENT_STATE="$(cd "$WT_DIR" && bash "$SCRIPT_DIR/git-state.sh" --ref "$WT_BRANCH" 2> /dev/null | LC_ALL=C tr -d '\r')"
+        PARENT_REF="$(git symbolic-ref -q HEAD 2> /dev/null || true)"
+        [ -n "$PARENT_REF" ] || PARENT_REF=-
+        CURRENT_STATE="$(cd "$WT_DIR" && bash "$SCRIPT_DIR/git-state.sh" --run "$WT_BRANCH" --parent "$PARENT_REF" 2> /dev/null | LC_ALL=C tr -d '\r')"
     else
         CURRENT_STATE="$(bash "$SCRIPT_DIR/git-state.sh" 2> /dev/null | LC_ALL=C tr -d '\r')"
     fi

@@ -355,10 +355,10 @@ Invoke-TestCase "dispatch-worktree: worktree の run を dispatch-run で動か�
 }
 
 Invoke-TestCase "dispatch-worktree: 子の実行中に本体で branch・commit しても tampered にならない" {
-    Initialize-WtChild "git -C '$script:Proj' branch other; git -C '$script:Proj' commit -q --allow-empty -m other; Set-Content a.txt hello; $WtReport"
+    Initialize-WtChild "git -C '$script:Proj' branch agents-run/other; git -C '$script:Proj' commit -q --allow-empty -m other; Set-Content a.txt hello; $WtReport"
     Invoke-Script dispatch-run.ps1 T1 1
     Assert-Eq "EXIT:0" (Get-Content "$script:Proj/.agents/workflow/runs/T1-1/done" -Encoding utf8)[0] "done marker"
-    Add-Result (Test-Branch 'other') "子の実行中に本体で other ブランチができた"
+    Add-Result (Test-Branch 'agents-run/other') "子の実行中に本体でほかの run のブランチができた"
     Invoke-Script dispatch-check.ps1 T1 1
     Assert-Eq 0 $script:Code "本体の git 変更では tampered にならない: $($script:Out)"
     Assert-NotContains $script:Out "git changed" "git changed は出ない"

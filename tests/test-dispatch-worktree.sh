@@ -354,10 +354,10 @@ t_run_check_ok() {
 }
 
 t_run_check_main_git() {
-    setup_wt_child "git -C \"$PROJ\" branch other; git -C \"$PROJ\" commit -q --allow-empty -m other; echo hello > a.txt; $WT_REPORT"
+    setup_wt_child "git -C \"$PROJ\" branch agents-run/other; git -C \"$PROJ\" commit -q --allow-empty -m other; echo hello > a.txt; $WT_REPORT"
     run_script dispatch-run.sh T1 1
     assert_eq "EXIT:0" "$(head -1 "$PROJ/.agents/workflow/runs/T1-1/done")" "done marker"
-    assert_eq 1 "$(has_branch other && echo 1 || echo 0)" "子の実行中に本体で other ブランチができた"
+    assert_eq 1 "$(has_branch agents-run/other && echo 1 || echo 0)" "子の実行中に本体でほかの run のブランチができた"
     run_script dispatch-check.sh T1 1
     assert_eq 0 "$CODE" "本体の git 変更では tampered にならない: $OUT"
     assert_not_contains "$OUT" "git changed" "git changed は出ない"

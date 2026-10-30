@@ -110,7 +110,7 @@ function ConvertTo-StateMap {
     }
     return $map
 }
-# worktree.txt がある run(dispatch-worktree create 済み)は、worktree の中で git-state -Ref <branch> を
+# worktree.txt がある run(dispatch-worktree create 済み)は、worktree の中で git-state -Run <branch> -Parent <親の作業ブランチ> を
 # 実行した値で比べ、変更の取得も worktree の中で行う($wtDir が空でなければ worktree の run)
 $wtDir = ''
 $wtBranch = ''
@@ -135,8 +135,10 @@ if (-not (Test-Path $gitStatePath)) {
     $recordedState = ConvertTo-StateMap @([System.IO.File]::ReadAllText((Resolve-Path $gitStatePath), [System.Text.Encoding]::UTF8) -split "`r?`n")
     # git-state.ps1 の stderr は捨てる(失敗時は空出力になり、全項目が変わったと判定される)
     if ($wtDir) {
+        $parentRef = "$(& git symbolic-ref -q HEAD 2> $null)".Trim()
+        if (-not $parentRef) { $parentRef = '-' }
         Push-Location $wtDir
-        try { $currentState = ConvertTo-StateMap @(& pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1" -Ref $wtBranch 2> $null) }
+        try { $currentState = ConvertTo-StateMap @(& pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1" -Run $wtBranch -Parent $parentRef 2> $null) }
         finally { Pop-Location }
     } else {
         $currentState = ConvertTo-StateMap @(& pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1" 2> $null)

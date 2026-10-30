@@ -47,8 +47,11 @@ $guardLines = foreach ($f in @($promptPath, $guardState, $guardTasks, '.agents/w
 # 起動時の git 状態(HEAD・ブランチ・参照・設定)を git-state.txt に記録する。dispatch-check が
 # 実行後の状態と比べて、子がリポジトリのどこを変えたかを特定する(失敗しても起動は止めない)
 if ($wtPath) {
+    # 親の作業ブランチは本体で取る(detached なら '-')
+    $parentRef = "$(& git symbolic-ref -q HEAD 2> $null)".Trim()
+    if (-not $parentRef) { $parentRef = '-' }
     Push-Location -LiteralPath $wtPath
-    try { $gitState = & pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1" -Ref $wtBranch } finally { Pop-Location }
+    try { $gitState = & pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1" -Run $wtBranch -Parent $parentRef } finally { Pop-Location }
 } else {
     $gitState = & pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1"
 }
