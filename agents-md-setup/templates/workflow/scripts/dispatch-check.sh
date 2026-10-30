@@ -114,6 +114,33 @@ else
     done < <(LC_ALL=C tr -d '\r' < "$GUARD_PATH")
 fi
 
+# worktree の run は、本体の state.json の自分のタスクの欄が起動時から変わっていないかも確かめる
+if [ -f "$RUN_DIR/worktree.txt" ]; then
+    if [ ! -f "$RUN_DIR/state-entry.txt" ]; then
+        GUARD_ISSUES="${GUARD_ISSUES}state-entry.txt not found
+"
+    else
+        CURRENT_ENTRY="$(python3 -c "
+import json, sys
+try:
+    with open('.agents/workflow/state.json', encoding='utf-8') as f:
+        tasks = json.load(f).get('tasks', [])
+    for e in tasks:
+        if e.get('id') == sys.argv[1]:
+            print(json.dumps({k: e.get(k) for k in ('status', 'retries', 'commit')}, sort_keys=True))
+            break
+    else:
+        print('-')
+except Exception:
+    print('-')
+" "$TASK_ID" 2> /dev/null | tr -d '\r')"
+        if [ "$CURRENT_ENTRY" != "$(LC_ALL=C tr -d '\r' < "$RUN_DIR/state-entry.txt" | head -n 1)" ]; then
+            GUARD_ISSUES="${GUARD_ISSUES}changed: .agents/workflow/state.json ($TASK_ID)
+"
+        fi
+    fi
+fi
+
 # --- 本物のリポジトリの git 状態の検証(dispatch-run が起動時に git-state.txt に記録した値と比べる) ---
 # タスク種別の判定(完了報告の必須項目と変更0件の判定で使う case)は、ここでも IS_PR を使うため
 # この位置に置いている。PR 作成の run(IS_PR=true。タスクIDが pr- で始まる)は config を比べない

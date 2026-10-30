@@ -39,11 +39,36 @@ if ($wtPath) {
     $guardState = "$runDir/worktree/.agents/workflow/state.json"
     $guardTasks = "$runDir/worktree/.agents/workflow/tasks.md"
 }
-$guardLines = foreach ($f in @($promptPath, $guardState, $guardTasks, '.agents/workflow/config.json', '.agents/workflow/child-profiles.json')) {
+function Get-StateEntryText {
+    param([string]$TaskId)
+    try {
+        $st = Get-Content -LiteralPath '.agents/workflow/state.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+        foreach ($e in @($st.tasks)) {
+            if ("$($e.id)" -ne $TaskId) { continue }
+            $parts = foreach ($k in @('commit', 'retries', 'status')) {
+                $v = $e.$k
+                if ($null -eq $v) { $j = 'null' }
+                elseif ($v -is [string]) { $j = '"' + ($v.Replace('\', '\\').Replace('"', '\"')) + '"' }
+                elseif ($v -is [bool]) { $j = $v.ToString().ToLowerInvariant() }
+                else { $j = "$v" }
+                '"' + $k + '": ' + $j
+            }
+            return '{' + ($parts -join ', ') + '}'
+        }
+    } catch {}
+    return '-'
+}
+$guardFiles = @($promptPath, $guardState, $guardTasks, '.agents/workflow/config.json', '.agents/workflow/child-profiles.json')
+# worktree の run は本体の tasks.md も守る(state.json は親が並列中に更新するため、自分のタスクの欄だけを state-entry.txt で守る)
+if ($wtPath) { $guardFiles += '.agents/workflow/tasks.md' }
+$guardLines = foreach ($f in $guardFiles) {
     $h = if (Test-Path -LiteralPath $f -PathType Leaf) { (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash.ToLowerInvariant() } else { '-' }
     "$h  $f"
 }
 [System.IO.File]::WriteAllText((Join-Path (Get-Location) "$runDir/guard.sha256"), (($guardLines -join "`n") + "`n"), [System.Text.UTF8Encoding]::new($false))
+if ($wtPath) {
+    [System.IO.File]::WriteAllText((Join-Path (Get-Location) "$runDir/state-entry.txt"), ((Get-StateEntryText $TaskId) + "`n"), [System.Text.UTF8Encoding]::new($false))
+}
 # 起動時の git 状態(HEAD・ブランチ・参照・設定)を git-state.txt に記録する。dispatch-check が
 # 実行後の状態と比べて、子がリポジトリのどこを変えたかを特定する(失敗しても起動は止めない)
 if ($wtPath) {

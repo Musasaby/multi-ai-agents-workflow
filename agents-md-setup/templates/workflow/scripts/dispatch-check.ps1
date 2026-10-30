@@ -92,6 +92,38 @@ if (-not (Test-Path $guardPath)) {
     }
 }
 
+function Get-StateEntryText {
+    param([string]$TaskId)
+    try {
+        $st = Get-Content -LiteralPath '.agents/workflow/state.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+        foreach ($e in @($st.tasks)) {
+            if ("$($e.id)" -ne $TaskId) { continue }
+            $parts = foreach ($k in @('commit', 'retries', 'status')) {
+                $v = $e.$k
+                if ($null -eq $v) { $j = 'null' }
+                elseif ($v -is [string]) { $j = '"' + ($v.Replace('\', '\\').Replace('"', '\"')) + '"' }
+                elseif ($v -is [bool]) { $j = $v.ToString().ToLowerInvariant() }
+                else { $j = "$v" }
+                '"' + $k + '": ' + $j
+            }
+            return '{' + ($parts -join ', ') + '}'
+        }
+    } catch {}
+    return '-'
+}
+# worktree の run は、本体の state.json の自分のタスクの欄が起動時から変わっていないかも確かめる
+if (Test-Path -LiteralPath "$runDir/worktree.txt") {
+    $entryPath = "$runDir/state-entry.txt"
+    if (-not (Test-Path -LiteralPath $entryPath -PathType Leaf)) {
+        $guardIssues += 'state-entry.txt not found'
+    } else {
+        $recordedEntry = ([System.IO.File]::ReadAllText((Resolve-Path $entryPath), [System.Text.Encoding]::UTF8) -split "`r?`n")[0]
+        if ((Get-StateEntryText $TaskId) -ne $recordedEntry) {
+            $guardIssues += "changed: .agents/workflow/state.json ($TaskId)"
+        }
+    }
+}
+
 # --- 本物のリポジトリの git 状態の検証(dispatch-run が起動時に git-state.txt に記録した値と比べる) ---
 # タスク種別の判定(完了報告の必須項目と変更0件の判定で使う)は、ここでも $isPr を使うため
 # この位置に置いている。PR 作成の run(タスクIDが pr- で始まる)は config を比べない

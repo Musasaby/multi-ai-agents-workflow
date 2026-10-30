@@ -73,7 +73,12 @@ if [ -n "$WT_PATH" ]; then
   GUARD_STATE="$RUN_DIR/worktree/.agents/workflow/state.json"
   GUARD_TASKS="$RUN_DIR/worktree/.agents/workflow/tasks.md"
 fi
-for f in "$PROMPT_PATH" "$GUARD_STATE" "$GUARD_TASKS" .agents/workflow/config.json .agents/workflow/child-profiles.json; do
+GUARD_FILES=("$PROMPT_PATH" "$GUARD_STATE" "$GUARD_TASKS" .agents/workflow/config.json .agents/workflow/child-profiles.json)
+if [ -n "$WT_PATH" ]; then
+  # 本体の tasks.md も守る(state.json は親が並列中に更新するため、自分のタスクの欄だけを state-entry.txt で守る)
+  GUARD_FILES+=(.agents/workflow/tasks.md)
+fi
+for f in "${GUARD_FILES[@]}"; do
   if [ ! -f "$f" ]; then
     h=-
   elif command -v sha256sum > /dev/null 2>&1; then
@@ -83,6 +88,22 @@ for f in "$PROMPT_PATH" "$GUARD_STATE" "$GUARD_TASKS" .agents/workflow/config.js
   fi
   printf '%s  %s\n' "$h" "$f" >> "$GUARD_PATH"
 done
+if [ -n "$WT_PATH" ]; then
+  python3 -c "
+import json, sys
+try:
+    with open('.agents/workflow/state.json', encoding='utf-8') as f:
+        tasks = json.load(f).get('tasks', [])
+    for e in tasks:
+        if e.get('id') == sys.argv[1]:
+            print(json.dumps({k: e.get(k) for k in ('status', 'retries', 'commit')}, sort_keys=True))
+            break
+    else:
+        print('-')
+except Exception:
+    print('-')
+" "$TASK_ID" 2> /dev/null | tr -d '\r' > "$RUN_DIR/state-entry.txt"
+fi
 
 # 起動時の git 状態(HEAD・ブランチ・参照・設定)を git-state.txt に記録する。dispatch-check が
 # 実行後の状態と比べて、子がリポジトリのどこを変えたかを特定する(失敗しても起動は止めない)。
