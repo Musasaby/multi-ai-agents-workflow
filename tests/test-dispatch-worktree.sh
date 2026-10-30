@@ -196,6 +196,44 @@ t_collect_dirty() {
     assert_eq 1 "$([ -d "$WTDIR" ] && echo 1 || echo 0)" "worktree は残る"
 }
 
+t_collect_git_fail() {
+    setup_collect
+    local run="$PROJ/.agents/workflow/runs/T1-1"
+    printf 'line1\nfromwt\n' > "$WTDIR/base.txt"
+    local gitdir
+    gitdir="$(git -C "$WTDIR" rev-parse --absolute-git-dir)"
+    : > "$gitdir/index.lock"
+    run_script dispatch-worktree.sh collect T1 1
+    assert_eq 30 "$CODE" "exit 30"
+    assert_eq "Next: escalate reason=worktree" "$(last_line)" "escalate reason=worktree"
+    assert_eq 1 "$([ -d "$WTDIR" ] && echo 1 || echo 0)" "worktree は残る"
+    assert_eq 1 "$(has_branch agents-run/T1-1 && echo 1 || echo 0)" "ブランチは残る"
+    assert_file_exists "$run/worktree.txt" "worktree.txt は残る"
+    rm -f "$gitdir/index.lock"
+    run_script dispatch-worktree.sh collect T1 1
+    assert_eq 0 "$CODE" "index.lock を消すと collect できる: $ERR"
+}
+
+t_collect_committed() {
+    setup_collect
+    printf 'hello\n' > "$WTDIR/a.txt"
+    git -C "$WTDIR" add a.txt
+    git -C "$WTDIR" commit -q -m "child"
+    run_script dispatch-worktree.sh collect T1 1
+    assert_eq 0 "$CODE" "collect exit: $ERR"
+    assert_file_exists "$PROJ/a.txt" "子がコミットした a.txt が本体に入る"
+}
+
+t_collect_no_base() {
+    setup_collect
+    local run="$PROJ/.agents/workflow/runs/T1-1"
+    sed -i '/^base /d' "$run/worktree.txt"
+    printf 'hello\n' > "$WTDIR/a.txt"
+    run_script dispatch-worktree.sh collect T1 1
+    assert_eq 0 "$CODE" "base 行が無くても collect できる: $ERR"
+    assert_file_exists "$PROJ/a.txt" "HEAD との差分で a.txt が本体に入る"
+}
+
 # ---------- dispatch-run・dispatch-check(worktree の run) ----------
 
 WT_REPORT='echo "## 完了報告"; echo "- 変更ファイル: a.txt"; echo "- テスト結果: 全件パス"'
@@ -264,6 +302,9 @@ test_case "dispatch-worktree: worktree add に -c core.longpaths=true が付く"
 test_case "dispatch-worktree: collect で変更が本体に入り worktree が消える" t_collect
 test_case "dispatch-worktree: collect で本体と衝突すると exit 40 で worktree が残る" t_collect_conflict
 test_case "dispatch-worktree: collect で本体が dirty だと exit 20" t_collect_dirty
+test_case "dispatch-worktree: collect で git add が失敗すると exit 30 で worktree が残り、直せば collect できる" t_collect_git_fail
+test_case "dispatch-worktree: 子が worktree でコミットした変更が collect のパッチに入る" t_collect_committed
+test_case "dispatch-worktree: worktree.txt に base 行が無いと HEAD との差分で collect する" t_collect_no_base
 test_case "dispatch-worktree: worktree の run を dispatch-run で動かし dispatch-check が collect を返す" t_run_check_ok
 test_case "dispatch-worktree: 子の実行中に本体で branch・commit しても tampered にならない" t_run_check_main_git
 test_case "dispatch-worktree: 子が worktree で commit すると tampered(exit 8)" t_run_check_commit

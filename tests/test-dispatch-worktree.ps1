@@ -222,6 +222,44 @@ Invoke-TestCase "dispatch-worktree: collect で本体が dirty だと exit 20" {
     Add-Result (Test-Path -LiteralPath $wt -PathType Container) "worktree は残る"
 }
 
+Invoke-TestCase "dispatch-worktree: collect で git add が失敗すると exit 30 で worktree が残り、直せば collect できる" {
+    $wt = Initialize-Collect
+    $run = "$script:Proj/.agents/workflow/runs/T1-1"
+    Write-Plain "$wt/base.txt" "line1`nfromwt`n"
+    $gitdir = (git -C $wt rev-parse --absolute-git-dir).Trim()
+    Write-Plain "$gitdir/index.lock" ""
+    Invoke-Script dispatch-worktree.ps1 collect T1 1
+    Assert-Eq 30 $script:Code "exit 30"
+    Assert-Eq "Next: escalate reason=worktree" (Get-LastLine) "escalate reason=worktree"
+    Add-Result (Test-Path -LiteralPath $wt -PathType Container) "worktree は残る"
+    Add-Result (Test-Branch 'agents-run/T1-1') "ブランチは残る"
+    Assert-FileExists "$run/worktree.txt" "worktree.txt は残る"
+    Remove-Item -LiteralPath "$gitdir/index.lock" -Force
+    Invoke-Script dispatch-worktree.ps1 collect T1 1
+    Assert-Eq 0 $script:Code "index.lock を消すと collect できる: $($script:Err)"
+}
+
+Invoke-TestCase "dispatch-worktree: 子が worktree でコミットした変更が collect のパッチに入る" {
+    $wt = Initialize-Collect
+    Write-Plain "$wt/a.txt" "hello`n"
+    git -C $wt add a.txt *> $null
+    git -C $wt commit -q -m "child" *> $null
+    Invoke-Script dispatch-worktree.ps1 collect T1 1
+    Assert-Eq 0 $script:Code "collect exit: $($script:Err)"
+    Assert-FileExists "$script:Proj/a.txt" "子がコミットした a.txt が本体に入る"
+}
+
+Invoke-TestCase "dispatch-worktree: worktree.txt に base 行が無いと HEAD との差分で collect する" {
+    $wt = Initialize-Collect
+    $wtTxt = "$script:Proj/.agents/workflow/runs/T1-1/worktree.txt"
+    $kept = @([System.IO.File]::ReadAllText($wtTxt) -split "`n" | Where-Object { $_ -ne '' -and $_ -notmatch '^base ' })
+    Write-Plain $wtTxt (($kept -join "`n") + "`n")
+    Write-Plain "$wt/a.txt" "hello`n"
+    Invoke-Script dispatch-worktree.ps1 collect T1 1
+    Assert-Eq 0 $script:Code "base 行が無くても collect できる: $($script:Err)"
+    Assert-FileExists "$script:Proj/a.txt" "HEAD との差分で a.txt が本体に入る"
+}
+
 Invoke-TestCase "dispatch-worktree: worktree の run を dispatch-run で動かし dispatch-check が collect を返す" {
     Initialize-WtChild "Set-Content a.txt hello; $WtReport"
     Invoke-Script dispatch-run.ps1 T1 1
