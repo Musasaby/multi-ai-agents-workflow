@@ -212,6 +212,53 @@ Invoke-TestCase "dispatch-worktree: collect で本体と衝突すると exit 40 
     Add-Result (Test-Path -LiteralPath $wt -PathType Container) "worktree は残る"
 }
 
+Invoke-TestCase "dispatch-worktree: collect が成功すると collected ができる" {
+    $wt = Initialize-Collect
+    $run = "$script:Proj/.agents/workflow/runs/T1-1"
+    Write-Plain "$wt/base.txt" "line1`nfromwt`n"
+    Assert-FileAbsent "$run/collected" "collect 前は collected が無い"
+    Invoke-Script dispatch-worktree.ps1 collect T1 1
+    Assert-Eq 0 $script:Code "collect exit: $($script:Err)"
+    Assert-FileExists "$run/collected" "collect が成功すると collected ができる"
+}
+
+Invoke-TestCase "dispatch-worktree: collect の衝突の後の create は前の試行を持ち越さない" {
+    $wt = Initialize-Collect
+    $run = "$script:Proj/.agents/workflow/runs/T1-1"
+    Write-Plain "$wt/base.txt" "line1`nfromwt`n"
+    Write-Plain "$script:Proj/base.txt" "line1`nfrommain`n"
+    git -C $script:Proj commit -q -a -m "main change" *> $null
+    Invoke-Script dispatch-worktree.ps1 collect T1 1
+    Assert-Eq 40 $script:Code "collect は exit 40"
+    Assert-FileAbsent "$run/collected" "衝突した collect では collected ができない"
+
+    Invoke-Script dispatch-worktree.ps1 create T1 2
+    Assert-Eq 0 $script:Code "create 2 exit: $($script:Err)"
+    Assert-Contains $script:Out "Carried: none (not collected:" "取り込まれなかった試行は持ち越さない"
+    Assert-Eq "line1`nfrommain`n" ([System.IO.File]::ReadAllText("$script:Proj/base.txt") -replace "`r`n", "`n") "本体の base.txt は変わらない"
+    Assert-FileExists "$run/changes.patch" "試行 1 の changes.patch がある"
+}
+
+Invoke-TestCase "dispatch-worktree: create で持ち越しが衝突すると exit 40 で WT・ブランチが残らず本体が戻る" {
+    $wt = Initialize-Collect
+    $run = "$script:Proj/.agents/workflow/runs/T1-1"
+    Write-Plain "$wt/base.txt" "mine`nline2`n"
+    Invoke-Script dispatch-worktree.ps1 collect T1 1
+    Assert-Eq 0 $script:Code "collect exit: $($script:Err)"
+    Assert-FileExists "$run/collected" "collect で collected ができる"
+    Assert-Eq "mine`nline2`n" ([System.IO.File]::ReadAllText("$script:Proj/base.txt") -replace "`r`n", "`n") "本体の1行目は mine"
+    Write-Plain "$script:Proj/base.txt" "theirs`nline2`n"
+    git -C $script:Proj commit -q -a -m "theirs" *> $null
+    Write-Plain "$script:Proj/base.txt" "mine`nline2`n"
+
+    Invoke-Script dispatch-worktree.ps1 create T1 2
+    Assert-Eq 40 $script:Code "持ち越しの衝突は exit 40"
+    Assert-Eq "Next: escalate reason=conflict" (Get-LastLine) "escalate reason=conflict"
+    Add-Result (-not (Test-Branch 'agents-run/T1-2')) "試行 2 のブランチが残らない"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/runs/T1-2/worktree" "試行 2 の WT が残らない"
+    Assert-Eq "mine`nline2`n" ([System.IO.File]::ReadAllText("$script:Proj/base.txt") -replace "`r`n", "`n") "本体の1行目が mine に戻る"
+}
+
 Invoke-TestCase "dispatch-worktree: collect で本体が dirty だと exit 20" {
     $wt = Initialize-Collect
     Write-Plain "$wt/base.txt" "line1`nfromwt`n"
