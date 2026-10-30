@@ -1,5 +1,5 @@
 ﻿# 子エージェントの run 用の git worktree を作る・集める・消す。
-# Usage: dispatch-worktree.ps1 -Action <create|collect|remove> -TaskId <ID> -Attempt <N>
+# Usage: dispatch-worktree.ps1 -Action <create|collect|remove|abort> -TaskId <ID> -Attempt <N>
 #   RUN=.agents/workflow/runs/<TaskId>-<Attempt>、WT=$RUN/worktree、ブランチ=agents-run/<TaskId>-<Attempt>
 #   create : WT を HEAD から作る。試行回数が 2 以上なら、前の試行の変更を取り除いてから、
 #            新しい WT に 3way で持ち越す(前の試行に $RUN/collected が無ければ取り除かず持ち越さない)。
@@ -7,6 +7,8 @@
 #   collect: WT の変更を $RUN/changes.patch にして本体へ git apply し、空の $RUN/collected を作って WT を消す。
 #            tasks.md の changed に無いファイルは `Undeclared: <path>` で出す
 #   remove : WT とブランチと $RUN/worktree.txt を消す(無くてもエラーにしない)
+#   abort  : remove と同じく消したうえで、$RUN/reverted があれば、そこに書かれたパッチを本体に git apply で
+#            当て直して reverted を消す(当て直せなければ stderr にパッチのパスを出して exit 20)
 # exit: 0=成功 / 1=使い方不備 / 20=dirty-tree(前の試行の変更を本体から取り除けない・collect では本体の作業ツリーが clean でない) /
 #   30=worktree(WT が既にある・作成に失敗・パッチを作る git の失敗・collect では worktree.txt または WT のディレクトリが無い) /
 #   40=conflict(collect。git apply の失敗を含む / create の持ち越しの衝突)
@@ -21,8 +23,8 @@ if ($TaskId -cnotmatch '^[A-Za-z0-9_-]+$' -or $Attempt -lt 1) {
     [Console]::Error.WriteLine("Invalid TaskId/Attempt: '$TaskId' '$Attempt'")
     exit 1
 }
-if ($Action -cnotin @('create', 'collect', 'remove')) {
-    [Console]::Error.WriteLine("Invalid action: '$Action' (create|collect|remove)")
+if ($Action -cnotin @('create', 'collect', 'remove', 'abort')) {
+    [Console]::Error.WriteLine("Invalid action: '$Action' (create|collect|remove|abort)")
     exit 1
 }
 Set-Location $PSScriptRoot\..\..\..
@@ -89,6 +91,25 @@ function Remove-RunWorktree {
 
 if ($Action -ceq 'remove') {
     Remove-RunWorktree $wt $branch
+    Write-Output "Next: continue"
+    exit 0
+}
+if ($Action -ceq 'abort') {
+    Remove-RunWorktree $wt $branch
+    if (Test-Path -LiteralPath "$run/reverted") {
+        $revPatch = ([System.IO.File]::ReadAllText((Resolve-Path "$run/reverted"), [System.Text.Encoding]::UTF8) -split "`r?`n")[0]
+        $applied = $false
+        if ($revPatch) {
+            git apply $revPatch
+            $applied = ($LASTEXITCODE -eq 0)
+        }
+        if (-not $applied) {
+            [Console]::Error.WriteLine("failed to re-apply the reverted changes to the main working tree: $revPatch")
+            Write-Output "Next: escalate reason=dirty-tree"
+            exit 20
+        }
+        Remove-Item -LiteralPath "$run/reverted" -Force -ErrorAction SilentlyContinue
+    }
     Write-Output "Next: continue"
     exit 0
 }

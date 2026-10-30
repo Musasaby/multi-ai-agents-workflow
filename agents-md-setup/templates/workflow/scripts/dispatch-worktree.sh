@@ -2,7 +2,7 @@
 set -uo pipefail
 
 # 子エージェントの run 用の git worktree を作る・集める・消す。
-# Usage: dispatch-worktree.sh <create|collect|remove> <TaskId> <Attempt>
+# Usage: dispatch-worktree.sh <create|collect|remove|abort> <TaskId> <Attempt>
 #   RUN=.agents/workflow/runs/<TaskId>-<Attempt>、WT=$RUN/worktree、ブランチ=agents-run/<TaskId>-<Attempt>
 #   create : WT を HEAD から作る。試行回数が 2 以上なら、前の試行の変更を取り除いてから、
 #            新しい WT に 3way で持ち越す(前の試行に $RUN/collected が無ければ取り除かず持ち越さない)。
@@ -10,23 +10,25 @@ set -uo pipefail
 #   collect: WT の変更を $RUN/changes.patch にして本体へ git apply し、空の $RUN/collected を作って WT を消す。
 #            tasks.md の changed に無いファイルは `Undeclared: <path>` で出す
 #   remove : WT とブランチと $RUN/worktree.txt を消す(無くてもエラーにしない)
+#   abort  : remove と同じく消したうえで、$RUN/reverted があれば、そこに書かれたパッチを本体に git apply で
+#            当て直して reverted を消す(当て直せなければ stderr にパッチのパスを出して exit 20)
 # exit: 0=成功 / 1=使い方不備 / 20=dirty-tree(前の試行の変更を本体から取り除けない・collect では本体の作業ツリーが clean でない) /
 #   30=worktree(WT が既にある・作成に失敗・パッチを作る git の失敗・collect では worktree.txt または WT のディレクトリが無い) /
 #   40=conflict(collect。git apply の失敗を含む / create の持ち越しの衝突)
 # stdout の最後の行には次のアクションを示す `Next:` 行を出す(continue / escalate reason=<理由>。
 # 使い方不備の exit 1 では出さない)
 
-ACTION="${1:?Usage: dispatch-worktree.sh <create|collect|remove> <TaskId> <Attempt>}"
-TASK_ID="${2:?Usage: dispatch-worktree.sh <create|collect|remove> <TaskId> <Attempt>}"
-ATTEMPT="${3:?Usage: dispatch-worktree.sh <create|collect|remove> <TaskId> <Attempt>}"
+ACTION="${1:?Usage: dispatch-worktree.sh <create|collect|remove|abort> <TaskId> <Attempt>}"
+TASK_ID="${2:?Usage: dispatch-worktree.sh <create|collect|remove|abort> <TaskId> <Attempt>}"
+ATTEMPT="${3:?Usage: dispatch-worktree.sh <create|collect|remove|abort> <TaskId> <Attempt>}"
 if ! [[ "$TASK_ID" =~ ^[A-Za-z0-9_-]+$ ]] || ! [[ "$ATTEMPT" =~ ^[0-9]+$ ]] || [ "$ATTEMPT" -lt 1 ]; then
     echo "Invalid TaskId/Attempt: '$TASK_ID' '$ATTEMPT'" >&2
     exit 1
 fi
 case "$ACTION" in
-    create | collect | remove) ;;
+    create | collect | remove | abort) ;;
     *)
-        echo "Invalid action: '$ACTION' (create|collect|remove)" >&2
+        echo "Invalid action: '$ACTION' (create|collect|remove|abort)" >&2
         exit 1
         ;;
 esac
@@ -92,6 +94,20 @@ drop_worktree() {
 case "$ACTION" in
     remove)
         drop_worktree "$WT" "$BRANCH"
+        echo "Next: continue"
+        exit 0
+        ;;
+    abort)
+        drop_worktree "$WT" "$BRANCH"
+        if [ -f "$RUN/reverted" ]; then
+            REV_PATCH="$(head -n 1 "$RUN/reverted" | tr -d '\r')"
+            if [ -z "$REV_PATCH" ] || ! git apply "$REV_PATCH"; then
+                echo "failed to re-apply the reverted changes to the main working tree: $REV_PATCH" >&2
+                echo "Next: escalate reason=dirty-tree"
+                exit 20
+            fi
+            rm -f "$RUN/reverted"
+        fi
         echo "Next: continue"
         exit 0
         ;;

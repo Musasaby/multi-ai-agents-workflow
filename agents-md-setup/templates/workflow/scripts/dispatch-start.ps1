@@ -149,10 +149,18 @@ function Invoke-CheckCommand { param([string]$Command)
     return $true
 }
 
+# 並列のとき、子の起動前の失敗で作った worktree を片付ける(出力は stderr へ)
+function Stop-RunWorktree {
+    if ($parallel) {
+        & pwsh -NoProfile -File "$PSScriptRoot/dispatch-worktree.ps1" abort $TaskId $Attempt | ForEach-Object { [Console]::Error.WriteLine("$_") }
+    }
+}
+
 # 3a. 疎通確認
 $healthcheck = Get-ChildCfg 'healthcheck_command'
 if ($healthcheck) {
     if (-not (Invoke-CheckCommand $healthcheck)) {
+        Stop-RunWorktree
         Write-Output "Next: escalate reason=healthcheck"
         exit 30
     }
@@ -162,6 +170,7 @@ if ($healthcheck) {
 $warmup = Get-ChildCfg 'warmup_command'
 if (-not $Pr -and $warmup -and -not (Test-Path '.agents/workflow/runs/*/guard.sha256')) {
     if (-not (Invoke-CheckCommand $warmup)) {
+        Stop-RunWorktree
         Write-Output "Next: escalate reason=warmup"
         exit 31
     }
@@ -175,6 +184,7 @@ if ($Pr) {
 }
 $code = $LASTEXITCODE
 if ($code -ne 0) {
+    Stop-RunWorktree
     Write-Output "Next: escalate reason=prompt-gen"
     exit (40 + $code)
 }
@@ -184,6 +194,7 @@ if ($Pr) {
     $TaskId = if ($runIdLine) { ($runIdLine -replace '^RunId: ', '').Trim() } else { '' }
     if (-not $TaskId) {
         [Console]::Error.WriteLine("dispatch-prompt-gen -Pr did not report a RunId")
+        Stop-RunWorktree
         Write-Output "Next: escalate reason=prompt-gen"
         exit 41
     }
@@ -192,6 +203,7 @@ if ($Pr) {
     # 5. 状態を in_progress にする
     & pwsh -NoProfile -File "$PSScriptRoot/task-state.ps1" $TaskId start
     if ($LASTEXITCODE -ne 0) {
+        Stop-RunWorktree
         Write-Output "Next: escalate reason=task-state"
         exit 50
     }

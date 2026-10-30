@@ -139,6 +139,13 @@ elif isinstance(v, str):
 " "$1" 2> /dev/null | tr -d '\r'
 }
 
+# 並列のとき、子の起動前の失敗で作った worktree を片付ける(出力は stderr へ)
+abort_worktree() {
+    if [ "$PARALLEL" = true ]; then
+        bash "$SCRIPT_DIR/dispatch-worktree.sh" abort "$TASK_ID" "$ATTEMPT" >&2
+    fi
+}
+
 # コマンドを実行し、失敗したら出力の末尾20行を stderr に出す($1=コマンド)
 run_check_command() {
     local out code
@@ -160,6 +167,7 @@ run_check_command() {
 HEALTHCHECK="$(cfg_get healthcheck_command)"
 if [ -n "$HEALTHCHECK" ]; then
     if ! run_check_command "$HEALTHCHECK"; then
+        abort_worktree
         echo "Next: escalate reason=healthcheck"
         exit 30
     fi
@@ -169,6 +177,7 @@ fi
 WARMUP="$(cfg_get warmup_command)"
 if [ "$PR_MODE" = false ] && [ -n "$WARMUP" ] && ! compgen -G ".agents/workflow/runs/*/guard.sha256" > /dev/null; then
     if ! run_check_command "$WARMUP"; then
+        abort_worktree
         echo "Next: escalate reason=warmup"
         exit 31
     fi
@@ -182,6 +191,7 @@ else
 fi
 CODE=$?
 if [ "$CODE" -ne 0 ]; then
+    abort_worktree
     echo "Next: escalate reason=prompt-gen"
     exit $((40 + CODE))
 fi
@@ -190,6 +200,7 @@ if [ "$PR_MODE" = true ]; then
     TASK_ID="$(printf '%s\n' "$GEN_OUT" | sed -n 's/^RunId: //p' | tr -d '\r' | head -n 1)"
     if [ -z "$TASK_ID" ]; then
         echo "dispatch-prompt-gen --pr did not report a RunId" >&2
+        abort_worktree
         echo "Next: escalate reason=prompt-gen"
         exit 41
     fi
@@ -197,6 +208,7 @@ if [ "$PR_MODE" = true ]; then
 else
     # 5. 状態を in_progress にする
     if ! bash "$SCRIPT_DIR/task-state.sh" "$TASK_ID" start; then
+        abort_worktree
         echo "Next: escalate reason=task-state"
         exit 50
     fi
