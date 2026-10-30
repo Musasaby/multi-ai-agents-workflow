@@ -24,3 +24,6 @@ test-exitcode.ps1: *
 
 # skill-size.ps1 は PowerShell 版だけなので、そのテストも ps1 だけ
 test-skill-size.ps1: *
+
+# 端末の出力コードページの切り替えは ps1(workflow-logs.ps1)専用。リダイレクト時にバイト列が変わらないことの確認
+test-workflow-logs.ps1: logs: リダイレクトで受けた日本語は BOM なしの UTF-8 のバイト列になる
