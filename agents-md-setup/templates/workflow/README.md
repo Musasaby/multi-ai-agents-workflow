@@ -90,6 +90,10 @@
 | `text_refine.targets` | 推敲する場面。`summary`(完了サマリー報告)・`confirm`(ユーザーへの確認依頼)・`commit`(コミットメッセージの説明の1行)・`pr_body`(PR説明)・`task_done`(タスク1件の完了報告)・`tasks`(agent-task-plan で書く tasks.md)から選ぶ配列。既存の利用先は `"tasks"` を足すと有効になる | 6つすべて |
 | `text_refine.reader` | 推敲後の文章の読み手。`expert`(同じ分野の専門家)・`informed`(分野は違うが技術に詳しい人)・`general`(専門知識のない人)。他の値は `informed` 扱い | `informed` |
 
+**Windows での `command_template`**: `bash ./x.sh "{prompt}"` のように `bash` だけで書くと、`dispatch-run` が子を起動するときの
+Windows のコマンド検索順で System32 の `bash.exe`(WSL)が Git Bash より先に選ばれ、Windows のパスが見えずに失敗することがある。
+Git Bash を使うなら `"C:/Program Files/Git/usr/bin/bash.exe" ./x.sh "{prompt}"` のようにフルパスで書く。
+
 ### 子CLIのプロファイル
 
 `child_agent.profile` は子CLIの種類を表すプロファイル名で、(1) `dispatch-run` が子の出力をどう扱うか
@@ -685,6 +689,10 @@ run の完了をポーリングで待つ。1回の呼び出しで `--max-wait` �
   `Undeclared: <path>`(無ければ `Undeclared: none`)で出す。成功時は `Applied: <N> files`・
   `Patch: <パス>`・`Next: review <ID>`
 - `remove`: WT・ブランチ・`worktree.txt` を消す(無くてもエラーにしない)
+
+**Windows でのパスの長さ**: WT は `.agents/workflow/runs/<ID>-<N>/worktree/` に作るので、WT 内のパスは
+本体より約35文字長くなる。`dispatch-worktree` は WT に対する git の操作に `core.longpaths` を付けて作るが、
+子の CLI やツールが長いパスを扱えないことがある。プロジェクトは短いパスに置く(例: `C:\work\proj`)。
 
 `worktree.txt` は `$RUN/` に書く3行(`dispatch-run` と `dispatch-check` が読む):
 
