@@ -139,6 +139,60 @@ except Exception:
 "
         fi
     fi
+    # 自分以外のタスクの欄は、親の正規の遷移(task-state・state-sync --insert)だけを許す
+    if [ ! -f "$RUN_DIR/state-tasks.json" ]; then
+        GUARD_ISSUES="${GUARD_ISSUES}state-tasks.json not found
+"
+    else
+        BAD_TASKS="$(python3 -c "
+import json, subprocess, sys
+try:
+    with open(sys.argv[2], encoding='utf-8') as f:
+        before = {e['id']: e for e in json.load(f)}
+except Exception:
+    before = None
+if before is None:
+    print(sys.argv[1])
+    sys.exit(0)
+try:
+    with open('.agents/workflow/state.json', encoding='utf-8') as f:
+        now = {str(e.get('id')): e for e in json.load(f).get('tasks', [])}
+except Exception:
+    now = {}
+
+def is_ancestor(c):
+    if not c or not isinstance(c, str):
+        return False
+    r = subprocess.run(['git', 'merge-base', '--is-ancestor', c, 'HEAD'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return r.returncode == 0
+
+bad = []
+for tid, b in before.items():
+    if tid == sys.argv[1]:
+        continue
+    n = now.get(tid)
+    if n is None:
+        bad.append(tid)
+    elif b.get('status') == 'done':
+        if n.get('status') != 'done' or n.get('commit') != b.get('commit'):
+            bad.append(tid)
+    else:
+        if n.get('status') != 'pending' and (n.get('retries') or 0) < (b.get('retries') or 0):
+            bad.append(tid)
+        elif n.get('status') == 'pending' and b.get('status') != 'failed' and (n.get('retries') or 0) < (b.get('retries') or 0):
+            bad.append(tid)
+        elif n.get('status') == 'done' and not is_ancestor(n.get('commit')):
+            bad.append(tid)
+for tid, n in now.items():
+    if tid not in before and n.get('status') != 'pending':
+        bad.append(tid)
+print(' '.join(bad))
+" "$TASK_ID" "$RUN_DIR/state-tasks.json" 2> /dev/null | tr -d '\r')"
+        for bad_id in $BAD_TASKS; do
+            GUARD_ISSUES="${GUARD_ISSUES}changed: .agents/workflow/state.json ($bad_id)
+"
+        done
+    fi
 fi
 
 # --- 本物のリポジトリの git 状態の検証(dispatch-run が起動時に git-state.txt に記録した値と比べる) ---

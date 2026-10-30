@@ -133,6 +133,56 @@ if (Test-Path -LiteralPath "$runDir/worktree.txt") {
             $guardIssues += "changed: .agents/workflow/state.json ($TaskId)"
         }
     }
+    # 自分以外のタスクの欄は、親の正規の遷移(task-state・state-sync --insert)だけを許す
+    $tasksPath = "$runDir/state-tasks.json"
+    if (-not (Test-Path -LiteralPath $tasksPath -PathType Leaf)) {
+        $guardIssues += 'state-tasks.json not found'
+    } else {
+        $before = $null
+        try {
+            $before = @([System.IO.File]::ReadAllText((Resolve-Path $tasksPath), [System.Text.Encoding]::UTF8) | ConvertFrom-Json)
+        } catch {}
+        $nowMap = @{}
+        try {
+            $stNow = Get-Content -LiteralPath '.agents/workflow/state.json' -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
+            foreach ($e in @($stNow.tasks)) { $nowMap["$($e.id)"] = $e }
+        } catch {}
+        if ($null -eq $before) {
+            $guardIssues += "changed: .agents/workflow/state.json ($TaskId)"
+        } else {
+            $badTasks = @()
+            $beforeIds = @{}
+            foreach ($b in $before) {
+                if ($null -eq $b) { continue }
+                $tid = "$($b.id)"
+                $beforeIds[$tid] = $true
+                if ($tid -eq $TaskId) { continue }
+                $n = $nowMap[$tid]
+                if ($null -eq $n) { $badTasks += $tid; continue }
+                $bRetries = [int]$b.retries
+                $nRetries = [int]$n.retries
+                if ("$($b.status)" -eq 'done') {
+                    if ("$($n.status)" -ne 'done' -or "$($n.commit)" -ne "$($b.commit)") { $badTasks += $tid }
+                } elseif ("$($n.status)" -ne 'pending' -and $nRetries -lt $bRetries) {
+                    $badTasks += $tid
+                } elseif ("$($n.status)" -eq 'pending' -and "$($b.status)" -ne 'failed' -and $nRetries -lt $bRetries) {
+                    $badTasks += $tid
+                } elseif ("$($n.status)" -eq 'done') {
+                    $c = "$($n.commit)"
+                    $isAnc = $false
+                    if ($c) {
+                        & git merge-base --is-ancestor $c HEAD 2> $null
+                        $isAnc = ($LASTEXITCODE -eq 0)
+                    }
+                    if (-not $isAnc) { $badTasks += $tid }
+                }
+            }
+            foreach ($tid in $nowMap.Keys) {
+                if (-not $beforeIds.ContainsKey($tid) -and "$($nowMap[$tid].status)" -ne 'pending') { $badTasks += $tid }
+            }
+            foreach ($tid in $badTasks) { $guardIssues += "changed: .agents/workflow/state.json ($tid)" }
+        }
+    }
 }
 
 # --- 本物のリポジトリの git 状態の検証(dispatch-run が起動時に git-state.txt に記録した値と比べる) ---

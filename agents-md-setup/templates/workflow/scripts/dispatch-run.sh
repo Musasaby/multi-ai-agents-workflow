@@ -103,6 +103,16 @@ try:
 except Exception:
     print('-')
 " "$TASK_ID" 2> /dev/null | tr -d '\r' > "$RUN_DIR/state-entry.txt"
+  # 全タスクの {id, status, retries, commit} も記録する(dispatch-check が、ほかのタスクの欄の不正な変更を検知する)
+  python3 -c "
+import json
+try:
+    with open('.agents/workflow/state.json', encoding='utf-8') as f:
+        tasks = json.load(f).get('tasks', [])
+    print(json.dumps([{k: e.get(k) for k in ('id', 'status', 'retries', 'commit')} for e in tasks], sort_keys=True))
+except Exception:
+    print('[]')
+" 2> /dev/null | tr -d '\r' > "$RUN_DIR/state-tasks.json"
 fi
 
 # 起動時の git 状態(HEAD・ブランチ・参照・設定)を git-state.txt に記録する。dispatch-check が

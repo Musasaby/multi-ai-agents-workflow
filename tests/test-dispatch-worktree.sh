@@ -409,6 +409,62 @@ t_run_check_parent_activity() {
     assert_eq "Next: collect T1" "$(last_line)" "最後の行は Next: collect T1"
 }
 
+# 子の worktree に、本体の state.json の 1 タスクの欄を書き換えるスクリプトを置く
+# 使い方: python3 setstate.py <state.json> <ID> <status> [<commit>]
+write_setstate_py() {
+    cat > "$PROJ/.agents/workflow/runs/T1-1/worktree/setstate.py" <<'PY'
+import json, sys
+p, tid, status = sys.argv[1:4]
+commit = sys.argv[4] if len(sys.argv) > 4 else None
+with open(p, encoding='utf-8') as f:
+    s = json.load(f)
+for e in s['tasks']:
+    if e['id'] == tid:
+        e['status'] = status
+        if commit:
+            e['commit'] = commit
+with open(p, 'w', encoding='utf-8', newline='\n') as f:
+    json.dump(s, f)
+PY
+}
+
+t_run_check_other_task_done() {
+    write_state "T1:in_progress" "T2:pending"
+    local sp
+    sp="$(py_path "$PROJ/.agents/workflow/state.json")"
+    setup_wt_child "python3 setstate.py \"$sp\" T2 done; echo hello > a.txt; $WT_REPORT"
+    write_setstate_py
+    run_script dispatch-run.sh T1 1
+    run_script dispatch-check.sh T1 1
+    assert_eq 8 "$CODE" "ほかのタスクを commit 無しで done にすると exit 8: $OUT"
+    assert_contains "$OUT" "changed: .agents/workflow/state.json (T2)" "state.json (T2) の changed"
+}
+
+t_run_check_done_reverted() {
+    write_state "T1:in_progress" "T2:pending" "T3:done"
+    local sp
+    sp="$(py_path "$PROJ/.agents/workflow/state.json")"
+    setup_wt_child "python3 setstate.py \"$sp\" T3 pending; echo hello > a.txt; $WT_REPORT"
+    write_setstate_py
+    run_script dispatch-run.sh T1 1
+    run_script dispatch-check.sh T1 1
+    assert_eq 8 "$CODE" "起動時に done だったタスクを pending に戻すと exit 8: $OUT"
+    assert_contains "$OUT" "changed: .agents/workflow/state.json (T3)" "state.json (T3) の changed"
+}
+
+t_run_check_parent_done() {
+    write_state "T1:in_progress" "T2:pending"
+    local sp
+    sp="$(py_path "$PROJ/.agents/workflow/state.json")"
+    setup_wt_child "git -C \"$PROJ\" commit -q --allow-empty -m parent; python3 setstate.py \"$sp\" T2 in_progress; python3 setstate.py \"$sp\" T2 in_review; python3 setstate.py \"$sp\" T2 done \"\$(git -C \"$PROJ\" rev-parse HEAD)\"; echo hello > a.txt; $WT_REPORT"
+    write_setstate_py
+    run_script dispatch-run.sh T1 1
+    assert_eq "EXIT:0" "$(head -1 "$PROJ/.agents/workflow/runs/T1-1/done")" "done marker"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "親の正規の遷移(commit は本体の HEAD の祖先)では tampered にならない: $OUT"
+    assert_not_contains "$OUT" "changed" "changed は出ない"
+}
+
 t_run_check_parent_rewind() {
     git -C "$PROJ" commit -q --allow-empty -m p1
     git -C "$PROJ" commit -q --allow-empty -m p2
@@ -481,6 +537,9 @@ test_case "dispatch-worktree: 子が worktree で tag を作ると tampered(exit
 test_case "dispatch-worktree: 子が本体の state.json の自分のタスクの欄を書き換えると tampered(exit 8)" t_run_check_state_entry
 test_case "dispatch-worktree: 子が本体の tasks.md を書き換えると tampered(exit 8)" t_run_check_tasks_md
 test_case "dispatch-worktree: 実行中の親の commit・ほかのタスクの欄・ほかの run のブランチでは tampered にならない" t_run_check_parent_activity
+test_case "dispatch-worktree: 子が本体の state.json でほかのタスクを commit 無しで done にすると tampered(exit 8)" t_run_check_other_task_done
+test_case "dispatch-worktree: 子が起動時に done だったタスクを pending に戻すと tampered(exit 8)" t_run_check_done_reverted
+test_case "dispatch-worktree: 実行中に親がほかのタスクを正規に done にしても tampered にならない" t_run_check_parent_done
 test_case "dispatch-worktree: 子が本体で親の作業ブランチを巻き戻すと tampered(exit 8)" t_run_check_parent_rewind
 test_case "dispatch-worktree: 子が実行中でないタスクの run のブランチを作ると tampered(exit 8)" t_run_check_foreign_run_branch
 test_case "dispatch-worktree: 起動前からある実行中のタスクの run のブランチは tampered にならない" t_run_check_preexisting_other_run

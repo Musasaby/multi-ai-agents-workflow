@@ -412,6 +412,56 @@ Invoke-TestCase "dispatch-worktree: 実行中の親の commit・ほかのタス�
     Assert-Eq "Next: collect T1" (Get-LastLine) "最後の行は Next: collect T1"
 }
 
+# 子の worktree に、本体の state.json の 1 タスクの欄を書き換えるスクリプト setstate.ps1 を置く
+# 使い方: pwsh -NoProfile -File setstate.ps1 <state.json> <ID> <status> [<commit>]
+function Write-SetStateScript {
+    Write-Plain "$script:Proj/.agents/workflow/runs/T1-1/worktree/setstate.ps1" @'
+param([string]$Path, [string]$Id, [string]$Status, [string]$Commit = '')
+$s = [System.IO.File]::ReadAllText($Path) | ConvertFrom-Json
+foreach ($e in @($s.tasks)) {
+    if ("$($e.id)" -eq $Id) {
+        $e.status = $Status
+        if ($Commit) { $e.commit = $Commit }
+    }
+}
+[System.IO.File]::WriteAllText($Path, ($s | ConvertTo-Json -Depth 10))
+'@
+}
+
+Invoke-TestCase "dispatch-worktree: 子が本体の state.json でほかのタスクを commit 無しで done にすると tampered(exit 8)" {
+    Set-State 'T1:in_progress' 'T2:pending'
+    $sp = "$script:Proj/.agents/workflow/state.json"
+    Initialize-WtChild "& ./setstate.ps1 '$sp' T2 done; Set-Content a.txt hello; $WtReport"
+    Write-SetStateScript
+    Invoke-Script dispatch-run.ps1 T1 1
+    Invoke-Script dispatch-check.ps1 T1 1
+    Assert-Eq 8 $script:Code "ほかのタスクを commit 無しで done にすると exit 8: $($script:Out)"
+    Assert-Contains $script:Out "changed: .agents/workflow/state.json (T2)" "state.json (T2) の changed"
+}
+
+Invoke-TestCase "dispatch-worktree: 子が起動時に done だったタスクを pending に戻すと tampered(exit 8)" {
+    Set-State 'T1:in_progress' 'T2:pending' 'T3:done'
+    $sp = "$script:Proj/.agents/workflow/state.json"
+    Initialize-WtChild "& ./setstate.ps1 '$sp' T3 pending; Set-Content a.txt hello; $WtReport"
+    Write-SetStateScript
+    Invoke-Script dispatch-run.ps1 T1 1
+    Invoke-Script dispatch-check.ps1 T1 1
+    Assert-Eq 8 $script:Code "起動時に done だったタスクを pending に戻すと exit 8: $($script:Out)"
+    Assert-Contains $script:Out "changed: .agents/workflow/state.json (T3)" "state.json (T3) の changed"
+}
+
+Invoke-TestCase "dispatch-worktree: 実行中に親がほかのタスクを正規に done にしても tampered にならない" {
+    Set-State 'T1:in_progress' 'T2:pending'
+    $sp = "$script:Proj/.agents/workflow/state.json"
+    Initialize-WtChild "git -C '$script:Proj' commit -q --allow-empty -m parent; & ./setstate.ps1 '$sp' T2 in_progress; & ./setstate.ps1 '$sp' T2 in_review; & ./setstate.ps1 '$sp' T2 done (git -C '$script:Proj' rev-parse HEAD); Set-Content a.txt hello; $WtReport"
+    Write-SetStateScript
+    Invoke-Script dispatch-run.ps1 T1 1
+    Assert-Eq "EXIT:0" (Get-Content "$script:Proj/.agents/workflow/runs/T1-1/done" -Encoding utf8)[0] "done marker"
+    Invoke-Script dispatch-check.ps1 T1 1
+    Assert-Eq 0 $script:Code "親の正規の遷移(commit は本体の HEAD の祖先)では tampered にならない: $($script:Out)"
+    Assert-NotContains $script:Out "changed" "changed は出ない"
+}
+
 Invoke-TestCase "dispatch-worktree: 子が本体で親の作業ブランチを巻き戻すと tampered(exit 8)" {
     git -C $script:Proj commit -q --allow-empty -m p1
     git -C $script:Proj commit -q --allow-empty -m p2

@@ -79,6 +79,13 @@ $guardLines = foreach ($f in $guardFiles) {
 [System.IO.File]::WriteAllText((Join-Path (Get-Location) "$runDir/guard.sha256"), (($guardLines -join "`n") + "`n"), [System.Text.UTF8Encoding]::new($false))
 if ($wtPath) {
     [System.IO.File]::WriteAllText((Join-Path (Get-Location) "$runDir/state-entry.txt"), ((Get-StateEntryText $TaskId) + "`n"), [System.Text.UTF8Encoding]::new($false))
+    # 全タスクの {id, status, retries, commit} も記録する(dispatch-check が、ほかのタスクの欄の不正な変更を検知する)
+    $allTasks = @()
+    try {
+        $stAll = Get-Content -LiteralPath '.agents/workflow/state.json' -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
+        $allTasks = @(foreach ($e in @($stAll.tasks)) { [ordered]@{ id = "$($e.id)"; status = "$($e.status)"; retries = [int]$e.retries; commit = $e.commit } })
+    } catch {}
+    [System.IO.File]::WriteAllText((Join-Path (Get-Location) "$runDir/state-tasks.json"), ((ConvertTo-Json -InputObject $allTasks -Depth 5 -Compress) + "`n"), [System.Text.UTF8Encoding]::new($false))
 }
 # 起動時の git 状態(HEAD・ブランチ・参照・設定)を git-state.txt に記録する。dispatch-check が
 # 実行後の状態と比べて、子がリポジトリのどこを変えたかを特定する(失敗しても起動は止めない)
