@@ -73,7 +73,7 @@
 | `branch_per_group` | tasks.md にグループ区切り(`<!-- グループ <名前> -->`)がある場合に、グループ単位の PR 作成・ブランチ切替(next-task の exit 6 と `group-advance`)を必須手順にする。`false` ならグループを解釈せず全タスクを1つのまとまりとして扱う。config.json が無い・読めない場合の既定値も `true` | `true` |
 | `verify_before_commit` | コミット直前に親がテストコマンドを1回実行する最終ゲート | `false` |
 | `max_fix_retries` | レビュー不合格時の子エージェントへの再依頼上限。超過で親のサブエージェントにフォールバック | `2` |
-| `max_parallel` | 同時に実行するタスク数の上限。2 以上にすると next-task が、依存がすべて完了していて変更対象のファイルが互いに(実行中のタスクとも)重ならないタスクを同時に選び、各 run を worktree で実行する。provider の利用上限に当たりやすくなるので、2 から試す | `1` |
+| `max_parallel` | 同時に実行するタスク数の上限。2 以上にすると next-task が、依存がすべて完了していて変更対象のファイルが互いに(実行中のタスクとも)重ならないタスクを同時に選び(重なりはディレクトリを含めて判定する。`src/` と `src/app.py` は重なり、`src/a` と `src/ab` は重ならない)、各 run を worktree で実行する。provider の利用上限に当たりやすくなるので、2 から試す | `1` |
 | `parallel_exclusive_files` | 単独で実行するファイルの配列(ルート相対のパスで完全一致)。変更対象(参照ファイル欄で `(変更対象` が付いたパス)にこれらのファイルを1つでも含むタスクは、ほかのタスクが実行中のときは選ばれず、選ばれたときはほかのタスクと一緒に選ばれない。変更対象が1つも無いタスクも同じく単独になる。テンプレートの config.json には書かれていないので、変えたいときに足す | `["AGENTS.md", "README.md"]` |
 | `comprehension_check.enabled` | タスク合格時に理解確認質問を生成するか | `false` |
 | `comprehension_check.questions_per_task` | タスクあたりの質問数 | `3` |
@@ -454,6 +454,9 @@ exit 0 の場合も生成されたプロンプト全文は会話に読み込ま�
 手順3の後に `dispatch-worktree create` で worktree の run にする(手順4以降はその WT を使う run になる)。
 成功時の stdout には `Carried:` 行(前の試行の変更の持ち越し結果)と `Worktree: <パス>` 行を、
 `Next: wait` の前に出す。
+worktree を作った後、子の起動前の手順(疎通確認・ウォームアップ・prompt 生成・`task-state`)で失敗したときは、
+`dispatch-worktree abort` で worktree・ブランチを消し、持ち越しで取り除いた前の試行の変更を本体に戻してから止める。
+`dispatch-run` の起動を確認できない exit 60 では abort しない(子が動いている可能性があるため)。
 
 `--pr` / `-Pr` は PR 作成の run(`pr-<N>-1`)を起動する。手順3・5・7は行わず、手順6は
 `dispatch-prompt-gen --pr` になる(stdout の `RunId` で起動する)。
@@ -523,7 +526,7 @@ Windows にはシグナルの仕組みが無いため、PowerShell 版での強�
 `.agents/workflow/runs/<ID>-<N>/tmp/`(`dispatch-worktree create` が作る)に設定し、`GIT_CEILING_DIRECTORIES` も
 WT 側にする。`guard.sha256` の対象のうち `state.json`・`tasks.md` は、子が触れる WT 側のコピー
 (`runs/<ID>-<N>/worktree/.agents/workflow/` の下)にする(`prompt.md`・`config.json`・`child-profiles.json` は本体のまま)。
-`git-state.txt` は WT の中で `git-state --ref <branch>` を実行した値を記録する。`output.log`・`done` などの
+`git-state.txt` は WT の中で `git-state --run <branch> --parent <親の作業ブランチ>` を実行した値を記録する。`output.log`・`done` などの
 記録は本体の `runs/<ID>-<N>/` に書く。
 
 起動時の git 状態(HEAD・ブランチ・参照・config の SHA-256。「git-state」節の4行)を
@@ -633,11 +636,15 @@ exit code(複数に当たる場合は上の行を優先する):
 この版から、done マーカーが無いときは exit 1 ではなく exit 2 を返す(#69)。
 
 **worktree の run**: run のディレクトリに `worktree.txt` があるとき、次が変わる。
-- `git-state` の比較は、`worktree.txt` の `path` の WT の中で `git-state --ref <branch>` を実行した値と
-  `git-state.txt` を比べる
+- `git-state` の比較は、`worktree.txt` の `path` の WT の中で `git-state --run <branch> --parent <親の作業ブランチ>` を
+  実行した値と `git-state.txt` を比べる(ほかの run のブランチと親の作業ブランチの変化は検知しない。
+  共有の参照のタグ等を子が作れば検知する)
 - `Changes:`・`git status --porcelain`・`git diff --stat` は WT の中で取る
 - WT のディレクトリが無いときは `Guard:` に `worktree not found: <path>` を加え(Verdict は `tampered`)、
   git 状態の比較は行わず、`Changes:` は本体で取る
+- `Guard:` の管理ファイルの検知は、`state.json`・`tasks.md` を WT 側のコピーに加えて本体の `tasks.md` でも行う。
+  本体の `state.json` は親が並列中に更新するため丸ごとは比べず、`dispatch-run` が起動時に
+  `state-entry.txt` に記録した自分のタスクの欄だけを比べる(`state-entry.txt` が無いのも改ざんとみなす)
 - Verdict が `ok` のときの `Next:` は `collect <ID>`(`dispatch-worktree collect` で本体へ集める)
 
 `0` 以外の場合はレビューに進まず、出力された内容をユーザーに報告する(`7` は、変更が無いのが
@@ -675,20 +682,28 @@ run の完了をポーリングで待つ。1回の呼び出しで `--max-wait` �
 ブランチは `agents-run/<ID>-<N>`。
 
 ```powershell
-.agents/workflow/scripts/dispatch-worktree.ps1 -Action <create|collect|remove> -TaskId T1 -Attempt 1
+.agents/workflow/scripts/dispatch-worktree.ps1 -Action <create|collect|remove|abort> -TaskId T1 -Attempt 1
 ```
 ```bash
-.agents/workflow/scripts/dispatch-worktree.sh <create|collect|remove> T1 1
+.agents/workflow/scripts/dispatch-worktree.sh <create|collect|remove|abort> T1 1
 ```
 
-- `create`: WT を HEAD から作る。試行回数が 2 以上なら、前の試行の変更(前の WT から `changes.patch` に取る)を
-  本体から取り除いてから、新しい WT に 3way で持ち越す。stdout に `Carried: <パッチ>` /
-  `Carried: conflict <パッチ>` / `Carried: none`、`Worktree: <パス>`、`Branch: <名前>` を出す
-- `collect`: WT の変更(未追跡を含む。`.agents/workflow` は除く)を `$RUN/changes.patch` にして本体へ
-  `git apply` し、WT・ブランチ・`worktree.txt` を消す。tasks.md の `changed` に無いファイルは
-  `Undeclared: <path>`(無ければ `Undeclared: none`)で出す。成功時は `Applied: <N> files`・
-  `Patch: <パス>`・`Next: review <ID>`
+- `create`: WT を HEAD から作る。試行回数が 2 以上で、前の試行に `collected`(collect が成功した印)があれば、
+  前の試行の変更(`changes.patch`)を本体から取り除き(取り除いたら `$RUN/reverted` に前のパッチのパスを書く)、
+  新しい WT に 3way で持ち越す。`collected` が無い前の試行(collect が衝突・失敗して取り込まれなかった)の変更は
+  本体に無いので持ち越さない。stdout に `Carried: <パッチ>` / `Carried: none` /
+  `Carried: none (not collected: <前のパッチのパス>)` のどれかと、`Worktree: <パス>`、`Branch: <名前>` を出す。
+  持ち越しが衝突したら exit 40 で、WT・ブランチを残さず、取り除いた変更を本体に戻す
+- `collect`: WT の変更(未追跡・WT でコミットした変更を含む。`.agents/workflow` は除く)の、`worktree.txt` の
+  `base` との差分を `$RUN/changes.patch` にして本体へ `git apply` し、空の `$RUN/collected` を作って
+  WT・ブランチ・`worktree.txt` を消す(`base` の行が無ければ `HEAD` との差分)。tasks.md の `changed` に無い
+  ファイルは `Undeclared: <path>`(無ければ `Undeclared: none`)で出す。成功時は `Applied: <N> files`・
+  `Patch: <パス>`・`Next: review <ID>`。WT の中の git(`git add` 等)が失敗したときは exit 30 で、
+  WT・ブランチ・`worktree.txt` を残す(原因を直して collect し直せる)
 - `remove`: WT・ブランチ・`worktree.txt` を消す(無くてもエラーにしない)
+- `abort`: `remove` と同じく消したうえで、`$RUN/reverted` があれば、そこに書かれた前のパッチを本体に
+  `git apply` で当て直して `reverted` を消す(`create` で取り除いた前の試行の変更を戻す)。
+  当て直せなければ stderr にパッチのパスを出して exit 20。`dispatch-start` が起動前の失敗で呼ぶ
 
 **Windows でのパスの長さ**: WT は `.agents/workflow/runs/<ID>-<N>/worktree/` に作るので、WT 内のパスは
 本体より約35文字長くなる。`dispatch-worktree` は WT に対する git の操作に `core.longpaths` を付けて作るが、
@@ -706,9 +721,9 @@ base <作成時の HEAD>
 |------|------|
 | `0` | 成功 |
 | `1` | 使い方不備 |
-| `20` | `reason=dirty-tree`。`create` では前の試行の変更を本体から取り除けない、`collect` では本体の作業ツリーが clean でない |
-| `30` | `reason=worktree`。WT が既にある・作成に失敗した。`collect` では `worktree.txt` または WT のディレクトリが無い |
-| `40` | `reason=conflict`。`collect` で `changes.patch` を本体に当てられない |
+| `20` | `reason=dirty-tree`。`create` では前の試行の変更を本体から取り除けない、`collect` では本体の作業ツリーが clean でない、`abort` では `reverted` のパッチを本体に当て直せない |
+| `30` | `reason=worktree`。WT が既にある・作成に失敗した。`collect` では `worktree.txt` または WT のディレクトリが無い、WT の中の git が失敗した(WT は残る) |
+| `40` | `reason=conflict`。`collect` で `changes.patch` を本体に当てられない、`create` で前の試行の持ち越しが衝突した |
 
 使い方不備の exit 1 を除き、stdout の最後の行に `Next:`(`continue` / `review <ID>` /
 `escalate reason=<理由>`)を出す。
@@ -775,7 +790,13 @@ config <git config ファイルの SHA-256(16進小文字)>
 `--ref <refname>`(ps1 は `-Ref <refname>`)を付けると、`refs` 行はその参照だけの
 `git for-each-ref` の出力の SHA-256 になる(参照が無ければ空の出力のハッシュ)。worktree の run が
 自分のブランチだけを見て、並列の他の run が作るブランチや参照の変化を改ざんと誤検知しないために使う。
-未知の引数や値の無い `--ref` は stderr に `Usage: git-state.sh [--ref <refname>]` を出して exit 1。
+`--run <refname> --parent <refname>`(ps1 は `-Run`・`-Parent`)を付けると、`refs` 行は既定の参照一覧から
+次の行を除いたものの SHA-256 になる: 参照名が `refs/heads/agents-run/` で始まり `--run` の値と一致しない行
+(ほかの run のブランチ)、`--parent` の値と一致する行(親の作業ブランチ。`-` か空なら除かない)。
+worktree の run が、並列の他の run や親のコミットを改ざんと誤検知せず、タグなど共有の参照の変化は検知するために使う。
+`--run` と `--parent` は両方そろって使い、`--ref` とは併用できない。
+未知の引数・値の無いオプション・上の組み合わせの誤りは stderr に
+`Usage: git-state.sh [--ref <refname> | --run <refname> --parent <refname>]` を出して exit 1。
 `dispatch-run` が子の起動時にこの出力を `git-state.txt` に記録し、`dispatch-check` が実行後の
 出力と比べて、子がリポジトリのどこを変えたか(HEAD・ブランチ・参照・設定)を特定する。
 

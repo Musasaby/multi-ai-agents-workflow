@@ -22,8 +22,11 @@ config.json の `max_parallel` が 2 以上のとき、`next-task` は `Next: di
 
 ## 注意
 
-- `collect` が `reason=conflict`(exit 40)で止まったら、fix-notes.md に「最新の HEAD でやり直す」と書き、
-  次の試行番号で再 dispatch する
+- `collect` が `reason=conflict`(exit 40)で止まったら、fix-notes.md に「最新の HEAD でやり直す」と、
+  前の試行の `.agents/workflow/runs/<ID>-<N>/changes.patch` のパスを書き、次の試行番号で再 dispatch する
+  (取り込まれなかった前の試行の変更は次の試行に持ち越されない。子が前のパッチを見て作り直す)
+- `dispatch-start` の `dispatch-worktree create` が exit 40(前の試行の持ち越しの衝突)で止まったら、
+  ユーザーに報告する(WT・ブランチは残らず、本体は元に戻っている)
 - `Undeclared:` に出たファイルは、tasks.md の `changed` に無い変更。レビューで内容を確かめる
 - 異常終了などで引き取らない run は、WT とブランチを残さないよう `dispatch-worktree remove` で消す
   ```bash
