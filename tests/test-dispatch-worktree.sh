@@ -281,6 +281,39 @@ t_create_carry_conflict() {
     assert_eq "mine" "$(head -n 1 "$PROJ/base.txt" | tr -d '\r')" "本体の1行目が mine に戻る"
 }
 
+t_abort() {
+    local run=".agents/workflow/runs/T1-1"
+    run_script dispatch-worktree.sh create T1 1
+    assert_eq 0 "$CODE" "create exit: $ERR"
+    run_script dispatch-worktree.sh abort T1 1
+    assert_eq 0 "$CODE" "abort exit: $ERR"
+    assert_eq "Next: continue" "$(last_line)" "abort は Next: continue"
+    assert_file_absent "$PROJ/$run/worktree" "worktree が消える"
+    assert_file_absent "$PROJ/$run/worktree.txt" "worktree.txt が消える"
+    assert_eq 0 "$(has_branch agents-run/T1-1 && echo 1 || echo 0)" "ブランチが消える"
+}
+
+t_abort_reapply() {
+    local run1=".agents/workflow/runs/T1-1" run2=".agents/workflow/runs/T1-2"
+    run_script dispatch-worktree.sh create T1 1
+    assert_eq 0 "$CODE" "create 1 exit: $ERR"
+    printf 'hello\n' > "$PROJ/$run1/worktree/a.txt"
+    run_script dispatch-worktree.sh collect T1 1
+    assert_eq 0 "$CODE" "collect exit: $ERR"
+    run_script dispatch-worktree.sh create T1 2
+    assert_eq 0 "$CODE" "create 2 exit: $ERR"
+    assert_file_absent "$PROJ/a.txt" "create で本体から a.txt が取り除かれる"
+    assert_file_exists "$PROJ/$run2/reverted" "reverted ができる"
+
+    run_script dispatch-worktree.sh abort T1 2
+    assert_eq 0 "$CODE" "abort exit: $ERR"
+    assert_eq "Next: continue" "$(last_line)" "abort は Next: continue"
+    assert_file_exists "$PROJ/a.txt" "abort で a.txt が本体に戻る"
+    assert_file_absent "$PROJ/$run2/reverted" "reverted が消える"
+    assert_file_absent "$PROJ/$run2/worktree" "試行 2 の WT が消える"
+    assert_eq 0 "$(has_branch agents-run/T1-2 && echo 1 || echo 0)" "試行 2 のブランチが消える"
+}
+
 # ---------- dispatch-run・dispatch-check(worktree の run) ----------
 
 WT_REPORT='echo "## 完了報告"; echo "- 変更ファイル: a.txt"; echo "- テスト結果: 全件パス"'
@@ -351,6 +384,8 @@ test_case "dispatch-worktree: collect で本体と衝突すると exit 40 で wo
 test_case "dispatch-worktree: collect が成功すると collected ができる" t_collect_marks_collected
 test_case "dispatch-worktree: collect の衝突の後の create は前の試行を持ち越さない" t_create_after_collect_conflict
 test_case "dispatch-worktree: create で持ち越しが衝突すると exit 40 で WT・ブランチが残らず本体が戻る" t_create_carry_conflict
+test_case "dispatch-worktree: abort で worktree・ブランチ・worktree.txt が消える" t_abort
+test_case "dispatch-worktree: abort で reverted のパッチが本体に当たり reverted が消える" t_abort_reapply
 test_case "dispatch-worktree: collect で本体が dirty だと exit 20" t_collect_dirty
 test_case "dispatch-worktree: collect で git add が失敗すると exit 30 で worktree が残り、直せば collect できる" t_collect_git_fail
 test_case "dispatch-worktree: 子が worktree でコミットした変更が collect のパッチに入る" t_collect_committed

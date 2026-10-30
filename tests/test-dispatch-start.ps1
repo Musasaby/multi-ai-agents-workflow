@@ -271,4 +271,21 @@ Invoke-TestCase "start: max_parallel 2 で worktree が既にあれば exit 61" 
     Assert-Eq pending (Get-StateTask T1).status "T1 status"
 }
 
+Invoke-TestCase "start: max_parallel 2 で healthcheck が失敗すると exit 30 で worktree・ブランチが残らない" {
+    Initialize-StartProject 'T1:pending', 'T2:pending'
+    Set-MaxParallel 2
+    Set-ChildCfg healthcheck_command 'exit 3'
+    Invoke-Script dispatch-start.ps1 -TaskId T1
+    Assert-Eq 30 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "Next: escalate reason=healthcheck" (Get-LastLine $script:Out) "last line"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/runs/T1-1/worktree" "worktree が残らない"
+    git -C $script:Proj rev-parse --verify -q refs/heads/agents-run/T1-1 *> $null
+    Assert-Eq 1 $LASTEXITCODE "ブランチが残らない"
+
+    Set-ChildCfg healthcheck_command ''
+    Invoke-Script dispatch-start.ps1 -TaskId T1
+    Assert-Eq 0 $script:Code "healthcheck を外すと同じ試行で起動できる: $($script:Err)"
+    Wait-Done T1-1
+}
+
 Show-Summary

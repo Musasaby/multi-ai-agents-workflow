@@ -293,6 +293,22 @@ t_parallel_worktree_exists() {
     assert_eq pending "$(state_get T1 status)" "T1 status"
 }
 
+t_parallel_healthcheck_cleanup() {
+    setup "T1:pending" "T2:pending"
+    set_max_parallel 2
+    set_child_cfg healthcheck_command 'false'
+    run_script dispatch-start.sh T1
+    assert_eq 30 "$CODE" "exit code: $ERR"
+    assert_eq "Next: escalate reason=healthcheck" "$(printf '%s\n' "$OUT" | tail -1)" "last line"
+    assert_file_absent "$PROJ/.agents/workflow/runs/T1-1/worktree" "worktree が残らない"
+    assert_eq 0 "$(git -C "$PROJ" rev-parse --verify -q refs/heads/agents-run/T1-1 > /dev/null && echo 1 || echo 0)" "ブランチが残らない"
+
+    set_child_cfg healthcheck_command ''
+    run_script dispatch-start.sh T1
+    assert_eq 0 "$CODE" "healthcheck を外すと同じ試行で起動できる: $ERR"
+    wait_done T1-1
+}
+
 echo "test-dispatch-start.sh"
 test_case "start: 起動して prompt.md・in_progress・done ができる" t_start_ok
 test_case "start: 戻った時点で guard.sha256 がある" t_start_guard_ready
@@ -312,4 +328,5 @@ test_case "start: --pr は pr-<N> の run を起動する" t_pr_ok
 test_case "start: --pr で main 上なら exit 12" t_pr_on_main
 test_case "start: max_parallel 2 は未コミットの変更があっても worktree の run を起動する" t_parallel_dirty_ok
 test_case "start: max_parallel 2 で worktree が既にあれば exit 61" t_parallel_worktree_exists
+test_case "start: max_parallel 2 で healthcheck が失敗すると exit 30 で worktree・ブランチが残らない" t_parallel_healthcheck_cleanup
 summary

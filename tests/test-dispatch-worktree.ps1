@@ -259,6 +259,40 @@ Invoke-TestCase "dispatch-worktree: create で持ち越しが衝突すると exi
     Assert-Eq "mine`nline2`n" ([System.IO.File]::ReadAllText("$script:Proj/base.txt") -replace "`r`n", "`n") "本体の1行目が mine に戻る"
 }
 
+Invoke-TestCase "dispatch-worktree: abort で worktree・ブランチ・worktree.txt が消える" {
+    $run = "$script:Proj/.agents/workflow/runs/T1-1"
+    Invoke-Script dispatch-worktree.ps1 create T1 1
+    Assert-Eq 0 $script:Code "create exit: $($script:Err)"
+    Invoke-Script dispatch-worktree.ps1 abort T1 1
+    Assert-Eq 0 $script:Code "abort exit: $($script:Err)"
+    Assert-Eq "Next: continue" (Get-LastLine) "abort は Next: continue"
+    Assert-FileAbsent "$run/worktree" "worktree が消える"
+    Assert-FileAbsent "$run/worktree.txt" "worktree.txt が消える"
+    Add-Result (-not (Test-Branch 'agents-run/T1-1')) "ブランチが消える"
+}
+
+Invoke-TestCase "dispatch-worktree: abort で reverted のパッチが本体に当たり reverted が消える" {
+    $run1 = "$script:Proj/.agents/workflow/runs/T1-1"
+    $run2 = "$script:Proj/.agents/workflow/runs/T1-2"
+    Invoke-Script dispatch-worktree.ps1 create T1 1
+    Assert-Eq 0 $script:Code "create 1 exit: $($script:Err)"
+    Write-Plain "$run1/worktree/a.txt" "hello`n"
+    Invoke-Script dispatch-worktree.ps1 collect T1 1
+    Assert-Eq 0 $script:Code "collect exit: $($script:Err)"
+    Invoke-Script dispatch-worktree.ps1 create T1 2
+    Assert-Eq 0 $script:Code "create 2 exit: $($script:Err)"
+    Assert-FileAbsent "$script:Proj/a.txt" "create で本体から a.txt が取り除かれる"
+    Assert-FileExists "$run2/reverted" "reverted ができる"
+
+    Invoke-Script dispatch-worktree.ps1 abort T1 2
+    Assert-Eq 0 $script:Code "abort exit: $($script:Err)"
+    Assert-Eq "Next: continue" (Get-LastLine) "abort は Next: continue"
+    Assert-FileExists "$script:Proj/a.txt" "abort で a.txt が本体に戻る"
+    Assert-FileAbsent "$run2/reverted" "reverted が消える"
+    Assert-FileAbsent "$run2/worktree" "試行 2 の WT が消える"
+    Add-Result (-not (Test-Branch 'agents-run/T1-2')) "試行 2 のブランチが消える"
+}
+
 Invoke-TestCase "dispatch-worktree: collect で本体が dirty だと exit 20" {
     $wt = Initialize-Collect
     Write-Plain "$wt/base.txt" "line1`nfromwt`n"
