@@ -5,13 +5,14 @@ set -uo pipefail
 # Usage: dispatch-worktree.sh <create|collect|remove> <TaskId> <Attempt>
 #   RUN=.agents/workflow/runs/<TaskId>-<Attempt>、WT=$RUN/worktree、ブランチ=agents-run/<TaskId>-<Attempt>
 #   create : WT を HEAD から作る。試行回数が 2 以上なら、前の試行の変更を取り除いてから、
-#            新しい WT に 3way で持ち越す。$RUN/worktree.txt(path / branch / base の3行)を書く
-#   collect: WT の変更を $RUN/changes.patch にして本体へ git apply し、WT を消す。
+#            新しい WT に 3way で持ち越す(前の試行に $RUN/collected が無ければ取り除かず持ち越さない)。
+#            取り除いたら $RUN/reverted に前のパッチのパスを書く。$RUN/worktree.txt(path / branch / base の3行)を書く
+#   collect: WT の変更を $RUN/changes.patch にして本体へ git apply し、空の $RUN/collected を作って WT を消す。
 #            tasks.md の changed に無いファイルは `Undeclared: <path>` で出す
 #   remove : WT とブランチと $RUN/worktree.txt を消す(無くてもエラーにしない)
 # exit: 0=成功 / 1=使い方不備 / 20=dirty-tree(前の試行の変更を本体から取り除けない・collect では本体の作業ツリーが clean でない) /
 #   30=worktree(WT が既にある・作成に失敗・パッチを作る git の失敗・collect では worktree.txt または WT のディレクトリが無い) /
-#   40=conflict(collect。git apply の失敗を含む)
+#   40=conflict(collect。git apply の失敗を含む / create の持ち越しの衝突)
 # stdout の最後の行には次のアクションを示す `Next:` 行を出す(continue / escalate reason=<理由>。
 # 使い方不備の exit 1 では出さない)
 
@@ -112,6 +113,7 @@ case "$ACTION" in
             exit 20
         fi
 
+        rm -f "$RUN/collected"
         PATCH="$RUN/changes.patch"
         if ! make_patch "$WT_PATH" "$PATCH" "$(read_base "$RUN")"; then
             echo "failed to make the patch from the worktree: $WT_PATH" >&2
@@ -172,6 +174,7 @@ PY
             echo "Applied: $(printf '%s\n' "$CHANGED_FILES" | grep -c .) files"
         fi
 
+        : > "$RUN/collected"
         drop_worktree "$WT" "$BRANCH"
         echo "Patch: $PATCH"
         echo "Next: review $TASK_ID"
@@ -188,6 +191,7 @@ fi
 
 CARRY=""
 REVERTED=0
+NOT_COLLECTED=""
 if [ "$ATTEMPT" -ge 2 ]; then
     PREV=".agents/workflow/runs/${TASK_ID}-$((ATTEMPT - 1))"
     PREV_PATCH="$PREV/changes.patch"
@@ -195,24 +199,34 @@ if [ "$ATTEMPT" -ge 2 ]; then
     if [ -f "$PREV/worktree.txt" ]; then
         PREV_WT_PATH="$(sed -n 's/^path //p' "$PREV/worktree.txt" | head -n 1 | tr -d '\r')"
     fi
+    PREV_HAS_WT=0
     if [ -n "$PREV_WT_PATH" ] && [ -d "$PREV_WT_PATH" ]; then
+        PREV_HAS_WT=1
         if ! make_patch "$PREV_WT_PATH" "$PREV_PATCH" "$(read_base "$PREV")"; then
             echo "failed to make the patch from the previous worktree: $PREV_WT_PATH" >&2
             echo "Next: escalate reason=worktree"
             exit 30
         fi
-        drop_worktree "$PREV/worktree" "agents-run/${TASK_ID}-$((ATTEMPT - 1))"
     fi
-    if [ -s "$PREV_PATCH" ]; then
-        if git apply -R --check "$PREV_PATCH" 2> /dev/null; then
-            git apply -R "$PREV_PATCH"
-            REVERTED=1
-        elif ! git apply --check "$PREV_PATCH" 2> /dev/null; then
-            echo "previous attempt's changes can be neither reverted nor applied cleanly: $PREV_PATCH" >&2
-            echo "Next: escalate reason=dirty-tree"
-            exit 20
+    if [ -f "$PREV/collected" ]; then
+        if [ -s "$PREV_PATCH" ]; then
+            if git apply -R --check "$PREV_PATCH" 2> /dev/null; then
+                git apply -R "$PREV_PATCH"
+                REVERTED=1
+                mkdir -p "$RUN"
+                echo "$PREV_PATCH" > "$RUN/reverted"
+            elif ! git apply --check "$PREV_PATCH" 2> /dev/null; then
+                echo "previous attempt's changes can be neither reverted nor applied cleanly: $PREV_PATCH" >&2
+                echo "Next: escalate reason=dirty-tree"
+                exit 20
+            fi
+            CARRY="$PREV_PATCH"
         fi
-        CARRY="$PREV_PATCH"
+    elif [ -e "$PREV_PATCH" ]; then
+        NOT_COLLECTED="$PREV_PATCH"
+    fi
+    if [ "$PREV_HAS_WT" -eq 1 ]; then
+        drop_worktree "$PREV/worktree" "agents-run/${TASK_ID}-$((ATTEMPT - 1))"
     fi
 fi
 
@@ -227,6 +241,7 @@ if ! ADD_OUT="$(git -c core.longpaths=true worktree add -q -b "$BRANCH" "$WT" HE
     rm -f "$RUN/worktree.txt"
     if [ "$REVERTED" -eq 1 ]; then
         git apply "$PREV_PATCH"
+        rm -f "$RUN/reverted"
     fi
     echo "git worktree add failed: $WT ($BRANCH)" >&2
     printf '%s\n' "$ADD_OUT" | tr -d '\r' | grep . | tail -n 1 >&2
@@ -246,8 +261,17 @@ if [ -n "$CARRY" ]; then
     if git -C "$WT" -c core.longpaths=true apply --3way "$(abs_path "$CARRY")"; then
         echo "Carried: $CARRY"
     else
-        echo "Carried: conflict $CARRY"
+        drop_worktree "$WT" "$BRANCH"
+        if [ "$REVERTED" -eq 1 ]; then
+            git apply "$CARRY"
+            rm -f "$RUN/reverted"
+        fi
+        echo "carrying the previous attempt's changes conflicted: $CARRY" >&2
+        echo "Next: escalate reason=conflict"
+        exit 40
     fi
+elif [ -n "$NOT_COLLECTED" ]; then
+    echo "Carried: none (not collected: $NOT_COLLECTED)"
 else
     echo "Carried: none"
 fi
