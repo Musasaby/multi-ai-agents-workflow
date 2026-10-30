@@ -111,6 +111,17 @@ function Get-StateEntryText {
     } catch {}
     return '-'
 }
+function Get-OtherRunIds {
+    param([string]$TaskId)
+    try {
+        $st = Get-Content -LiteralPath '.agents/workflow/state.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+        $ids = foreach ($e in @($st.tasks)) {
+            if ("$($e.id)" -ne $TaskId -and "$($e.status)" -in @('in_progress', 'in_review')) { "$($e.id)" }
+        }
+        return (@($ids) -join ',')
+    } catch {}
+    return ''
+}
 # worktree の run は、本体の state.json の自分のタスクの欄が起動時から変わっていないかも確かめる
 if (Test-Path -LiteralPath "$runDir/worktree.txt") {
     $entryPath = "$runDir/state-entry.txt"
@@ -169,9 +180,31 @@ if (-not (Test-Path $gitStatePath)) {
     if ($wtDir) {
         $parentRef = "$(& git symbolic-ref -q HEAD 2> $null)".Trim()
         if (-not $parentRef) { $parentRef = '-' }
+        $otherRuns = Get-OtherRunIds $TaskId
         Push-Location $wtDir
-        try { $currentState = ConvertTo-StateMap @(& pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1" -Run $wtBranch -Parent $parentRef 2> $null) }
+        try { $currentState = ConvertTo-StateMap @(& pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1" -Run $wtBranch -Parent $parentRef -OtherRuns $otherRuns 2> $null) }
         finally { Pop-Location }
+        # 親の作業ブランチが、起動時の参照名のまま、記録した値から進む方向にだけ動いたかを確かめる
+        $parentHeadPath = "$runDir/parent-head.txt"
+        if (-not (Test-Path -LiteralPath $parentHeadPath -PathType Leaf)) {
+            $guardIssues += 'parent-head.txt not found'
+        } else {
+            $phLines = [System.IO.File]::ReadAllText((Resolve-Path $parentHeadPath), [System.Text.Encoding]::UTF8) -split "`r?`n"
+            $recParentRef = "$($phLines[0])"
+            $recParentSha = "$($phLines[1])"
+            $curParentSha = "$(& git rev-parse --verify -q HEAD 2> $null)".Trim()
+            if (-not $curParentSha) { $curParentSha = '-' }
+            $parentBad = $false
+            if ($recParentRef -cne $parentRef) { $parentBad = $true }
+            elseif ($recParentSha -cne $curParentSha) {
+                if ($recParentSha -eq '-' -or $curParentSha -eq '-') { $parentBad = $true }
+                else {
+                    $null = & git merge-base --is-ancestor $recParentSha $curParentSha 2> $null
+                    if ($LASTEXITCODE -ne 0) { $parentBad = $true }
+                }
+            }
+            if ($parentBad) { $guardIssues += 'git changed: parent' }
+        }
     } else {
         $currentState = ConvertTo-StateMap @(& pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1" 2> $null)
     }

@@ -354,10 +354,11 @@ t_run_check_ok() {
 }
 
 t_run_check_main_git() {
-    setup_wt_child "git -C \"$PROJ\" branch agents-run/other; git -C \"$PROJ\" commit -q --allow-empty -m other; echo hello > a.txt; $WT_REPORT"
+    write_state "T1:in_progress" "T2:in_progress"
+    setup_wt_child "git -C \"$PROJ\" branch agents-run/T2-1; git -C \"$PROJ\" commit -q --allow-empty -m other; echo hello > a.txt; $WT_REPORT"
     run_script dispatch-run.sh T1 1
     assert_eq "EXIT:0" "$(head -1 "$PROJ/.agents/workflow/runs/T1-1/done")" "done marker"
-    assert_eq 1 "$(has_branch agents-run/other && echo 1 || echo 0)" "子の実行中に本体でほかの run のブランチができた"
+    assert_eq 1 "$(has_branch agents-run/T2-1 && echo 1 || echo 0)" "子の実行中に本体で実行中のタスクの run のブランチができた"
     run_script dispatch-check.sh T1 1
     assert_eq 0 "$CODE" "本体の git 変更では tampered にならない: $OUT"
     assert_not_contains "$OUT" "git changed" "git changed は出ない"
@@ -399,13 +400,60 @@ t_run_check_tasks_md() {
 
 t_run_check_parent_activity() {
     write_state "T1:in_progress" "T2:pending"
-    setup_wt_child "git -C \"$PROJ\" commit -q --allow-empty -m parent; sed -i 's/pending/done/' \"$PROJ/.agents/workflow/state.json\"; git -C \"$PROJ\" branch agents-run/T2-1; echo hello > a.txt; $WT_REPORT"
+    setup_wt_child "git -C \"$PROJ\" commit -q --allow-empty -m parent; sed -i 's/pending/in_progress/' \"$PROJ/.agents/workflow/state.json\"; git -C \"$PROJ\" branch agents-run/T2-1; echo hello > a.txt; $WT_REPORT"
     run_script dispatch-run.sh T1 1
     assert_eq 1 "$(has_branch agents-run/T2-1 && echo 1 || echo 0)" "子の実行中に本体でほかの run のブランチができた"
     run_script dispatch-check.sh T1 1
     assert_eq 0 "$CODE" "親の作業・ほかのタスクの欄・ほかの run のブランチでは tampered にならない: $OUT"
     assert_not_contains "$OUT" "changed" "changed は出ない"
     assert_eq "Next: collect T1" "$(last_line)" "最後の行は Next: collect T1"
+}
+
+t_run_check_parent_rewind() {
+    git -C "$PROJ" commit -q --allow-empty -m p1
+    git -C "$PROJ" commit -q --allow-empty -m p2
+    local pb
+    pb="$(git -C "$PROJ" symbolic-ref --short HEAD)"
+    setup_wt_child "git -C \"$PROJ\" update-ref refs/heads/$pb HEAD~1; echo hello > a.txt; $WT_REPORT"
+    run_script dispatch-run.sh T1 1
+    run_script dispatch-check.sh T1 1
+    assert_eq 8 "$CODE" "親の作業ブランチを巻き戻すと exit 8: $OUT"
+    assert_contains "$OUT" "git changed: parent" "git changed: parent"
+}
+
+t_run_check_foreign_run_branch() {
+    write_state "T1:in_progress" "T9:pending"
+    setup_wt_child "git -C \"$PROJ\" branch agents-run/T9-1; echo hello > a.txt; $WT_REPORT"
+    run_script dispatch-run.sh T1 1
+    run_script dispatch-check.sh T1 1
+    assert_eq 8 "$CODE" "実行中でないタスクの run のブランチを作ると exit 8: $OUT"
+    assert_contains "$OUT" "git changed: refs" "git changed: refs"
+}
+
+t_run_check_preexisting_other_run() {
+    write_state "T1:in_progress" "T2:in_progress"
+    git -C "$PROJ" branch agents-run/T2-1
+    setup_wt_child "echo hello > a.txt; $WT_REPORT"
+    run_script dispatch-run.sh T1 1
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "起動前からある実行中のタスクの run のブランチでは tampered にならない: $OUT"
+    assert_not_contains "$OUT" "changed" "changed は出ない"
+}
+
+t_git_state_other_runs() {
+    local pr base with_t2 with_t9
+    pr="refs/heads/$(git -C "$PROJ" symbolic-ref --short HEAD)"
+    git -C "$PROJ" branch agents-run/T1-1 2> /dev/null || true
+    run_script git-state.sh --run refs/heads/agents-run/T1-1 --parent "$pr" --other-runs T2
+    base="$(printf '%s\n' "$OUT" | grep '^refs ')"
+    git -C "$PROJ" branch agents-run/T2-1
+    run_script git-state.sh --run refs/heads/agents-run/T1-1 --parent "$pr" --other-runs T2
+    with_t2="$(printf '%s\n' "$OUT" | grep '^refs ')"
+    assert_eq "$base" "$with_t2" "--other-runs に入っている T2 の run のブランチは除かれる"
+    git -C "$PROJ" branch agents-run/T9-1
+    run_script git-state.sh --run refs/heads/agents-run/T1-1 --parent "$pr" --other-runs T2
+    with_t9="$(printf '%s\n' "$OUT" | grep '^refs ')"
+    assert_eq 1 "$([ "$base" != "$with_t9" ] && echo 1 || echo 0)" "--other-runs に無い T9 の run のブランチは除かれない"
 }
 
 echo "test-dispatch-worktree.sh"
@@ -427,10 +475,14 @@ test_case "dispatch-worktree: collect で git add が失敗すると exit 30 で
 test_case "dispatch-worktree: 子が worktree でコミットした変更が collect のパッチに入る" t_collect_committed
 test_case "dispatch-worktree: worktree.txt に base 行が無いと HEAD との差分で collect する" t_collect_no_base
 test_case "dispatch-worktree: worktree の run を dispatch-run で動かし dispatch-check が collect を返す" t_run_check_ok
-test_case "dispatch-worktree: 子の実行中に本体で branch・commit しても tampered にならない" t_run_check_main_git
+test_case "dispatch-worktree: 子の実行中に本体で実行中のタスクの branch・commit をしても tampered にならない" t_run_check_main_git
 test_case "dispatch-worktree: 子が worktree で commit すると tampered(exit 8)" t_run_check_commit
 test_case "dispatch-worktree: 子が worktree で tag を作ると tampered(exit 8)" t_run_check_tag
 test_case "dispatch-worktree: 子が本体の state.json の自分のタスクの欄を書き換えると tampered(exit 8)" t_run_check_state_entry
 test_case "dispatch-worktree: 子が本体の tasks.md を書き換えると tampered(exit 8)" t_run_check_tasks_md
 test_case "dispatch-worktree: 実行中の親の commit・ほかのタスクの欄・ほかの run のブランチでは tampered にならない" t_run_check_parent_activity
+test_case "dispatch-worktree: 子が本体で親の作業ブランチを巻き戻すと tampered(exit 8)" t_run_check_parent_rewind
+test_case "dispatch-worktree: 子が実行中でないタスクの run のブランチを作ると tampered(exit 8)" t_run_check_foreign_run_branch
+test_case "dispatch-worktree: 起動前からある実行中のタスクの run のブランチは tampered にならない" t_run_check_preexisting_other_run
+test_case "dispatch-worktree: git-state の --other-runs は指定した ID の run のブランチだけを除く" t_git_state_other_runs
 summary

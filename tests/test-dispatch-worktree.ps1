@@ -354,11 +354,12 @@ Invoke-TestCase "dispatch-worktree: worktree の run を dispatch-run で動か�
     Assert-Eq "Next: collect T1" (Get-LastLine) "最後の行は Next: collect T1"
 }
 
-Invoke-TestCase "dispatch-worktree: 子の実行中に本体で branch・commit しても tampered にならない" {
-    Initialize-WtChild "git -C '$script:Proj' branch agents-run/other; git -C '$script:Proj' commit -q --allow-empty -m other; Set-Content a.txt hello; $WtReport"
+Invoke-TestCase "dispatch-worktree: 子の実行中に本体で実行中のタスクの branch・commit をしても tampered にならない" {
+    Set-State 'T1:in_progress' 'T2:in_progress'
+    Initialize-WtChild "git -C '$script:Proj' branch agents-run/T2-1; git -C '$script:Proj' commit -q --allow-empty -m other; Set-Content a.txt hello; $WtReport"
     Invoke-Script dispatch-run.ps1 T1 1
     Assert-Eq "EXIT:0" (Get-Content "$script:Proj/.agents/workflow/runs/T1-1/done" -Encoding utf8)[0] "done marker"
-    Add-Result (Test-Branch 'agents-run/other') "子の実行中に本体でほかの run のブランチができた"
+    Add-Result (Test-Branch 'agents-run/T2-1') "子の実行中に本体で実行中のタスクの run のブランチができた"
     Invoke-Script dispatch-check.ps1 T1 1
     Assert-Eq 0 $script:Code "本体の git 変更では tampered にならない: $($script:Out)"
     Assert-NotContains $script:Out "git changed" "git changed は出ない"
@@ -402,13 +403,58 @@ Invoke-TestCase "dispatch-worktree: 子が本体の tasks.md を書き換える�
 Invoke-TestCase "dispatch-worktree: 実行中の親の commit・ほかのタスクの欄・ほかの run のブランチでは tampered にならない" {
     Set-State 'T1:in_progress' 'T2:pending'
     $sp = "$script:Proj/.agents/workflow/state.json"
-    Initialize-WtChild "git -C '$script:Proj' commit -q --allow-empty -m parent; `$p = '$sp'; [System.IO.File]::WriteAllText(`$p, ([System.IO.File]::ReadAllText(`$p) -replace 'pending', 'done')); git -C '$script:Proj' branch agents-run/T2-1; Set-Content a.txt hello; $WtReport"
+    Initialize-WtChild "git -C '$script:Proj' commit -q --allow-empty -m parent; `$p = '$sp'; [System.IO.File]::WriteAllText(`$p, ([System.IO.File]::ReadAllText(`$p) -replace 'pending', 'in_progress')); git -C '$script:Proj' branch agents-run/T2-1; Set-Content a.txt hello; $WtReport"
     Invoke-Script dispatch-run.ps1 T1 1
     Add-Result (Test-Branch 'agents-run/T2-1') "子の実行中に本体でほかの run のブランチができた"
     Invoke-Script dispatch-check.ps1 T1 1
     Assert-Eq 0 $script:Code "親の作業・ほかのタスクの欄・ほかの run のブランチでは tampered にならない: $($script:Out)"
     Assert-NotContains $script:Out "changed" "changed は出ない"
     Assert-Eq "Next: collect T1" (Get-LastLine) "最後の行は Next: collect T1"
+}
+
+Invoke-TestCase "dispatch-worktree: 子が本体で親の作業ブランチを巻き戻すと tampered(exit 8)" {
+    git -C $script:Proj commit -q --allow-empty -m p1
+    git -C $script:Proj commit -q --allow-empty -m p2
+    $pb = "$(git -C $script:Proj symbolic-ref --short HEAD)".Trim()
+    Initialize-WtChild "git -C '$script:Proj' update-ref refs/heads/$pb HEAD~1; Set-Content a.txt hello; $WtReport"
+    Invoke-Script dispatch-run.ps1 T1 1
+    Invoke-Script dispatch-check.ps1 T1 1
+    Assert-Eq 8 $script:Code "親の作業ブランチを巻き戻すと exit 8: $($script:Out)"
+    Assert-Contains $script:Out "git changed: parent" "git changed: parent"
+}
+
+Invoke-TestCase "dispatch-worktree: 子が実行中でないタスクの run のブランチを作ると tampered(exit 8)" {
+    Set-State 'T1:in_progress' 'T9:pending'
+    Initialize-WtChild "git -C '$script:Proj' branch agents-run/T9-1; Set-Content a.txt hello; $WtReport"
+    Invoke-Script dispatch-run.ps1 T1 1
+    Invoke-Script dispatch-check.ps1 T1 1
+    Assert-Eq 8 $script:Code "実行中でないタスクの run のブランチを作ると exit 8: $($script:Out)"
+    Assert-Contains $script:Out "git changed: refs" "git changed: refs"
+}
+
+Invoke-TestCase "dispatch-worktree: 起動前からある実行中のタスクの run のブランチは tampered にならない" {
+    Set-State 'T1:in_progress' 'T2:in_progress'
+    git -C $script:Proj branch agents-run/T2-1 *> $null
+    Initialize-WtChild "Set-Content a.txt hello; $WtReport"
+    Invoke-Script dispatch-run.ps1 T1 1
+    Invoke-Script dispatch-check.ps1 T1 1
+    Assert-Eq 0 $script:Code "起動前からある実行中のタスクの run のブランチでは tampered にならない: $($script:Out)"
+    Assert-NotContains $script:Out "changed" "changed は出ない"
+}
+
+Invoke-TestCase "dispatch-worktree: git-state の -OtherRuns は指定した ID の run のブランチだけを除く" {
+    $pr = "refs/heads/$("$(git -C $script:Proj symbolic-ref --short HEAD)".Trim())"
+    git -C $script:Proj branch agents-run/T1-1 *> $null
+    Invoke-Script git-state.ps1 -Run refs/heads/agents-run/T1-1 -Parent $pr -OtherRuns T2
+    $base = @($script:Out -split "`n" | Where-Object { $_ -like 'refs *' })[0]
+    git -C $script:Proj branch agents-run/T2-1 *> $null
+    Invoke-Script git-state.ps1 -Run refs/heads/agents-run/T1-1 -Parent $pr -OtherRuns T2
+    $withT2 = @($script:Out -split "`n" | Where-Object { $_ -like 'refs *' })[0]
+    Assert-Eq $base $withT2 "-OtherRuns に入っている T2 の run のブランチは除かれる"
+    git -C $script:Proj branch agents-run/T9-1 *> $null
+    Invoke-Script git-state.ps1 -Run refs/heads/agents-run/T1-1 -Parent $pr -OtherRuns T2
+    $withT9 = @($script:Out -split "`n" | Where-Object { $_ -like 'refs *' })[0]
+    Add-Result ($base -cne $withT9) "-OtherRuns に無い T9 の run のブランチは除かれない"
 }
 
 Show-Summary

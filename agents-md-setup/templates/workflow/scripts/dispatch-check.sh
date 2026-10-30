@@ -175,7 +175,37 @@ else
     if [ -n "$WT_DIR" ]; then
         PARENT_REF="$(git symbolic-ref -q HEAD 2> /dev/null || true)"
         [ -n "$PARENT_REF" ] || PARENT_REF=-
-        CURRENT_STATE="$(cd "$WT_DIR" && bash "$SCRIPT_DIR/git-state.sh" --run "$WT_BRANCH" --parent "$PARENT_REF" 2> /dev/null | LC_ALL=C tr -d '\r')"
+        OTHER_RUNS="$(python3 -c "
+import json, sys
+try:
+    with open('.agents/workflow/state.json', encoding='utf-8') as f:
+        tasks = json.load(f).get('tasks', [])
+    print(','.join(str(e.get('id')) for e in tasks if e.get('id') != sys.argv[1] and e.get('status') in ('in_progress', 'in_review')))
+except Exception:
+    print('')
+" "$TASK_ID" 2> /dev/null | tr -d '\r')"
+        CURRENT_STATE="$(cd "$WT_DIR" && bash "$SCRIPT_DIR/git-state.sh" --run "$WT_BRANCH" --parent "$PARENT_REF" --other-runs "$OTHER_RUNS" 2> /dev/null | LC_ALL=C tr -d '\r')"
+        # 親の作業ブランチが、起動時の参照名のまま、記録した値から進む方向にだけ動いたかを確かめる
+        if [ ! -f "$RUN_DIR/parent-head.txt" ]; then
+            GUARD_ISSUES="${GUARD_ISSUES}parent-head.txt not found
+"
+        else
+            REC_PARENT_REF="$(sed -n 1p "$RUN_DIR/parent-head.txt" | tr -d '\r')"
+            REC_PARENT_SHA="$(sed -n 2p "$RUN_DIR/parent-head.txt" | tr -d '\r')"
+            CUR_PARENT_SHA="$(git rev-parse --verify -q HEAD 2> /dev/null || echo -)"
+            PARENT_BAD=false
+            if [ "$REC_PARENT_REF" != "$PARENT_REF" ]; then
+                PARENT_BAD=true
+            elif [ "$REC_PARENT_SHA" != "$CUR_PARENT_SHA" ]; then
+                if [ "$REC_PARENT_SHA" = - ] || [ "$CUR_PARENT_SHA" = - ] || ! git merge-base --is-ancestor "$REC_PARENT_SHA" "$CUR_PARENT_SHA" 2> /dev/null; then
+                    PARENT_BAD=true
+                fi
+            fi
+            if [ "$PARENT_BAD" = true ]; then
+                GUARD_ISSUES="${GUARD_ISSUES}git changed: parent
+"
+            fi
+        fi
     else
         CURRENT_STATE="$(bash "$SCRIPT_DIR/git-state.sh" 2> /dev/null | LC_ALL=C tr -d '\r')"
     fi

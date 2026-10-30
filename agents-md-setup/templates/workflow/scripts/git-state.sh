@@ -22,10 +22,13 @@ set -uo pipefail
 #     - 参照名が refs/heads/agents-run/ で始まり、--run の値と一致しない行(ほかの run のブランチ)
 #     - 参照名が --parent の値と一致する行(--parent が - か空なら何も除かない)
 #   --run と --parent は両方そろって使う。--ref とは一緒に使えない
+#   --other-runs <ID,ID,...> は --run のときだけ使える。上の1つ目の「ほかの run のブランチ」の除外を、
+#   参照名が refs/heads/agents-run/<ID>-<数字> で <ID> が --other-runs にある行に限る
+#   (--other-runs が無い・空なら、自分以外の agents-run/* を何も除かない)
 # 未知の引数・値が無いオプション・--run と --parent の片方だけ・--ref との併用は、
 # stderr に使い方を出して exit 1 する。
 
-USAGE="Usage: git-state.sh [--ref <refname> | --run <refname> --parent <refname>]"
+USAGE="Usage: git-state.sh [--ref <refname> | --run <refname> --parent <refname> [--other-runs <ID,ID,...>]]"
 
 # --- 引数 ---
 REF_ARG=""
@@ -34,6 +37,8 @@ RUN_ARG=""
 USE_RUN=0
 PARENT_ARG=""
 USE_PARENT=0
+OTHER_RUNS=""
+USE_OTHER=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --ref)
@@ -63,12 +68,25 @@ while [ $# -gt 0 ]; do
             USE_PARENT=1
             shift 2
             ;;
+        --other-runs)
+            if [ $# -lt 2 ]; then
+                echo "$USAGE" >&2
+                exit 1
+            fi
+            OTHER_RUNS="$2"
+            USE_OTHER=1
+            shift 2
+            ;;
         *)
             echo "$USAGE" >&2
             exit 1
             ;;
     esac
 done
+if [ "$USE_OTHER" -eq 1 ] && [ "$USE_RUN" -eq 0 ]; then
+    echo "$USAGE" >&2
+    exit 1
+fi
 if [ "$USE_RUN" -ne "$USE_PARENT" ] || { [ "$USE_REF" -eq 1 ] && [ "$USE_RUN" -eq 1 ]; }; then
     echo "$USAGE" >&2
     exit 1
@@ -94,9 +112,13 @@ if [ "$USE_REF" -eq 1 ]; then
 elif [ "$USE_RUN" -eq 1 ]; then
     REF_LIST() {
         git for-each-ref --format='%(objectname) %(refname)' refs/heads refs/tags refs/stash |
-            awk -v run="$RUN_ARG" -v parent="$PARENT_ARG" '
+            awk -v run="$RUN_ARG" -v parent="$PARENT_ARG" -v others="$OTHER_RUNS" '
+                BEGIN { prefix = "refs/heads/agents-run/"; list = "," others "," }
                 { n = $2 }
-                index(n, "refs/heads/agents-run/") == 1 && n != run { next }
+                index(n, prefix) == 1 && n != run {
+                    rest = substr(n, length(prefix) + 1)
+                    if (others != "" && match(rest, /-[0-9]+$/) && index(list, "," substr(rest, 1, RSTART - 1) ",") > 0) next
+                }
                 parent != "" && parent != "-" && n == parent { next }
                 { print }'
     }

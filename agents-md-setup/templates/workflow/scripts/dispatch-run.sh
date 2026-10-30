@@ -112,7 +112,19 @@ if [ -n "$WT_PATH" ]; then
   # 親の作業ブランチは本体で取る(detached なら "-")
   PARENT_REF="$(git symbolic-ref -q HEAD 2> /dev/null || true)"
   [ -n "$PARENT_REF" ] || PARENT_REF=-
-  (cd "$WT_PATH" && bash "$SCRIPT_DIR/git-state.sh" --run "$WT_BRANCH" --parent "$PARENT_REF") > "$RUN_DIR/git-state.txt"
+  # 親の作業ブランチの参照名と値を記録する(dispatch-check が巻き戻しを検知する)
+  { printf '%s\n' "$PARENT_REF"; git rev-parse --verify -q HEAD 2> /dev/null || echo -; } > "$RUN_DIR/parent-head.txt"
+  # 実行中の自分以外のタスクの run のブランチだけを、refs の比較から外す
+  OTHER_RUNS="$(python3 -c "
+import json, sys
+try:
+    with open('.agents/workflow/state.json', encoding='utf-8') as f:
+        tasks = json.load(f).get('tasks', [])
+    print(','.join(str(e.get('id')) for e in tasks if e.get('id') != sys.argv[1] and e.get('status') in ('in_progress', 'in_review')))
+except Exception:
+    print('')
+" "$TASK_ID" 2> /dev/null | tr -d '\r')"
+  (cd "$WT_PATH" && bash "$SCRIPT_DIR/git-state.sh" --run "$WT_BRANCH" --parent "$PARENT_REF" --other-runs "$OTHER_RUNS") > "$RUN_DIR/git-state.txt"
 else
   bash "$SCRIPT_DIR/git-state.sh" > "$RUN_DIR/git-state.txt"
 fi

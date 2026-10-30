@@ -18,16 +18,20 @@
 #     - 参照名が refs/heads/agents-run/ で始まり、-Run の値と一致しない行(ほかの run のブランチ)
 #     - 参照名が -Parent の値と一致する行(-Parent が - か空なら何も除かない)
 #   -Run と -Parent は両方そろって使う。-Ref とは一緒に使えない
+#   -OtherRuns <ID,ID,...> は -Run のときだけ使える。上の1つ目の「ほかの run のブランチ」の除外を、
+#   参照名が refs/heads/agents-run/<ID>-<数字> で <ID> が -OtherRuns にある行に限る
+#   (-OtherRuns が無い・空なら、自分以外の agents-run/* を何も除かない)
 # 未知の引数・値が無いオプション・-Run と -Parent の片方だけ・-Ref との併用は、
 # stderr に使い方を出して exit 1 する。
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
 # --- 引数 ---
-$usage = 'Usage: git-state.sh [--ref <refname> | --run <refname> --parent <refname>]'
+$usage = 'Usage: git-state.sh [--ref <refname> | --run <refname> --parent <refname> [--other-runs <ID,ID,...>]]'
 $refArg = $null
 $runArg = $null
 $parentArg = $null
+$otherArg = $null
 $i = 0
 while ($i -lt $args.Count) {
     $name = "$($args[$i])"
@@ -38,11 +42,16 @@ while ($i -lt $args.Count) {
     if ($name -ceq '-Ref') { $refArg = "$($args[$i + 1])" }
     elseif ($name -ceq '-Run') { $runArg = "$($args[$i + 1])" }
     elseif ($name -ceq '-Parent') { $parentArg = "$($args[$i + 1])" }
+    elseif ($name -ceq '-OtherRuns') { $otherArg = "$($args[$i + 1])" }
     else {
         [Console]::Error.WriteLine($usage)
         exit 1
     }
     $i += 2
+}
+if ($null -ne $otherArg -and $null -eq $runArg) {
+    [Console]::Error.WriteLine($usage)
+    exit 1
 }
 if (($null -ne $runArg) -ne ($null -ne $parentArg) -or ($null -ne $refArg -and $null -ne $runArg)) {
     [Console]::Error.WriteLine($usage)
@@ -65,12 +74,14 @@ $branch = "$(git symbolic-ref -q HEAD)".Trim()
 if ($LASTEXITCODE -ne 0 -or -not $branch) { $branch = '-' }
 
 # --- refs ---
+$otherIds = @(if ($otherArg) { $otherArg -split ',' | Where-Object { $_ } })
 $lines = if ($null -ne $refArg) {
     @(git for-each-ref --format='%(objectname) %(refname)' $refArg)
 } elseif ($null -ne $runArg) {
     @(git for-each-ref --format='%(objectname) %(refname)' refs/heads refs/tags refs/stash | Where-Object {
         $n = ("$_" -split ' ', 2)[1]
-        -not ($n.StartsWith('refs/heads/agents-run/', [System.StringComparison]::Ordinal) -and $n -cne $runArg) -and
+        -not ($n.StartsWith('refs/heads/agents-run/', [System.StringComparison]::Ordinal) -and $n -cne $runArg -and
+            $n.Substring(22) -match '^(.+)-[0-9]+$' -and $otherIds -ccontains $Matches[1]) -and
         -not ($parentArg -and $parentArg -ne '-' -and $n -ceq $parentArg)
     })
 } else {

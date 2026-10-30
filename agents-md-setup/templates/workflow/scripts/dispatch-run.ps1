@@ -58,6 +58,17 @@ function Get-StateEntryText {
     } catch {}
     return '-'
 }
+function Get-OtherRunIds {
+    param([string]$TaskId)
+    try {
+        $st = Get-Content -LiteralPath '.agents/workflow/state.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+        $ids = foreach ($e in @($st.tasks)) {
+            if ("$($e.id)" -ne $TaskId -and "$($e.status)" -in @('in_progress', 'in_review')) { "$($e.id)" }
+        }
+        return (@($ids) -join ',')
+    } catch {}
+    return ''
+}
 $guardFiles = @($promptPath, $guardState, $guardTasks, '.agents/workflow/config.json', '.agents/workflow/child-profiles.json')
 # worktree の run は本体の tasks.md も守る(state.json は親が並列中に更新するため、自分のタスクの欄だけを state-entry.txt で守る)
 if ($wtPath) { $guardFiles += '.agents/workflow/tasks.md' }
@@ -75,8 +86,14 @@ if ($wtPath) {
     # 親の作業ブランチは本体で取る(detached なら '-')
     $parentRef = "$(& git symbolic-ref -q HEAD 2> $null)".Trim()
     if (-not $parentRef) { $parentRef = '-' }
+    # 親の作業ブランチの参照名と値を記録する(dispatch-check が巻き戻しを検知する)
+    $parentSha = "$(& git rev-parse --verify -q HEAD 2> $null)".Trim()
+    if (-not $parentSha) { $parentSha = '-' }
+    [System.IO.File]::WriteAllText((Join-Path (Get-Location) "$runDir/parent-head.txt"), "$parentRef`n$parentSha`n", [System.Text.UTF8Encoding]::new($false))
+    # 実行中の自分以外のタスクの run のブランチだけを、refs の比較から外す
+    $otherRuns = Get-OtherRunIds $TaskId
     Push-Location -LiteralPath $wtPath
-    try { $gitState = & pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1" -Run $wtBranch -Parent $parentRef } finally { Pop-Location }
+    try { $gitState = & pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1" -Run $wtBranch -Parent $parentRef -OtherRuns $otherRuns } finally { Pop-Location }
 } else {
     $gitState = & pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1"
 }
