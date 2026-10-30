@@ -49,16 +49,16 @@ abs_path() {
 # wt の変更(未追跡を含む。.agents/workflow は除く)を out にバイナリ対応のパッチで書く
 make_patch() {
     local wt="$1" out="$2"
-    git -C "$wt" add -A
-    git -C "$wt" diff --cached --binary --no-renames HEAD -- . ':(exclude).agents/workflow' > "$out"
-    git -C "$wt" reset -q
+    git -C "$wt" -c core.longpaths=true add -A
+    git -C "$wt" -c core.longpaths=true diff --cached --binary --no-renames HEAD -- . ':(exclude).agents/workflow' > "$out"
+    git -C "$wt" -c core.longpaths=true reset -q
 }
 
 # wt・ブランチ・wt の隣の worktree.txt を消す(無いものは飛ばす)
 drop_worktree() {
     local wt="$1" branch="$2"
     if [ -d "$wt" ]; then
-        git worktree remove --force "$wt"
+        git -c core.longpaths=true worktree remove --force "$wt"
     fi
     if git rev-parse --verify -q "refs/heads/$branch" > /dev/null; then
         git branch -D -q "$branch"
@@ -157,6 +157,7 @@ if [ -e "$WT" ]; then
 fi
 
 CARRY=""
+REVERTED=0
 if [ "$ATTEMPT" -ge 2 ]; then
     PREV=".agents/workflow/runs/${TASK_ID}-$((ATTEMPT - 1))"
     PREV_PATCH="$PREV/changes.patch"
@@ -171,6 +172,7 @@ if [ "$ATTEMPT" -ge 2 ]; then
     if [ -s "$PREV_PATCH" ]; then
         if git apply -R --check "$PREV_PATCH" 2> /dev/null; then
             git apply -R "$PREV_PATCH"
+            REVERTED=1
         elif ! git apply --check "$PREV_PATCH" 2> /dev/null; then
             echo "previous attempt's changes can be neither reverted nor applied cleanly: $PREV_PATCH" >&2
             echo "Next: escalate reason=dirty-tree"
@@ -181,8 +183,19 @@ if [ "$ATTEMPT" -ge 2 ]; then
 fi
 
 mkdir -p "$RUN"
-if ! git worktree add -q -b "$BRANCH" "$WT" HEAD; then
+if ! ADD_OUT="$(git -c core.longpaths=true worktree add -q -b "$BRANCH" "$WT" HEAD 2>&1)"; then
+    # 作りかけの WT・ブランチ・worktree.txt を消し、取り除いた前の試行の変更は本体に戻す
+    rm -rf "$WT"
+    if git rev-parse --verify -q "refs/heads/$BRANCH" > /dev/null; then
+        git branch -D -q "$BRANCH"
+    fi
+    git worktree prune
+    rm -f "$RUN/worktree.txt"
+    if [ "$REVERTED" -eq 1 ]; then
+        git apply "$PREV_PATCH"
+    fi
     echo "git worktree add failed: $WT ($BRANCH)" >&2
+    printf '%s\n' "$ADD_OUT" | tr -d '\r' | grep . | tail -n 1 >&2
     echo "Next: escalate reason=worktree"
     exit 30
 fi
@@ -196,7 +209,7 @@ WT_ABS="$(abs_path "$WT")"
 } > "$RUN/worktree.txt"
 
 if [ -n "$CARRY" ]; then
-    if git -C "$WT" apply --3way "$(abs_path "$CARRY")"; then
+    if git -C "$WT" -c core.longpaths=true apply --3way "$(abs_path "$CARRY")"; then
         echo "Carried: $CARRY"
     else
         echo "Carried: conflict $CARRY"

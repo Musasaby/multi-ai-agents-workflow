@@ -41,16 +41,16 @@ function New-Patch {
     param([string]$Wt, [string]$Out)
     # git -C は wt に移ってから動くので、--output には本体側の絶対パスを渡す
     $absOut = Get-AbsPath $Out
-    git -C $Wt add -A
-    git -C $Wt diff --cached --binary --no-renames "--output=$absOut" HEAD -- . ':(exclude).agents/workflow'
-    git -C $Wt reset -q
+    git -C $Wt -c core.longpaths=true add -A
+    git -C $Wt -c core.longpaths=true diff --cached --binary --no-renames "--output=$absOut" HEAD -- . ':(exclude).agents/workflow'
+    git -C $Wt -c core.longpaths=true reset -q
 }
 
 # wt・ブランチ・wt の隣の worktree.txt を消す(無いものは飛ばす)
 function Remove-RunWorktree {
     param([string]$Wt, [string]$Branch)
     if (Test-Path -LiteralPath $Wt) {
-        git worktree remove --force $Wt
+        git -c core.longpaths=true worktree remove --force $Wt
     }
     git rev-parse --verify -q "refs/heads/$Branch" *> $null
     if ($LASTEXITCODE -eq 0) {
@@ -136,6 +136,7 @@ if (Test-Path -LiteralPath $wt) {
 }
 
 $carry = ''
+$reverted = $false
 if ($Attempt -ge 2) {
     $prevN = $Attempt - 1
     $prev = ".agents/workflow/runs/$TaskId-$prevN"
@@ -154,6 +155,7 @@ if ($Attempt -ge 2) {
         git apply -R --check $prevPatch *> $null
         if ($LASTEXITCODE -eq 0) {
             git apply -R $prevPatch
+            $reverted = $true
         } else {
             git apply --check $prevPatch *> $null
             if ($LASTEXITCODE -ne 0) {
@@ -167,9 +169,22 @@ if ($Attempt -ge 2) {
 }
 
 New-Item -ItemType Directory -Force -Path $run | Out-Null
-git worktree add -q -b $branch $wt HEAD
+$addOut = git -c core.longpaths=true worktree add -q -b $branch $wt HEAD 2>&1
 if ($LASTEXITCODE -ne 0) {
+    # 作りかけの WT・ブランチ・worktree.txt を消し、取り除いた前の試行の変更は本体に戻す
+    Remove-Item -LiteralPath $wt -Recurse -Force -ErrorAction SilentlyContinue
+    git rev-parse --verify -q "refs/heads/$branch" *> $null
+    if ($LASTEXITCODE -eq 0) {
+        git branch -D -q $branch
+    }
+    git worktree prune
+    Remove-Item -LiteralPath "$run/worktree.txt" -Force -ErrorAction SilentlyContinue
+    if ($reverted) {
+        git apply $prevPatch
+    }
     [Console]::Error.WriteLine("git worktree add failed: $wt ($branch)")
+    $lastLine = @($addOut | ForEach-Object { "$_".TrimEnd("`r") } | Where-Object { $_ }) | Select-Object -Last 1
+    if ($lastLine) { [Console]::Error.WriteLine($lastLine) }
     Write-Output "Next: escalate reason=worktree"
     exit 30
 }
@@ -180,7 +195,7 @@ $lines = @("path $(Get-AbsPath $wt)", "branch refs/heads/$branch", "base $base")
 [System.IO.File]::WriteAllText((Join-Path (Get-Location).Path "$run/worktree.txt"), (($lines -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
 
 if ($carry) {
-    git -C $wt apply --3way (Get-AbsPath $carry)
+    git -C $wt -c core.longpaths=true apply --3way (Get-AbsPath $carry)
     if ($LASTEXITCODE -eq 0) {
         Write-Output "Carried: $carry"
     } else {
