@@ -372,6 +372,42 @@ t_run_check_commit() {
     assert_contains "$OUT" "git changed: head" "git changed: head"
 }
 
+t_run_check_tag() {
+    setup_wt_child "echo hello > a.txt; git tag t1; $WT_REPORT"
+    run_script dispatch-run.sh T1 1
+    run_script dispatch-check.sh T1 1
+    assert_eq 8 "$CODE" "worktree で tag を作ると exit 8"
+    assert_contains "$OUT" "git changed" "git changed"
+}
+
+t_run_check_state_entry() {
+    write_state "T1:in_progress" "T2:pending"
+    setup_wt_child "sed -i 's/in_progress/done/' \"$PROJ/.agents/workflow/state.json\"; echo hello > a.txt; $WT_REPORT"
+    run_script dispatch-run.sh T1 1
+    run_script dispatch-check.sh T1 1
+    assert_eq 8 "$CODE" "本体の state.json の自分のタスクの status を書き換えると exit 8"
+    assert_contains "$OUT" "changed: .agents/workflow/state.json" "state.json の changed"
+}
+
+t_run_check_tasks_md() {
+    setup_wt_child "echo extra >> \"$PROJ/.agents/workflow/tasks.md\"; echo hello > a.txt; $WT_REPORT"
+    run_script dispatch-run.sh T1 1
+    run_script dispatch-check.sh T1 1
+    assert_eq 8 "$CODE" "本体の tasks.md を書き換えると exit 8"
+    assert_contains "$OUT" "changed: .agents/workflow/tasks.md" "tasks.md の changed"
+}
+
+t_run_check_parent_activity() {
+    write_state "T1:in_progress" "T2:pending"
+    setup_wt_child "git -C \"$PROJ\" commit -q --allow-empty -m parent; sed -i 's/pending/done/' \"$PROJ/.agents/workflow/state.json\"; git -C \"$PROJ\" branch agents-run/T2-1; echo hello > a.txt; $WT_REPORT"
+    run_script dispatch-run.sh T1 1
+    assert_eq 1 "$(has_branch agents-run/T2-1 && echo 1 || echo 0)" "子の実行中に本体でほかの run のブランチができた"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "親の作業・ほかのタスクの欄・ほかの run のブランチでは tampered にならない: $OUT"
+    assert_not_contains "$OUT" "changed" "changed は出ない"
+    assert_eq "Next: collect T1" "$(last_line)" "最後の行は Next: collect T1"
+}
+
 echo "test-dispatch-worktree.sh"
 test_case "dispatch-worktree: create で worktree・ブランチ・worktree.txt ができる" t_create
 test_case "dispatch-worktree: remove で worktree とブランチが消える" t_remove
@@ -393,4 +429,8 @@ test_case "dispatch-worktree: worktree.txt に base 行が無いと HEAD との�
 test_case "dispatch-worktree: worktree の run を dispatch-run で動かし dispatch-check が collect を返す" t_run_check_ok
 test_case "dispatch-worktree: 子の実行中に本体で branch・commit しても tampered にならない" t_run_check_main_git
 test_case "dispatch-worktree: 子が worktree で commit すると tampered(exit 8)" t_run_check_commit
+test_case "dispatch-worktree: 子が worktree で tag を作ると tampered(exit 8)" t_run_check_tag
+test_case "dispatch-worktree: 子が本体の state.json の自分のタスクの欄を書き換えると tampered(exit 8)" t_run_check_state_entry
+test_case "dispatch-worktree: 子が本体の tasks.md を書き換えると tampered(exit 8)" t_run_check_tasks_md
+test_case "dispatch-worktree: 実行中の親の commit・ほかのタスクの欄・ほかの run のブランチでは tampered にならない" t_run_check_parent_activity
 summary

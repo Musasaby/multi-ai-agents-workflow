@@ -373,4 +373,42 @@ Invoke-TestCase "dispatch-worktree: 子が worktree で commit すると tampere
     Assert-Contains $script:Out "git changed: head" "git changed: head"
 }
 
+Invoke-TestCase "dispatch-worktree: 子が worktree で tag を作ると tampered(exit 8)" {
+    Initialize-WtChild "Set-Content a.txt hello; git tag t1; $WtReport"
+    Invoke-Script dispatch-run.ps1 T1 1
+    Invoke-Script dispatch-check.ps1 T1 1
+    Assert-Eq 8 $script:Code "worktree で tag を作ると exit 8"
+    Assert-Contains $script:Out "git changed" "git changed"
+}
+
+Invoke-TestCase "dispatch-worktree: 子が本体の state.json の自分のタスクの欄を書き換えると tampered(exit 8)" {
+    Set-State 'T1:in_progress' 'T2:pending'
+    $sp = "$script:Proj/.agents/workflow/state.json"
+    Initialize-WtChild "`$p = '$sp'; [System.IO.File]::WriteAllText(`$p, ([System.IO.File]::ReadAllText(`$p) -replace 'in_progress', 'done')); Set-Content a.txt hello; $WtReport"
+    Invoke-Script dispatch-run.ps1 T1 1
+    Invoke-Script dispatch-check.ps1 T1 1
+    Assert-Eq 8 $script:Code "本体の state.json の自分のタスクの status を書き換えると exit 8"
+    Assert-Contains $script:Out "changed: .agents/workflow/state.json" "state.json の changed"
+}
+
+Invoke-TestCase "dispatch-worktree: 子が本体の tasks.md を書き換えると tampered(exit 8)" {
+    Initialize-WtChild "Add-Content '$script:Proj/.agents/workflow/tasks.md' extra; Set-Content a.txt hello; $WtReport"
+    Invoke-Script dispatch-run.ps1 T1 1
+    Invoke-Script dispatch-check.ps1 T1 1
+    Assert-Eq 8 $script:Code "本体の tasks.md を書き換えると exit 8"
+    Assert-Contains $script:Out "changed: .agents/workflow/tasks.md" "tasks.md の changed"
+}
+
+Invoke-TestCase "dispatch-worktree: 実行中の親の commit・ほかのタスクの欄・ほかの run のブランチでは tampered にならない" {
+    Set-State 'T1:in_progress' 'T2:pending'
+    $sp = "$script:Proj/.agents/workflow/state.json"
+    Initialize-WtChild "git -C '$script:Proj' commit -q --allow-empty -m parent; `$p = '$sp'; [System.IO.File]::WriteAllText(`$p, ([System.IO.File]::ReadAllText(`$p) -replace 'pending', 'done')); git -C '$script:Proj' branch agents-run/T2-1; Set-Content a.txt hello; $WtReport"
+    Invoke-Script dispatch-run.ps1 T1 1
+    Add-Result (Test-Branch 'agents-run/T2-1') "子の実行中に本体でほかの run のブランチができた"
+    Invoke-Script dispatch-check.ps1 T1 1
+    Assert-Eq 0 $script:Code "親の作業・ほかのタスクの欄・ほかの run のブランチでは tampered にならない: $($script:Out)"
+    Assert-NotContains $script:Out "changed" "changed は出ない"
+    Assert-Eq "Next: collect T1" (Get-LastLine) "最後の行は Next: collect T1"
+}
+
 Show-Summary
