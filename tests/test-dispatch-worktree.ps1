@@ -49,7 +49,87 @@ function Initialize-WtChild {
 
 $WtReport = 'Write-Output "## 完了報告"; Write-Output "- 変更ファイル: a.txt"; Write-Output "- テスト結果: 全件パス"'
 
+# git のラッパー(git.cmd)を PATH 先頭に置く。GIT_WRAP_FAIL=1 の間、`-c ... worktree add -q -b <branch> <wt> HEAD` は
+# ブランチと WT のディレクトリを作ってから exit 128 で終わる。それ以外は本物の git に渡す。引数は GIT_WRAP_LOG に記録する
+# (バッチの引数は = でも区切られるため、core.longpaths=true は %2 と %3 に分かれる)
+function Enable-GitWrap {
+    $script:WrapDir = Join-Path ([System.IO.Path]::GetTempPath()) ("git-wrap-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $null = New-Item -ItemType Directory -Force $script:WrapDir
+    $script:WrapLog = Join-Path $script:WrapDir 'git.log'
+    $script:PathBeforeWrap = $env:PATH
+    $env:GIT_WRAP_REAL = (Get-Command git -CommandType Application | Select-Object -First 1).Source
+    $env:GIT_WRAP_LOG = $script:WrapLog
+    $cmd = @'
+@echo off
+echo %*>>"%GIT_WRAP_LOG%"
+if "%GIT_WRAP_FAIL%"=="1" if "%4"=="worktree" if "%5"=="add" goto fail
+"%GIT_WRAP_REAL%" %*
+exit /b %ERRORLEVEL%
+:fail
+"%GIT_WRAP_REAL%" branch %8 HEAD
+mkdir %9
+echo fatal: simulated worktree add failure 1>&2
+exit /b 128
+'@
+    [System.IO.File]::WriteAllText((Join-Path $script:WrapDir 'git.cmd'), $cmd)
+    $env:PATH = "$($script:WrapDir);$env:PATH"
+}
+
+function Disable-GitWrap {
+    $env:PATH = $script:PathBeforeWrap
+    Remove-Item Env:GIT_WRAP_FAIL, Env:GIT_WRAP_LOG, Env:GIT_WRAP_REAL -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force $script:WrapDir -ErrorAction SilentlyContinue
+}
+
 Write-Host "test-dispatch-worktree.ps1"
+
+Invoke-TestCase "dispatch-worktree: worktree add が失敗するとブランチ・WT・worktree.txt が残らず exit 30" {
+    Enable-GitWrap
+    try {
+        $run = "$script:Proj/.agents/workflow/runs/T1-1"
+        $env:GIT_WRAP_FAIL = '1'
+        Invoke-Script dispatch-worktree.ps1 create T1 1
+        Remove-Item Env:GIT_WRAP_FAIL
+        Assert-Eq 30 $script:Code "worktree add の失敗は exit 30"
+        Assert-Eq "Next: escalate reason=worktree" (Get-LastLine) "escalate reason=worktree"
+        Add-Result (-not (Test-Branch 'agents-run/T1-1')) "ブランチが残らない"
+        Assert-FileAbsent "$run/worktree" "WT が残らない"
+        Assert-FileAbsent "$run/worktree.txt" "worktree.txt が残らない"
+        Assert-Contains ([System.IO.File]::ReadAllText($script:WrapLog)) "worktree add" "ラッパーが worktree add を受けた"
+
+        Invoke-Script dispatch-worktree.ps1 create T1 1
+        Assert-Eq 0 $script:Code "ラッパーを外すと同じ試行で create できる: $($script:Err)"
+    } finally { Disable-GitWrap }
+}
+
+Invoke-TestCase "dispatch-worktree: 試行 2 の worktree add が失敗すると前の変更が本体に戻る" {
+    Enable-GitWrap
+    try {
+        $run1 = ".agents/workflow/runs/T1-1"
+        Invoke-Script dispatch-worktree.ps1 create T1 1
+        Assert-Eq 0 $script:Code "create 1 exit: $($script:Err)"
+        Write-Plain "$script:Proj/$run1/worktree/a.txt" "hello`n"
+        Invoke-Script dispatch-worktree.ps1 collect T1 1
+        Assert-Eq 0 $script:Code "collect exit: $($script:Err)"
+        Assert-FileExists "$script:Proj/a.txt" "collect で本体に a.txt が当たる"
+
+        $env:GIT_WRAP_FAIL = '1'
+        Invoke-Script dispatch-worktree.ps1 create T1 2
+        Remove-Item Env:GIT_WRAP_FAIL
+        Assert-Eq 30 $script:Code "試行 2 の失敗は exit 30"
+        Assert-FileExists "$script:Proj/a.txt" "前の試行の変更が本体に戻る"
+        Add-Result (-not (Test-Branch 'agents-run/T1-2')) "試行 2 のブランチが残らない"
+    } finally { Disable-GitWrap }
+}
+
+Invoke-TestCase "dispatch-worktree: worktree add に -c core.longpaths=true が付く" {
+    Enable-GitWrap
+    try {
+        Invoke-Script dispatch-worktree.ps1 create T1 1
+        Assert-Eq 0 $script:Code "create exit: $($script:Err)"
+        Assert-Contains ([System.IO.File]::ReadAllText($script:WrapLog)) "-c core.longpaths=true worktree add" "worktree add に -c core.longpaths=true が付く"
+    } finally { Disable-GitWrap }
+}
 
 Invoke-TestCase "dispatch-worktree: create で worktree・ブランチ・worktree.txt ができる" {
     Invoke-Script dispatch-worktree.ps1 create T1 1

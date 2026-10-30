@@ -65,6 +65,85 @@ t_carry() {
     assert_file_exists "$PROJ/.agents/workflow/runs/T1-2/worktree/a.txt" "新しい worktree に a.txt がある"
 }
 
+# git のラッパーを PATH 先頭に置く。GIT_WRAP_FAIL=1 の間、`worktree add` はブランチと WT のディレクトリを
+# 作ってから exit 128 で終わる。それ以外の引数は本物の git に渡す。引数は GIT_WRAP_LOG に記録する
+wrap_git_on() {
+    GIT_WRAP_DIR="$(mktemp -d)"
+    GIT_WRAP_LOG="$GIT_WRAP_DIR/git.log"
+    GIT_WRAP_REAL="$(command -v git)"
+    PATH_BEFORE_WRAP="$PATH"
+    export GIT_WRAP_LOG GIT_WRAP_REAL
+    cat > "$GIT_WRAP_DIR/git" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "$GIT_WRAP_LOG"
+if [ "${GIT_WRAP_FAIL:-}" = 1 ] && [[ " $* " == *" worktree add "* ]]; then
+    WT="${@: -2:1}"
+    while [ $# -gt 0 ]; do
+        [ "$1" = "-b" ] && BR="$2"
+        shift
+    done
+    "$GIT_WRAP_REAL" branch "$BR" HEAD
+    mkdir -p "$WT"
+    echo "fatal: simulated worktree add failure" >&2
+    exit 128
+fi
+exec "$GIT_WRAP_REAL" "$@"
+EOF
+    chmod +x "$GIT_WRAP_DIR/git"
+    if command -v cygpath > /dev/null 2>&1; then
+        export PATH="$(cygpath -u "$GIT_WRAP_DIR"):$PATH"
+    else
+        export PATH="$GIT_WRAP_DIR:$PATH"
+    fi
+}
+
+wrap_git_off() {
+    export PATH="$PATH_BEFORE_WRAP"
+    unset GIT_WRAP_FAIL GIT_WRAP_LOG GIT_WRAP_REAL
+    rm -rf "$GIT_WRAP_DIR"
+}
+
+t_create_fail() {
+    wrap_git_on
+    local run=".agents/workflow/runs/T1-1"
+    GIT_WRAP_FAIL=1 run_script dispatch-worktree.sh create T1 1
+    assert_eq 30 "$CODE" "worktree add の失敗は exit 30"
+    assert_eq "Next: escalate reason=worktree" "$(last_line)" "escalate reason=worktree"
+    assert_eq 0 "$(has_branch agents-run/T1-1 && echo 1 || echo 0)" "ブランチが残らない"
+    assert_file_absent "$PROJ/$run/worktree" "WT が残らない"
+    assert_file_absent "$PROJ/$run/worktree.txt" "worktree.txt が残らない"
+    assert_contains "$(cat "$GIT_WRAP_LOG")" "worktree add" "ラッパーが worktree add を受けた"
+
+    run_script dispatch-worktree.sh create T1 1
+    assert_eq 0 "$CODE" "ラッパーを外すと同じ試行で create できる: $ERR"
+    wrap_git_off
+}
+
+t_create_fail_restore() {
+    wrap_git_on
+    local run1=".agents/workflow/runs/T1-1"
+    run_script dispatch-worktree.sh create T1 1
+    assert_eq 0 "$CODE" "create 1 exit: $ERR"
+    printf 'hello\n' > "$PROJ/$run1/worktree/a.txt"
+    run_script dispatch-worktree.sh collect T1 1
+    assert_eq 0 "$CODE" "collect exit: $ERR"
+    assert_file_exists "$PROJ/a.txt" "collect で本体に a.txt が当たる"
+
+    GIT_WRAP_FAIL=1 run_script dispatch-worktree.sh create T1 2
+    assert_eq 30 "$CODE" "試行 2 の失敗は exit 30"
+    assert_file_exists "$PROJ/a.txt" "前の試行の変更が本体に戻る"
+    assert_eq 0 "$(has_branch agents-run/T1-2 && echo 1 || echo 0)" "試行 2 のブランチが残らない"
+    wrap_git_off
+}
+
+t_create_longpaths() {
+    wrap_git_on
+    run_script dispatch-worktree.sh create T1 1
+    assert_eq 0 "$CODE" "create exit: $ERR"
+    assert_contains "$(cat "$GIT_WRAP_LOG")" "-c core.longpaths=true worktree add" "worktree add に -c core.longpaths=true が付く"
+    wrap_git_off
+}
+
 # 本体に base.txt(2行)を足して履歴に残し、T1 の変更対象を base.txt だけにして create する
 setup_collect() {
     printf 'line1\nline2\n' > "$PROJ/base.txt"
@@ -179,6 +258,9 @@ echo "test-dispatch-worktree.sh"
 test_case "dispatch-worktree: create で worktree・ブランチ・worktree.txt ができる" t_create
 test_case "dispatch-worktree: remove で worktree とブランチが消える" t_remove
 test_case "dispatch-worktree: 試行 2 の create で前の変更を持ち越す" t_carry
+test_case "dispatch-worktree: worktree add が失敗するとブランチ・WT・worktree.txt が残らず exit 30" t_create_fail
+test_case "dispatch-worktree: 試行 2 の worktree add が失敗すると前の変更が本体に戻る" t_create_fail_restore
+test_case "dispatch-worktree: worktree add に -c core.longpaths=true が付く" t_create_longpaths
 test_case "dispatch-worktree: collect で変更が本体に入り worktree が消える" t_collect
 test_case "dispatch-worktree: collect で本体と衝突すると exit 40 で worktree が残る" t_collect_conflict
 test_case "dispatch-worktree: collect で本体が dirty だと exit 20" t_collect_dirty
