@@ -91,9 +91,61 @@ Invoke-TestCase "git-state: -Ref は自分のブランチの変化に追従す�
 Invoke-TestCase "git-state: 不正な引数は exit 1" {
     Invoke-Script git-state.ps1 -Ref
     Assert-Eq 1 $script:Code "-Ref の値が無いと exit 1"
-    Assert-Eq 'Usage: git-state.sh [--ref <refname>]' $script:Err.Trim() "使い方を stderr に出す"
+    Assert-Eq 'Usage: git-state.sh [--ref <refname> | --run <refname> --parent <refname>]' $script:Err.Trim() "使い方を stderr に出す"
     Invoke-Script git-state.ps1 --bogus
     Assert-Eq 1 $script:Code "未知の引数は exit 1"
+    Invoke-Script git-state.ps1 -Run refs/heads/agents-run/r1
+    Assert-Eq 1 $script:Code "-Run だけだと exit 1"
+    Invoke-Script git-state.ps1 -Parent refs/heads/main
+    Assert-Eq 1 $script:Code "-Parent だけだと exit 1"
+    Invoke-Script git-state.ps1 -Run refs/heads/agents-run/r1 -Parent
+    Assert-Eq 1 $script:Code "-Parent の値が無いと exit 1"
+    Invoke-Script git-state.ps1 -Run
+    Assert-Eq 1 $script:Code "-Run の値が無いと exit 1"
+    Invoke-Script git-state.ps1 -Ref refs/heads/main -Run refs/heads/agents-run/r1 -Parent refs/heads/main
+    Assert-Eq 1 $script:Code "-Ref との併用は exit 1"
+}
+
+Invoke-TestCase "git-state: -Run はほかの run と -Parent の変化を無視する" {
+    $run = 'refs/heads/agents-run/r1'
+    git -C $script:Proj branch agents-run/r1
+    Invoke-Script git-state.ps1 -Run $run -Parent refs/heads/main
+    Assert-Eq 0 $script:Code "exit: $($script:Err)"
+    $before = Get-OutLine 3
+    git -C $script:Proj branch agents-run/r2
+    Invoke-Script git-state.ps1 -Run $run -Parent refs/heads/main
+    Assert-Eq $before (Get-OutLine 3) "ほかの run のブランチ作成で変わらない"
+    git -C $script:Proj commit -q --allow-empty -m parent
+    Invoke-Script git-state.ps1 -Run $run -Parent refs/heads/main
+    Assert-Eq $before (Get-OutLine 3) "-Parent のブランチのコミットで変わらない"
+}
+
+Invoke-TestCase "git-state: -Run はタグ・ほかのブランチ・自分の run の変化を検知する" {
+    $run = 'refs/heads/agents-run/r1'
+    git -C $script:Proj branch agents-run/r1
+    Invoke-Script git-state.ps1 -Run $run -Parent refs/heads/main
+    $before = Get-OutLine 3
+    git -C $script:Proj tag t1
+    Invoke-Script git-state.ps1 -Run $run -Parent refs/heads/main
+    Assert-Ne $before (Get-OutLine 3) "タグ作成で変わる"
+    $before = Get-OutLine 3
+    git -C $script:Proj branch other
+    Invoke-Script git-state.ps1 -Run $run -Parent refs/heads/main
+    Assert-Ne $before (Get-OutLine 3) "-Parent 以外のブランチ作成で変わる"
+    $before = Get-OutLine 3
+    $c = "$(git -C $script:Proj commit-tree -m x 'HEAD^{tree}')".Trim()
+    git -C $script:Proj update-ref $run $c
+    Invoke-Script git-state.ps1 -Run $run -Parent refs/heads/main
+    Assert-Ne $before (Get-OutLine 3) "自分の run のブランチの移動で変わる"
+}
+
+Invoke-TestCase "git-state: -Parent - は何も除かない" {
+    $run = 'refs/heads/agents-run/r1'
+    Invoke-Script git-state.ps1 -Run $run -Parent -
+    $before = Get-OutLine 3
+    git -C $script:Proj commit -q --allow-empty -m x
+    Invoke-Script git-state.ps1 -Run $run -Parent -
+    Assert-Ne $before (Get-OutLine 3) "-Parent - なら main の移動で変わる"
 }
 
 Invoke-TestCase "git-state: detached HEAD では branch が -" {

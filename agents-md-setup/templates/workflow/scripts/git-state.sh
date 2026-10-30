@@ -17,28 +17,62 @@ set -uo pipefail
 #   --ref <refname> を付けると、refs 行はその参照だけ
 #   (git for-each-ref --format='%(objectname) %(refname)' <refname> の出力。無ければ空の出力)のハッシュにする。
 #   ほかのブランチの参照が変わっても変わらない。ほかの行は変わらない
-# 未知の引数・--ref の値が無いときは stderr に使い方を出して exit 1 する。
+#   --run <自分の run のブランチの参照名> --parent <親の作業ブランチの参照名> を付けると、refs 行は既定の参照一覧から
+#   次の行を除いたもののハッシュにする(worktree は ref を本体と共有しているため、ほかの run や親の動きを除く)
+#     - 参照名が refs/heads/agents-run/ で始まり、--run の値と一致しない行(ほかの run のブランチ)
+#     - 参照名が --parent の値と一致する行(--parent が - か空なら何も除かない)
+#   --run と --parent は両方そろって使う。--ref とは一緒に使えない
+# 未知の引数・値が無いオプション・--run と --parent の片方だけ・--ref との併用は、
+# stderr に使い方を出して exit 1 する。
+
+USAGE="Usage: git-state.sh [--ref <refname> | --run <refname> --parent <refname>]"
 
 # --- 引数 ---
 REF_ARG=""
 USE_REF=0
+RUN_ARG=""
+USE_RUN=0
+PARENT_ARG=""
+USE_PARENT=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --ref)
             if [ $# -lt 2 ]; then
-                echo "Usage: git-state.sh [--ref <refname>]" >&2
+                echo "$USAGE" >&2
                 exit 1
             fi
             REF_ARG="$2"
             USE_REF=1
             shift 2
             ;;
+        --run)
+            if [ $# -lt 2 ]; then
+                echo "$USAGE" >&2
+                exit 1
+            fi
+            RUN_ARG="$2"
+            USE_RUN=1
+            shift 2
+            ;;
+        --parent)
+            if [ $# -lt 2 ]; then
+                echo "$USAGE" >&2
+                exit 1
+            fi
+            PARENT_ARG="$2"
+            USE_PARENT=1
+            shift 2
+            ;;
         *)
-            echo "Usage: git-state.sh [--ref <refname>]" >&2
+            echo "$USAGE" >&2
             exit 1
             ;;
     esac
 done
+if [ "$USE_RUN" -ne "$USE_PARENT" ] || { [ "$USE_REF" -eq 1 ] && [ "$USE_RUN" -eq 1 ]; }; then
+    echo "$USAGE" >&2
+    exit 1
+fi
 
 # --- リポジトリ判定 ---
 if ! git rev-parse --git-dir > /dev/null 2>&1; then
@@ -57,6 +91,15 @@ BRANCH="$(git symbolic-ref -q HEAD)"
 # --- refs(sha256sum が無ければ shasum -a 256。dispatch-run.sh と同じ分岐) ---
 if [ "$USE_REF" -eq 1 ]; then
     REF_LIST() { git for-each-ref --format='%(objectname) %(refname)' "$REF_ARG"; }
+elif [ "$USE_RUN" -eq 1 ]; then
+    REF_LIST() {
+        git for-each-ref --format='%(objectname) %(refname)' refs/heads refs/tags refs/stash |
+            awk -v run="$RUN_ARG" -v parent="$PARENT_ARG" '
+                { n = $2 }
+                index(n, "refs/heads/agents-run/") == 1 && n != run { next }
+                parent != "" && parent != "-" && n == parent { next }
+                { print }'
+    }
 else
     REF_LIST() { git for-each-ref --format='%(objectname) %(refname)' refs/heads refs/tags refs/stash; }
 fi

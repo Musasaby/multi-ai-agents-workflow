@@ -13,21 +13,40 @@
 #   -Ref <refname> を付けると、refs 行はその参照だけ
 #   (git for-each-ref --format='%(objectname) %(refname)' <refname> の出力。無ければ空の出力)のハッシュにする。
 #   ほかのブランチの参照が変わっても変わらない。ほかの行は変わらない
-# 未知の引数・-Ref の値が無いときは stderr に使い方を出して exit 1 する。
+#   -Run <自分の run のブランチの参照名> -Parent <親の作業ブランチの参照名> を付けると、refs 行は既定の参照一覧から
+#   次の行を除いたもののハッシュにする(worktree は ref を本体と共有しているため、ほかの run や親の動きを除く)
+#     - 参照名が refs/heads/agents-run/ で始まり、-Run の値と一致しない行(ほかの run のブランチ)
+#     - 参照名が -Parent の値と一致する行(-Parent が - か空なら何も除かない)
+#   -Run と -Parent は両方そろって使う。-Ref とは一緒に使えない
+# 未知の引数・値が無いオプション・-Run と -Parent の片方だけ・-Ref との併用は、
+# stderr に使い方を出して exit 1 する。
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
 # --- 引数 ---
+$usage = 'Usage: git-state.sh [--ref <refname> | --run <refname> --parent <refname>]'
 $refArg = $null
+$runArg = $null
+$parentArg = $null
 $i = 0
 while ($i -lt $args.Count) {
-    if ("$($args[$i])" -ceq '-Ref' -and ($i + 1) -lt $args.Count) {
-        $refArg = "$($args[$i + 1])"
-        $i += 2
-    } else {
-        [Console]::Error.WriteLine('Usage: git-state.sh [--ref <refname>]')
+    $name = "$($args[$i])"
+    if (($i + 1) -ge $args.Count) {
+        [Console]::Error.WriteLine($usage)
         exit 1
     }
+    if ($name -ceq '-Ref') { $refArg = "$($args[$i + 1])" }
+    elseif ($name -ceq '-Run') { $runArg = "$($args[$i + 1])" }
+    elseif ($name -ceq '-Parent') { $parentArg = "$($args[$i + 1])" }
+    else {
+        [Console]::Error.WriteLine($usage)
+        exit 1
+    }
+    $i += 2
+}
+if (($null -ne $runArg) -ne ($null -ne $parentArg) -or ($null -ne $refArg -and $null -ne $runArg)) {
+    [Console]::Error.WriteLine($usage)
+    exit 1
 }
 
 # --- リポジトリ判定 ---
@@ -48,6 +67,12 @@ if ($LASTEXITCODE -ne 0 -or -not $branch) { $branch = '-' }
 # --- refs ---
 $lines = if ($null -ne $refArg) {
     @(git for-each-ref --format='%(objectname) %(refname)' $refArg)
+} elseif ($null -ne $runArg) {
+    @(git for-each-ref --format='%(objectname) %(refname)' refs/heads refs/tags refs/stash | Where-Object {
+        $n = ("$_" -split ' ', 2)[1]
+        -not ($n.StartsWith('refs/heads/agents-run/', [System.StringComparison]::Ordinal) -and $n -cne $runArg) -and
+        -not ($parentArg -and $parentArg -ne '-' -and $n -ceq $parentArg)
+    })
 } else {
     @(git for-each-ref --format='%(objectname) %(refname)' refs/heads refs/tags refs/stash)
 }
