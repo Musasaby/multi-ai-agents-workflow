@@ -10,7 +10,8 @@ set -uo pipefail
 #            tasks.md の changed に無いファイルは `Undeclared: <path>` で出す
 #   remove : WT とブランチと $RUN/worktree.txt を消す(無くてもエラーにしない)
 # exit: 0=成功 / 1=使い方不備 / 20=dirty-tree(前の試行の変更を本体から取り除けない・collect では本体の作業ツリーが clean でない) /
-#   30=worktree(WT が既にある・作成に失敗・collect では worktree.txt または WT のディレクトリが無い) / 40=conflict(collect)
+#   30=worktree(WT が既にある・作成に失敗・パッチを作る git の失敗・collect では worktree.txt または WT のディレクトリが無い) /
+#   40=conflict(collect。git apply の失敗を含む)
 # stdout の最後の行には次のアクションを示す `Next:` 行を出す(continue / escalate reason=<理由>。
 # 使い方不備の exit 1 では出さない)
 
@@ -46,12 +47,33 @@ abs_path() {
     fi
 }
 
-# wt の変更(未追跡を含む。.agents/workflow は除く)を out にバイナリ対応のパッチで書く
+# run ディレクトリの worktree.txt の base の値を出す(行が無ければ HEAD)
+read_base() {
+    local b=""
+    if [ -f "$1/worktree.txt" ]; then
+        b="$(sed -n 's/^base //p' "$1/worktree.txt" | head -n 1 | tr -d '\r')"
+    fi
+    echo "${b:-HEAD}"
+}
+
+# wt の変更(未追跡を含む。.agents/workflow は除く)の base との差分を out にバイナリ対応のパッチで書く。
+# 成功したら 0、git が1つでも失敗したら 1
 make_patch() {
-    local wt="$1" out="$2"
-    git -C "$wt" -c core.longpaths=true add -A
-    git -C "$wt" -c core.longpaths=true diff --cached --binary --no-renames HEAD -- . ':(exclude).agents/workflow' > "$out"
-    git -C "$wt" -c core.longpaths=true reset -q
+    local wt="$1" out="$2" base="$3"
+    if ! git -C "$wt" -c core.longpaths=true add -A; then
+        echo "git add failed in $wt" >&2
+        return 1
+    fi
+    if ! git -C "$wt" -c core.longpaths=true diff --cached --binary --no-renames "$base" -- . ':(exclude).agents/workflow' > "$out"; then
+        git -C "$wt" -c core.longpaths=true reset -q > /dev/null 2>&1
+        echo "git diff failed in $wt" >&2
+        return 1
+    fi
+    if ! git -C "$wt" -c core.longpaths=true reset -q; then
+        echo "git reset failed in $wt" >&2
+        return 1
+    fi
+    return 0
 }
 
 # wt・ブランチ・wt の隣の worktree.txt を消す(無いものは飛ばす)
@@ -91,7 +113,11 @@ case "$ACTION" in
         fi
 
         PATCH="$RUN/changes.patch"
-        make_patch "$WT_PATH" "$PATCH"
+        if ! make_patch "$WT_PATH" "$PATCH" "$(read_base "$RUN")"; then
+            echo "failed to make the patch from the worktree: $WT_PATH" >&2
+            echo "Next: escalate reason=worktree"
+            exit 30
+        fi
         CHANGED_FILES=""
         if [ -s "$PATCH" ]; then
             CHANGED_FILES="$(git -c core.quotepath=false apply --numstat "$PATCH" | cut -f3-)"
@@ -138,7 +164,11 @@ PY
                 echo "Next: escalate reason=conflict"
                 exit 40
             fi
-            git apply "$PATCH"
+            if ! APPLY_OUT="$(git apply "$PATCH" 2>&1)"; then
+                echo "$APPLY_OUT" >&2
+                echo "Next: escalate reason=conflict"
+                exit 40
+            fi
             echo "Applied: $(printf '%s\n' "$CHANGED_FILES" | grep -c .) files"
         fi
 
@@ -166,7 +196,11 @@ if [ "$ATTEMPT" -ge 2 ]; then
         PREV_WT_PATH="$(sed -n 's/^path //p' "$PREV/worktree.txt" | head -n 1 | tr -d '\r')"
     fi
     if [ -n "$PREV_WT_PATH" ] && [ -d "$PREV_WT_PATH" ]; then
-        make_patch "$PREV_WT_PATH" "$PREV_PATCH"
+        if ! make_patch "$PREV_WT_PATH" "$PREV_PATCH" "$(read_base "$PREV")"; then
+            echo "failed to make the patch from the previous worktree: $PREV_WT_PATH" >&2
+            echo "Next: escalate reason=worktree"
+            exit 30
+        fi
         drop_worktree "$PREV/worktree" "agents-run/${TASK_ID}-$((ATTEMPT - 1))"
     fi
     if [ -s "$PREV_PATCH" ]; then

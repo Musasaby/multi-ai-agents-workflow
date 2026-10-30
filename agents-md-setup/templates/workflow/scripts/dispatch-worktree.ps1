@@ -7,7 +7,8 @@
 #            tasks.md の changed に無いファイルは `Undeclared: <path>` で出す
 #   remove : WT とブランチと $RUN/worktree.txt を消す(無くてもエラーにしない)
 # exit: 0=成功 / 1=使い方不備 / 20=dirty-tree(前の試行の変更を本体から取り除けない・collect では本体の作業ツリーが clean でない) /
-#   30=worktree(WT が既にある・作成に失敗・collect では worktree.txt または WT のディレクトリが無い) / 40=conflict(collect)
+#   30=worktree(WT が既にある・作成に失敗・パッチを作る git の失敗・collect では worktree.txt または WT のディレクトリが無い) /
+#   40=conflict(collect。git apply の失敗を含む)
 # stdout の最後の行には次のアクションを示す `Next:` 行を出す(continue / escalate reason=<理由>。
 # 使い方不備の exit 1 では出さない)
 param(
@@ -36,14 +37,40 @@ function Get-AbsPath {
     return ([System.IO.Path]::GetFullPath((Join-Path (Get-Location).Path $Path))) -replace '\\', '/'
 }
 
-# wt の変更(未追跡を含む。.agents/workflow は除く)を out にバイナリ対応のパッチで書く
+# run ディレクトリの worktree.txt の base の値を返す(行が無ければ HEAD)
+function Get-RunBase {
+    param([string]$RunDir)
+    if (Test-Path -LiteralPath "$RunDir/worktree.txt") {
+        foreach ($l in ([System.IO.File]::ReadAllText((Resolve-Path "$RunDir/worktree.txt"), [System.Text.Encoding]::UTF8) -split "`r?`n")) {
+            if ($l.StartsWith('base ') -and $l.Substring(5).Trim()) { return $l.Substring(5).Trim() }
+        }
+    }
+    return 'HEAD'
+}
+
+# wt の変更(未追跡を含む。.agents/workflow は除く)の base との差分を out にバイナリ対応のパッチで書く。
+# 成功したら $true、git が1つでも失敗したら $false
 function New-Patch {
-    param([string]$Wt, [string]$Out)
+    param([string]$Wt, [string]$Out, [string]$Base)
     # git -C は wt に移ってから動くので、--output には本体側の絶対パスを渡す
     $absOut = Get-AbsPath $Out
     git -C $Wt -c core.longpaths=true add -A
-    git -C $Wt -c core.longpaths=true diff --cached --binary --no-renames "--output=$absOut" HEAD -- . ':(exclude).agents/workflow'
+    if ($LASTEXITCODE -ne 0) {
+        [Console]::Error.WriteLine("git add failed in $Wt")
+        return $false
+    }
+    git -C $Wt -c core.longpaths=true diff --cached --binary --no-renames "--output=$absOut" $Base -- . ':(exclude).agents/workflow'
+    if ($LASTEXITCODE -ne 0) {
+        git -C $Wt -c core.longpaths=true reset -q *> $null
+        [Console]::Error.WriteLine("git diff failed in $Wt")
+        return $false
+    }
     git -C $Wt -c core.longpaths=true reset -q
+    if ($LASTEXITCODE -ne 0) {
+        [Console]::Error.WriteLine("git reset failed in $Wt")
+        return $false
+    }
+    return $true
 }
 
 # wt・ブランチ・wt の隣の worktree.txt を消す(無いものは飛ばす)
@@ -85,7 +112,11 @@ if ($Action -ceq 'collect') {
     }
 
     $patch = "$run/changes.patch"
-    New-Patch $wtPath $patch
+    if (-not (New-Patch $wtPath $patch (Get-RunBase $run))) {
+        [Console]::Error.WriteLine("failed to make the patch from the worktree: $wtPath")
+        Write-Output "Next: escalate reason=worktree"
+        exit 30
+    }
     $hasPatch = (Test-Path -LiteralPath $patch) -and (Get-Item -LiteralPath $patch).Length -gt 0
     $changedFiles = @()
     if ($hasPatch) {
@@ -118,7 +149,12 @@ if ($Action -ceq 'collect') {
             Write-Output "Next: escalate reason=conflict"
             exit 40
         }
-        git apply $patch
+        $applyOut = git apply $patch 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            [Console]::Error.WriteLine(($applyOut | ForEach-Object { "$_" }) -join "`n")
+            Write-Output "Next: escalate reason=conflict"
+            exit 40
+        }
         Write-Output "Applied: $($changedFiles.Count) files"
     }
 
@@ -148,7 +184,11 @@ if ($Attempt -ge 2) {
         }
     }
     if ($prevWtPath -and (Test-Path -LiteralPath $prevWtPath)) {
-        New-Patch $prevWtPath $prevPatch
+        if (-not (New-Patch $prevWtPath $prevPatch (Get-RunBase $prev))) {
+            [Console]::Error.WriteLine("failed to make the patch from the previous worktree: $prevWtPath")
+            Write-Output "Next: escalate reason=worktree"
+            exit 30
+        }
         Remove-RunWorktree "$prev/worktree" "agents-run/$TaskId-$prevN"
     }
     if ((Test-Path -LiteralPath $prevPatch) -and (Get-Item -LiteralPath $prevPatch).Length -gt 0) {
