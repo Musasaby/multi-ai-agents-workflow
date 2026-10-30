@@ -139,6 +139,12 @@ else:
 if max_parallel >= 2:
     active = [t['id'] for t in state_tasks if t['status'] == 'in_progress']
 
+    def paths_overlap(a, b):
+        # 末尾の / を除いて比べ、同じパスか、一方がもう一方のディレクトリの下なら重なる
+        a = a.rstrip('/')
+        b = b.rstrip('/')
+        return a == b or b.startswith(a + '/') or a.startswith(b + '/')
+
     def is_solo(tid):
         ch = changed_of.get(tid, [])
         return not ch or any(f in exclusive_files for f in ch)
@@ -164,7 +170,7 @@ if max_parallel >= 2:
                     chosen.append(t['id'])
                     break
                 continue
-            if busy.isdisjoint(ch):
+            if not any(paths_overlap(a, b) for a in ch for b in busy):
                 chosen.append(t['id'])
                 busy.update(ch)
     if chosen or active:

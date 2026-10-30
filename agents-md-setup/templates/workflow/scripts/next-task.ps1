@@ -140,6 +140,12 @@ if ($groupMode) {
 
 if ($maxParallel -ge 2) {
     $active = @($stateTasks | Where-Object { $_.status -eq 'in_progress' } | ForEach-Object { $_.id })
+    # 末尾の / を除いて比べ、同じパスか、一方がもう一方のディレクトリの下なら重なる
+    function Test-PathsOverlap([string]$a, [string]$b) {
+        $a = $a.TrimEnd('/')
+        $b = $b.TrimEnd('/')
+        return ($a -ceq $b) -or $b.StartsWith($a + '/', [System.StringComparison]::Ordinal) -or $a.StartsWith($b + '/', [System.StringComparison]::Ordinal)
+    }
     function Test-Solo([string]$id) {
         $ch = @($changedOf[$id])
         if ($ch.Count -eq 0) { return $true }
@@ -169,7 +175,7 @@ if ($maxParallel -ge 2) {
                 continue
             }
             $overlap = $false
-            foreach ($f in $ch) { if ($busy.Contains($f)) { $overlap = $true } }
+            foreach ($f in $ch) { foreach ($b in $busy) { if (Test-PathsOverlap $f $b) { $overlap = $true } } }
             if (-not $overlap) {
                 $chosen += $t.id
                 foreach ($f in $ch) { [void]$busy.Add($f) }

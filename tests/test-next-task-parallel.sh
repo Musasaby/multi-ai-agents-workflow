@@ -69,7 +69,27 @@ t_parallel_exclusive_file_not_chosen_while_active() {
     assert_eq "Next: wait T1" "${OUT##*$'\n'}" "README.md task is not chosen while another is running"
 }
 
+t_parallel_dir_and_file_overlap() {
+    two_tasks src/ src/app.py
+    write_state "T1:pending" "T2:pending"
+    set_max_parallel 3
+    run_script next-task.sh
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_eq "Next: dispatch T1" "${OUT##*$'\n'}" "dir and file under it do not run together"
+}
+
+t_parallel_same_prefix_not_overlap() {
+    two_tasks src/a src/ab
+    write_state "T1:pending" "T2:pending"
+    set_max_parallel 3
+    run_script next-task.sh
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_eq "Next: dispatch T1 T2" "${OUT##*$'\n'}" "src/a and src/ab are both chosen"
+}
+
 test_case "parallel: 変更対象が重ならなければ両方dispatch" t_parallel_disjoint_dispatches_both
+test_case "parallel: ディレクトリとその下のファイルは重なる" t_parallel_dir_and_file_overlap
+test_case "parallel: 前方一致だけの別パスは重ならない" t_parallel_same_prefix_not_overlap
 test_case "parallel: 変更対象が重なれば先頭だけdispatch" t_parallel_overlap_dispatches_first_only
 test_case "parallel: 空きが無ければwait(exit 5)" t_parallel_no_free_slot_waits
 test_case "parallel: README.md を含むタスクは実行中があると選ばれない" t_parallel_exclusive_file_not_chosen_while_active

@@ -39,6 +39,24 @@ Invoke-TestCase "parallel: 変更対象が重ならなければ両方dispatch" {
     Assert-Eq 'Next: dispatch T1 T2' (Get-LastLine) "both tasks are chosen"
 }
 
+Invoke-TestCase "parallel: ディレクトリとその下のファイルは重なる" {
+    Set-TwoTasks 'src/' 'src/app.py'
+    Set-State 'T1:pending' 'T2:pending'
+    Set-MaxParallel 3
+    Invoke-Script next-task.ps1
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Eq 'Next: dispatch T1' (Get-LastLine) "dir and file under it do not run together"
+}
+
+Invoke-TestCase "parallel: 前方一致だけの別パスは重ならない" {
+    Set-TwoTasks 'src/a' 'src/ab'
+    Set-State 'T1:pending' 'T2:pending'
+    Set-MaxParallel 3
+    Invoke-Script next-task.ps1
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Eq 'Next: dispatch T1 T2' (Get-LastLine) "src/a and src/ab are both chosen"
+}
+
 Invoke-TestCase "parallel: 変更対象が重なれば先頭だけdispatch" {
     Set-TwoTasks 'src/a.txt' 'src/a.txt'
     Set-State 'T1:pending' 'T2:pending'
