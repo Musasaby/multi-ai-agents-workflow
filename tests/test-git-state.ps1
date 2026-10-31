@@ -91,7 +91,7 @@ Invoke-TestCase "git-state: -Ref は自分のブランチの変化に追従す�
 Invoke-TestCase "git-state: 不正な引数は exit 1" {
     Invoke-Script git-state.ps1 -Ref
     Assert-Eq 1 $script:Code "-Ref の値が無いと exit 1"
-    Assert-Eq 'Usage: git-state.sh [--ref <refname> | --run <refname> --parent <refname>]' $script:Err.Trim() "使い方を stderr に出す"
+    Assert-Eq 'Usage: git-state.sh [--ref <refname> | --run <refname> --parent <refname> [--other-runs <ID,ID,...>]]' $script:Err.Trim() "使い方を stderr に出す"
     Invoke-Script git-state.ps1 --bogus
     Assert-Eq 1 $script:Code "未知の引数は exit 1"
     Invoke-Script git-state.ps1 -Run refs/heads/agents-run/r1
@@ -107,17 +107,33 @@ Invoke-TestCase "git-state: 不正な引数は exit 1" {
 }
 
 Invoke-TestCase "git-state: -Run はほかの run と -Parent の変化を無視する" {
-    $run = 'refs/heads/agents-run/r1'
-    git -C $script:Proj branch agents-run/r1
-    Invoke-Script git-state.ps1 -Run $run -Parent refs/heads/main
+    $run = 'refs/heads/agents-run/T1-1'
+    git -C $script:Proj branch agents-run/T1-1
+    Invoke-Script git-state.ps1 -Run $run -Parent refs/heads/main -OtherRuns T2
     Assert-Eq 0 $script:Code "exit: $($script:Err)"
     $before = Get-OutLine 3
-    git -C $script:Proj branch agents-run/r2
-    Invoke-Script git-state.ps1 -Run $run -Parent refs/heads/main
+    git -C $script:Proj branch agents-run/T2-1
+    Invoke-Script git-state.ps1 -Run $run -Parent refs/heads/main -OtherRuns T2
     Assert-Eq $before (Get-OutLine 3) "ほかの run のブランチ作成で変わらない"
     git -C $script:Proj commit -q --allow-empty -m parent
-    Invoke-Script git-state.ps1 -Run $run -Parent refs/heads/main
+    Invoke-Script git-state.ps1 -Run $run -Parent refs/heads/main -OtherRuns T2
     Assert-Eq $before (Get-OutLine 3) "-Parent のブランチのコミットで変わらない"
+}
+
+Invoke-TestCase "git-state: -Run は -OtherRuns に無い run のブランチの作成を検知する" {
+    $run = 'refs/heads/agents-run/T1-1'
+    git -C $script:Proj branch agents-run/T1-1
+    Invoke-Script git-state.ps1 -Run $run -Parent refs/heads/main -OtherRuns T2
+    Assert-Eq 0 $script:Code "exit: $($script:Err)"
+    $before = Get-OutLine 3
+    git -C $script:Proj branch agents-run/T3-1
+    Invoke-Script git-state.ps1 -Run $run -Parent refs/heads/main -OtherRuns T2
+    Assert-Ne $before (Get-OutLine 3) "-OtherRuns に無い run のブランチ作成で変わる"
+    Invoke-Script git-state.ps1 -Run $run -Parent refs/heads/main
+    $noOpt = Get-OutLine 3
+    git -C $script:Proj branch agents-run/T2-1
+    Invoke-Script git-state.ps1 -Run $run -Parent refs/heads/main
+    Assert-Ne $noOpt (Get-OutLine 3) "-OtherRuns が無いと何も除かない"
 }
 
 Invoke-TestCase "git-state: -Run はタグ・ほかのブランチ・自分の run の変化を検知する" {
