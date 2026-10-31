@@ -50,7 +50,13 @@ to_py_path() {
         echo "$1"
     fi
 }
-if ! PROFILE_OUT="$(python3 "$(to_py_path "$SCRIPT_DIR")/childprofile.py" . | tr -d '\r')"; then
+# runs/<ID>-<N>/launcher が subagent の run は subagent プロファイルで判定する(無い・cli は config.json のまま)
+PROFILE_ARGS=""
+if [ -f "$RUN_DIR/launcher" ] && [ "$(tr -d '[:space:]' < "$RUN_DIR/launcher")" = "subagent" ]; then
+    PROFILE_ARGS="--profile subagent"
+fi
+# shellcheck disable=SC2086
+if ! PROFILE_OUT="$(python3 "$(to_py_path "$SCRIPT_DIR")/childprofile.py" . $PROFILE_ARGS | tr -d '\r')"; then
     exit 1
 fi
 PROFILE_NAME="$(printf '%s\n' "$PROFILE_OUT" | sed -n '1p')"
