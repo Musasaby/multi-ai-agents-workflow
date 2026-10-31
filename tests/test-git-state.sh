@@ -66,6 +66,109 @@ t_branch_changes_refs() {
     assert_eq "$before_config" "$(out_line 4)" "config 行は変わらない"
 }
 
+t_ref_ignores_other_branches() {
+    run_script git-state.sh --ref refs/heads/main
+    assert_eq 0 "$CODE" "exit: $ERR"
+    local before_refs before_head
+    before_refs="$(out_line 3)"
+    before_head="$(out_line 1)"
+    git -C "$PROJ" branch x
+    run_script git-state.sh --ref refs/heads/main
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_eq "$before_refs" "$(out_line 3)" "ほかのブランチ作成で --ref の refs 行は変わらない"
+    assert_eq "$before_head" "$(out_line 1)" "head 行は変わらない"
+}
+
+t_ref_follows_own_branch() {
+    run_script git-state.sh --ref refs/heads/main
+    local before_refs
+    before_refs="$(out_line 3)"
+    git -C "$PROJ" commit -q --allow-empty -m x
+    run_script git-state.sh --ref refs/heads/main
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_ne "$before_refs" "$(out_line 3)" "自分のブランチのコミットで --ref の refs 行が変わる"
+}
+
+t_ref_usage_error() {
+    run_script git-state.sh --ref
+    assert_eq 1 "$CODE" "--ref の値が無いと exit 1"
+    assert_eq "Usage: git-state.sh [--ref <refname> | --run <refname> --parent <refname> [--other-runs <ID,ID,...>]]" "$ERR" "使い方を stderr に出す"
+    run_script git-state.sh --bogus
+    assert_eq 1 "$CODE" "未知の引数は exit 1"
+    run_script git-state.sh --run refs/heads/agents-run/r1
+    assert_eq 1 "$CODE" "--run だけだと exit 1"
+    run_script git-state.sh --parent refs/heads/main
+    assert_eq 1 "$CODE" "--parent だけだと exit 1"
+    run_script git-state.sh --run refs/heads/agents-run/r1 --parent
+    assert_eq 1 "$CODE" "--parent の値が無いと exit 1"
+    run_script git-state.sh --run
+    assert_eq 1 "$CODE" "--run の値が無いと exit 1"
+    run_script git-state.sh --ref refs/heads/main --run refs/heads/agents-run/r1 --parent refs/heads/main
+    assert_eq 1 "$CODE" "--ref との併用は exit 1"
+}
+
+RUN_REF=refs/heads/agents-run/r1
+
+t_run_ignores_other_runs_and_parent() {
+    local own=refs/heads/agents-run/T1-1
+    git -C "$PROJ" branch agents-run/T1-1
+    run_script git-state.sh --run "$own" --parent refs/heads/main --other-runs T2
+    assert_eq 0 "$CODE" "exit: $ERR"
+    local before
+    before="$(out_line 3)"
+    git -C "$PROJ" branch agents-run/T2-1
+    run_script git-state.sh --run "$own" --parent refs/heads/main --other-runs T2
+    assert_eq "$before" "$(out_line 3)" "ほかの run のブランチ作成で変わらない"
+    git -C "$PROJ" commit -q --allow-empty -m parent
+    run_script git-state.sh --run "$own" --parent refs/heads/main --other-runs T2
+    assert_eq "$before" "$(out_line 3)" "--parent のブランチのコミットで変わらない"
+}
+
+t_run_detects_unlisted_run_branch() {
+    local own=refs/heads/agents-run/T1-1
+    git -C "$PROJ" branch agents-run/T1-1
+    run_script git-state.sh --run "$own" --parent refs/heads/main --other-runs T2
+    assert_eq 0 "$CODE" "exit: $ERR"
+    local before
+    before="$(out_line 3)"
+    git -C "$PROJ" branch agents-run/T3-1
+    run_script git-state.sh --run "$own" --parent refs/heads/main --other-runs T2
+    assert_ne "$before" "$(out_line 3)" "--other-runs に無い run のブランチ作成で変わる"
+    run_script git-state.sh --run "$own" --parent refs/heads/main
+    local no_opt
+    no_opt="$(out_line 3)"
+    git -C "$PROJ" branch agents-run/T2-1
+    run_script git-state.sh --run "$own" --parent refs/heads/main
+    assert_ne "$no_opt" "$(out_line 3)" "--other-runs が無いと何も除かない"
+}
+
+t_run_detects_other_changes() {
+    git -C "$PROJ" branch agents-run/r1
+    run_script git-state.sh --run "$RUN_REF" --parent refs/heads/main
+    local before
+    before="$(out_line 3)"
+    git -C "$PROJ" tag t1
+    run_script git-state.sh --run "$RUN_REF" --parent refs/heads/main
+    assert_ne "$before" "$(out_line 3)" "タグ作成で変わる"
+    before="$(out_line 3)"
+    git -C "$PROJ" branch other
+    run_script git-state.sh --run "$RUN_REF" --parent refs/heads/main
+    assert_ne "$before" "$(out_line 3)" "--parent 以外のブランチ作成で変わる"
+    before="$(out_line 3)"
+    git -C "$PROJ" update-ref "$RUN_REF" "$(git -C "$PROJ" commit-tree -m x "HEAD^{tree}")"
+    run_script git-state.sh --run "$RUN_REF" --parent refs/heads/main
+    assert_ne "$before" "$(out_line 3)" "自分の run のブランチの移動で変わる"
+}
+
+t_run_parent_dash_excludes_nothing() {
+    run_script git-state.sh --run "$RUN_REF" --parent -
+    local before
+    before="$(out_line 3)"
+    git -C "$PROJ" commit -q --allow-empty -m x
+    run_script git-state.sh --run "$RUN_REF" --parent -
+    assert_ne "$before" "$(out_line 3)" "--parent - なら main の移動で変わる"
+}
+
 t_detached_branch_dash() {
     git -C "$PROJ" checkout -q --detach
     run_script git-state.sh
@@ -79,5 +182,12 @@ test_case "git-state: 4 項目を出力する" t_four_items
 test_case "git-state: コミットで head が変わる" t_commit_changes_head
 test_case "git-state: git config で config が変わる" t_config_changes_config
 test_case "git-state: ブランチ作成で refs が変わる" t_branch_changes_refs
+test_case "git-state: --ref はほかのブランチの変化を無視する" t_ref_ignores_other_branches
+test_case "git-state: --ref は自分のブランチの変化に追従する" t_ref_follows_own_branch
+test_case "git-state: 不正な引数は exit 1" t_ref_usage_error
+test_case "git-state: --run はほかの run と --parent の変化を無視する" t_run_ignores_other_runs_and_parent
+test_case "git-state: --run は --other-runs に無い run のブランチの作成を検知する" t_run_detects_unlisted_run_branch
+test_case "git-state: --run はタグ・ほかのブランチ・自分の run の変化を検知する" t_run_detects_other_changes
+test_case "git-state: --parent - は何も除かない" t_run_parent_dash_excludes_nothing
 test_case "git-state: detached HEAD では branch が -" t_detached_branch_dash
 summary

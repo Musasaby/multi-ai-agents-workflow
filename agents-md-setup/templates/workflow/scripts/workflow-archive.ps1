@@ -144,11 +144,39 @@ function Test-PrState {
 
 if (-not $Force) { Test-PrState }
 
+# runs/*/worktree.txt がある run の worktree とブランチを消す(失敗しても続ける)
+function Remove-RunWorktrees {
+    foreach ($txt in @(Get-ChildItem "$WorkflowDir/runs/*/worktree.txt" -ErrorAction SilentlyContinue)) {
+        $lines = @(Get-Content $txt.FullName -Encoding UTF8)
+        $wt = ''
+        $branch = ''
+        foreach ($line in $lines) {
+            if (-not $wt -and $line -match '^path (.+)$') { $wt = $Matches[1].Trim() }
+            if (-not $branch -and $line -match '^branch (.+)$') { $branch = $Matches[1].Trim() }
+        }
+        $branch = $branch -replace '^refs/heads/', ''
+        if (-not $branch) { $branch = "agents-run/$($txt.Directory.Name)" }
+        if ($wt -and (Test-Path $wt)) {
+            & git worktree remove --force $wt 2>&1 | ForEach-Object { [Console]::Error.WriteLine("$_") }
+            if ($LASTEXITCODE -ne 0) { [Console]::Error.WriteLine("worktree の削除に失敗しました: $wt") }
+        }
+        & git rev-parse --verify -q "refs/heads/$branch" *> $null
+        if ($LASTEXITCODE -eq 0) {
+            & git branch -D -q $branch 2>&1 | ForEach-Object { [Console]::Error.WriteLine("$_") }
+            if ($LASTEXITCODE -ne 0) { [Console]::Error.WriteLine("ブランチの削除に失敗しました: $branch") }
+        }
+    }
+}
+
+Remove-RunWorktrees
+
 New-Item -ItemType Directory -Path $ArchiveDir -Force | Out-Null
 
 foreach ($name in $Existing) {
     Move-Item -Path "$WorkflowDir/$name" -Destination "$ArchiveDir/$name"
 }
+
+& git worktree prune 2>&1 | ForEach-Object { [Console]::Error.WriteLine("$_") }
 
 Write-Output "Archived: $ArchiveDir ($($Existing -join ', '))"
 exit 0

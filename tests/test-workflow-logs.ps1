@@ -84,6 +84,24 @@ Invoke-TestCase "logs: BOM 付き UTF-16LE のログを正しい文字で出す"
     Assert-NotContains $script:Out "`u{FFFD}" "文字化けしない"
 }
 
+Invoke-TestCase "logs: リダイレクトで受けた日本語は BOM なしの UTF-8 のバイト列になる" {
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/T1-1/guard.sha256" ''
+    $jp = "`u{3053}`u{3093}`u{306B}`u{3061}`u{306F}"
+    [System.IO.File]::WriteAllBytes("$script:Proj/.agents/workflow/runs/T1-1/output.log", [System.Text.Encoding]::UTF8.GetBytes("$jp`n"))
+    $outFile = [System.IO.Path]::GetTempFileName()
+    $errFile = [System.IO.Path]::GetTempFileName()
+    $p = Start-Process -FilePath pwsh -WorkingDirectory $script:Proj -PassThru -NoNewWindow `
+        -RedirectStandardOutput $outFile -RedirectStandardError $errFile `
+        -ArgumentList @('-NoProfile', '-File', '.agents/workflow/scripts/workflow-logs.ps1', '-Once')
+    $exited = $p.WaitForExit(30000)
+    if (-not $exited) { $p.Kill() }
+    $bytes = [System.IO.File]::ReadAllBytes($outFile)
+    Remove-Item $outFile, $errFile -Force
+    $expected = [System.Text.Encoding]::UTF8.GetBytes("[T1-1] $jp`n")
+    Assert-Eq 'True' "$exited" "自分で終わる"
+    Assert-Eq ($expected -join ',') ($bytes -join ',') "BOM なしの UTF-8 のバイト列"
+}
+
 Invoke-TestCase "logs: UTF-8 の BOM は出力に残らない" {
     Write-Utf8File "$script:Proj/.agents/workflow/runs/T1-1/guard.sha256" ''
     $bytes = [byte[]](@(0xEF, 0xBB, 0xBF) + [System.Text.Encoding]::UTF8.GetBytes("first line`nsecond line`n"))

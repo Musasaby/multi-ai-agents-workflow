@@ -255,6 +255,60 @@ t_pr_on_main() {
     assert_eq 12 "$CODE" "exit code: $ERR"
 }
 
+set_max_parallel() { # $1=値
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" "$1" <<'PY'
+import json, sys
+p, v = sys.argv[1], int(sys.argv[2])
+with open(p, encoding='utf-8') as f:
+    cfg = json.load(f)
+cfg['max_parallel'] = v
+with open(p, 'w', encoding='utf-8') as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+PY
+}
+
+t_parallel_dirty_ok() {
+    setup "T1:pending" "T2:pending"
+    set_max_parallel 2
+    printf 'x
+' > "$PROJ/x.txt"
+    run_script dispatch-start.sh T1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_eq "Next: wait" "$(printf '%s
+' "$OUT" | tail -1)" "last line"
+    assert_contains "$OUT" "Worktree:" "Worktree line"
+    assert_file_exists "$PROJ/.agents/workflow/runs/T1-1/worktree.txt" "worktree.txt"
+    assert_eq in_progress "$(state_get T1 status)" "T1 status"
+    wait_done T1-1
+}
+
+t_parallel_worktree_exists() {
+    setup "T1:pending" "T2:pending"
+    set_max_parallel 2
+    mkdir -p "$PROJ/.agents/workflow/runs/T1-1/worktree"
+    run_script dispatch-start.sh T1
+    assert_eq 61 "$CODE" "exit code: $ERR"
+    assert_eq "Next: escalate reason=worktree" "$(printf '%s
+' "$OUT" | tail -1)" "last line"
+    assert_eq pending "$(state_get T1 status)" "T1 status"
+}
+
+t_parallel_healthcheck_cleanup() {
+    setup "T1:pending" "T2:pending"
+    set_max_parallel 2
+    set_child_cfg healthcheck_command 'false'
+    run_script dispatch-start.sh T1
+    assert_eq 30 "$CODE" "exit code: $ERR"
+    assert_eq "Next: escalate reason=healthcheck" "$(printf '%s\n' "$OUT" | tail -1)" "last line"
+    assert_file_absent "$PROJ/.agents/workflow/runs/T1-1/worktree" "worktree が残らない"
+    assert_eq 0 "$(git -C "$PROJ" rev-parse --verify -q refs/heads/agents-run/T1-1 > /dev/null && echo 1 || echo 0)" "ブランチが残らない"
+
+    set_child_cfg healthcheck_command ''
+    run_script dispatch-start.sh T1
+    assert_eq 0 "$CODE" "healthcheck を外すと同じ試行で起動できる: $ERR"
+    wait_done T1-1
+}
+
 echo "test-dispatch-start.sh"
 test_case "start: 起動して prompt.md・in_progress・done ができる" t_start_ok
 test_case "start: 戻った時点で guard.sha256 がある" t_start_guard_ready
@@ -272,4 +326,7 @@ test_case "start: warmup_command は最初の dispatch だけ実行する" t_war
 test_case "start: warmup_command が失敗すれば exit 31" t_warmup_fail
 test_case "start: --pr は pr-<N> の run を起動する" t_pr_ok
 test_case "start: --pr で main 上なら exit 12" t_pr_on_main
+test_case "start: max_parallel 2 は未コミットの変更があっても worktree の run を起動する" t_parallel_dirty_ok
+test_case "start: max_parallel 2 で worktree が既にあれば exit 61" t_parallel_worktree_exists
+test_case "start: max_parallel 2 で healthcheck が失敗すると exit 30 で worktree・ブランチが残らない" t_parallel_healthcheck_cleanup
 summary

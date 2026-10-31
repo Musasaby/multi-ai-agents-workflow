@@ -37,6 +37,9 @@
 │   ├── fix-notes.md     リトライ時のレビュー指摘(親が作成)
 │   ├── guard.sha256     起動時の管理ファイルの SHA-256(dispatch-run が作成、dispatch-check が改ざん検知に使う)
 │   ├── git-state.txt    起動時の git 状態の4行(git-state の出力。dispatch-run が作成、dispatch-check が改ざん検知に使う)
+│   ├── worktree/        max_parallel が 2 以上のとき、その run の子が作業する git worktree(collect で消える)
+│   ├── worktree.txt     worktree の path / branch / base の3行(dispatch-worktree create が作成、dispatch-run・dispatch-check が読む)
+│   ├── changes.patch    collect が worktree の変更から作る差分(本体へ git apply する)
 │   ├── tmp/             子エージェントの一時ディレクトリ(TMPDIR・TEMP・TMP がここを指す。GIT_CEILING_DIRECTORIES はその親の runs/<タスクID>-<試行回数>/ を指す)
 │   ├── output.log       子エージェントの出力
 │   ├── done             完了マーカー(EXIT/END の2行)
@@ -70,6 +73,8 @@
 | `branch_per_group` | tasks.md にグループ区切り(`<!-- グループ <名前> -->`)がある場合に、グループ単位の PR 作成・ブランチ切替(next-task の exit 6 と `group-advance`)を必須手順にする。`false` ならグループを解釈せず全タスクを1つのまとまりとして扱う。config.json が無い・読めない場合の既定値も `true` | `true` |
 | `verify_before_commit` | コミット直前に親がテストコマンドを1回実行する最終ゲート | `false` |
 | `max_fix_retries` | レビュー不合格時の子エージェントへの再依頼上限。超過で親のサブエージェントにフォールバック | `2` |
+| `max_parallel` | 同時に実行するタスク数の上限。2 以上にすると next-task が、依存がすべて完了していて変更対象のファイルが互いに(実行中のタスクとも)重ならないタスクを同時に選び(重なりはディレクトリを含めて判定する。`src/` と `src/app.py` は重なり、`src/a` と `src/ab` は重ならない)、各 run を worktree で実行する。provider の利用上限に当たりやすくなるので、2 から試す | `1` |
+| `parallel_exclusive_files` | 単独で実行するファイルの配列(ルート相対のパスで完全一致)。変更対象(参照ファイル欄で `(変更対象` が付いたパス)にこれらのファイルを1つでも含むタスクは、ほかのタスクが実行中のときは選ばれず、選ばれたときはほかのタスクと一緒に選ばれない。変更対象が1つも無いタスクも同じく単独になる。テンプレートの config.json には書かれていないので、変えたいときに足す | `["AGENTS.md", "README.md"]` |
 | `comprehension_check.enabled` | タスク合格時に理解確認質問を生成するか | `false` |
 | `comprehension_check.questions_per_task` | タスクあたりの質問数 | `3` |
 | `task_sizing.max_acceptance_criteria` | 受け入れ基準のチェックボックス数のしきい値。`dispatch-prompt-gen` が、これを超えると WARN を出す。1以上の整数。値が無ければ既定値、不正値は WARN を出して既定値 | `5` |
@@ -84,6 +89,10 @@
 | `text_refine.skill` | 推敲に使う yomiyasu を呼ぶ名前(入れ方ごとに違う。プラグインなら `yomiyasu:yomiyasu`、skill 単体なら `yomiyasu` など)。`null`・空なら推敲しない。名前は推測せず、`text-refine` の `Found:` 行を見て利用者が決める | `null` |
 | `text_refine.targets` | 推敲する場面。`summary`(完了サマリー報告)・`confirm`(ユーザーへの確認依頼)・`commit`(コミットメッセージの説明の1行)・`pr_body`(PR説明)・`task_done`(タスク1件の完了報告)・`tasks`(agent-task-plan で書く tasks.md)から選ぶ配列。既存の利用先は `"tasks"` を足すと有効になる | 6つすべて |
 | `text_refine.reader` | 推敲後の文章の読み手。`expert`(同じ分野の専門家)・`informed`(分野は違うが技術に詳しい人)・`general`(専門知識のない人)。他の値は `informed` 扱い | `informed` |
+
+**Windows での `command_template`**: `bash ./x.sh "{prompt}"` のように `bash` だけで書くと、`dispatch-run` が子を起動するときの
+Windows のコマンド検索順で System32 の `bash.exe`(WSL)が Git Bash より先に選ばれ、Windows のパスが見えずに失敗することがある。
+Git Bash を使うなら `"C:/Program Files/Git/usr/bin/bash.exe" ./x.sh "{prompt}"` のようにフルパスで書く。
 
 ### 子CLIのプロファイル
 
@@ -301,6 +310,9 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 | 行動 | 意味 | 出すスクリプト |
 |------|------|----------------|
 | `dispatch <ID>` | そのタスクを dispatch する | next-task(exit 0) |
+| `dispatch <ID> <ID>...` | 同時に実行できる複数のタスクを dispatch する(`max_parallel` が 2 以上のとき) | next-task(exit 0) |
+| `wait <ID>...` | 実行中のタスクの完了を待つ(同時に始められるタスクが無い) | next-task(exit 5) |
+| `collect <ID>` | worktree の run の変更を本体へ取り込む(`dispatch-worktree collect`)。その後 review する | dispatch-check(exit 0、worktree の run) |
 | `review <ID>` | そのタスクをレビューする | next-task(exit 0、`in_review`)・dispatch-check(exit 0。PR 作成の run を除く) |
 | `wait` | 子がまだ実行中。完了を待つ | dispatch-start(exit 0)・dispatch-wait(exit 2)・dispatch-check(exit 2)・workflow-status(実行中の run があるとき) |
 | `finish` | 全タスク完了。サマリー報告へ | next-task(exit 3)・workflow-status |
@@ -438,6 +450,17 @@ exit 0 の場合も生成されたプロンプト全文は会話に読み込ま�
 .agents/workflow/scripts/dispatch-start.sh --pr
 ```
 
+**並列実行(`max_parallel` が 2 以上、`--pr` でないとき)**: 手順2(作業ツリーの確認)は行わない。
+手順3の後に `dispatch-worktree create` で worktree の run にする(手順4以降はその WT を使う run になる)。
+成功時の stdout には `Carried:` 行(前の試行の変更の持ち越し結果)と `Worktree: <パス>` 行を、
+`Next: wait` の前に出す。
+worktree を作った後、子の起動前の手順(疎通確認・ウォームアップ・prompt 生成・`task-state`)で失敗したときは、
+`dispatch-worktree abort` で worktree・ブランチを消し、持ち越しで取り除いた前の試行の変更を本体に戻してから止める。
+`dispatch-run` の起動を確認できない exit 60 では abort しない(子が動いている可能性があるため。WT・ブランチは残る)。
+exit 60 のときは、`dispatch-run` のプロセスが動いていないことを確かめる(`$RUN/output.log` が伸びていない、
+`$RUN/done` が無い)。動いていなければ `dispatch-worktree abort <ID> <試行回数>` で片付け、同じ試行で
+`dispatch-start` をやり直す(片付けずにやり直すと WT が残っているため exit 61 になる)。動いていれば `dispatch-wait` で待つ。
+
 `--pr` / `-Pr` は PR 作成の run(`pr-<N>-1`)を起動する。手順3・5・7は行わず、手順6は
 `dispatch-prompt-gen --pr` になる(stdout の `RunId` で起動する)。
 
@@ -452,7 +475,9 @@ exit 0 の場合も生成されたプロンプト全文は会話に読み込ま�
 | `21` | タスクの状態が不正(`pending` / `in_progress` 以外、タスク無しを含む。`reason=task-status`) |
 | `30` / `31` | 疎通確認 / ウォームアップの失敗(`reason=healthcheck` / `warmup`。出力の末尾20行を stderr に出す) |
 | `41`〜`43` | `dispatch-prompt-gen` の exit 1〜3(`reason=prompt-gen`。依存未完了・report.md の欠落は 42。`--pr` で RunId が取れない場合は 41) |
+| `22` | `max_parallel` が 2 以上で、worktree の作成が dirty-tree(`dispatch-worktree` の exit 20。`reason=dirty-tree`) |
 | `50` | `task-state` の失敗(`reason=task-state`) |
+| `61` | `max_parallel` が 2 以上で、worktree の作成に失敗(`dispatch-worktree` の exit 20 以外。`reason=worktree`) |
 | `60` | `dispatch-run` の起動を確認できない(`reason=launch`。state.json は `in_progress` のまま) |
 
 `healthcheck_command` / `warmup_command` は sh 版では `bash -c`、ps1 版では `pwsh -Command` で実行する。
@@ -498,6 +523,14 @@ Windows にはシグナルの仕組みが無いため、PowerShell 版での強�
 ディレクトリが cwd のときも探索を止めないため、その下の `tmp/` で実行された `git` が本物の
 リポジトリを探索でたどり着かないようにする。PowerShell 版は
 呼び出し元の `TEMP` 系環境変数の元の値を保存しておき、ラッパーの終了時(finally)に元に戻す。
+
+**worktree の run**: `runs/<ID>-<N>/worktree.txt` があるとき、子は本体ではなく WT(`path` の行)を作業
+ディレクトリにして実行する。`TMPDIR`・`TEMP`・`TMP` は WT の中の
+`.agents/workflow/runs/<ID>-<N>/tmp/`(`dispatch-worktree create` が作る)に設定し、`GIT_CEILING_DIRECTORIES` も
+WT 側にする。`guard.sha256` の対象のうち `state.json`・`tasks.md` は、子が触れる WT 側のコピー
+(`runs/<ID>-<N>/worktree/.agents/workflow/` の下)にする(`prompt.md`・`config.json`・`child-profiles.json` は本体のまま)。
+`git-state.txt` は WT の中で `git-state --run <branch> --parent <親の作業ブランチ>` を実行した値を記録する。`output.log`・`done` などの
+記録は本体の `runs/<ID>-<N>/` に書く。
 
 起動時の git 状態(HEAD・ブランチ・参照・config の SHA-256。「git-state」節の4行)を
 `runs/<タスクID>-<試行回数>/git-state.txt` に記録する(失敗しても起動は止めない)。
@@ -605,6 +638,30 @@ exit code(複数に当たる場合は上の行を優先する):
 
 この版から、done マーカーが無いときは exit 1 ではなく exit 2 を返す(#69)。
 
+**worktree の run**: run のディレクトリに `worktree.txt` があるとき、次が変わる。
+- `git-state` の比較は、`worktree.txt` の `path` の WT の中で
+  `git-state --run <branch> --parent <親の作業ブランチ> --other-runs <実行中のタスクの ID>` を
+  実行した値と `git-state.txt` を比べる(`in_progress`・`in_review` のタスクの run のブランチと、親の作業ブランチの
+  進みは検知しない。共有の参照のタグ等や、実行中でないタスクの run のブランチを子が作れば検知する)
+- 親の作業ブランチは、`dispatch-run` が起動時に `parent-head.txt`(1行目に参照名、2行目に SHA)へ記録した値と比べる。
+  参照名が変わった、または SHA が記録した値の子孫でない(巻き戻し・付け替え)ときは `git changed: parent` を出す。
+  親が新しいコミットを積んで進んだだけなら検知しない(`parent-head.txt` が無いのも改ざん)
+- 本体の `state.json` の自分以外のタスクの欄は、`dispatch-run` が起動時に `state-tasks.json`
+  (全タスクの `id`・`status`・`retries`・`commit`)へ記録した値と比べる(`state-tasks.json` が無いのも改ざん)。
+  親の正規の遷移(`task-state`・`state-sync --insert`。`pending` → `in_progress` → `in_review` → `done` と、
+  `commit` が HEAD の祖先である `done`、新しい `pending` のタスクの追加)は許す。次は不正として、
+  タスクごとに `changed: .agents/workflow/state.json (<ID>)` を出す: 起動時に `done` だったタスクの
+  `status`・`commit` が変わった、タスクが消えた、
+  `commit` が HEAD の祖先でない `done`、起動後に追加されたタスクが `pending` 以外。
+  `retries` の増減は調べない(`fail` は `pending` 以外のどの状態からもでき、`reset` で `retries` が 0 に戻るため)
+- `Changes:`・`git status --porcelain`・`git diff --stat` は WT の中で取る
+- WT のディレクトリが無いときは `Guard:` に `worktree not found: <path>` を加え(Verdict は `tampered`)、
+  git 状態の比較は行わず、`Changes:` は本体で取る
+- `Guard:` の管理ファイルの検知は、`state.json`・`tasks.md` を WT 側のコピーに加えて本体の `tasks.md` でも行う。
+  本体の `state.json` は親が並列中に更新するため丸ごとは比べず、`dispatch-run` が起動時に
+  `state-entry.txt` に記録した自分のタスクの欄だけを比べる(`state-entry.txt` が無いのも改ざんとみなす)
+- Verdict が `ok` のときの `Next:` は `collect <ID>`(`dispatch-worktree collect` で本体へ集める)
+
 `0` 以外の場合はレビューに進まず、出力された内容をユーザーに報告する(`7` は、変更が無いのが
 正しいタスクに限り検証に進んでよい。詳細は `agent-dispatch` skill §2)。
 
@@ -633,6 +690,60 @@ run の完了をポーリングで待つ。1回の呼び出しで `--max-wait` �
 | `2` | まだ実行中(この呼び出しの待ちが `--max-wait` に達した)。最後の行は `Next: wait`。再度呼んで待ちを続ける |
 | `3` | 経過が `child_agent.timeout_seconds` を超えた。最後の行は `Next: escalate reason=timeout` |
 
+### dispatch-worktree — 子エージェントの run 用 git worktree の作成・回収・削除
+
+`max_parallel` が 2 以上のとき、`dispatch-start` が呼ぶ。run ごとに git worktree を作り、
+子はその中で作業する。`RUN=.agents/workflow/runs/<ID>-<N>`、`WT=$RUN/worktree`、
+ブランチは `agents-run/<ID>-<N>`。
+
+```powershell
+.agents/workflow/scripts/dispatch-worktree.ps1 -Action <create|collect|remove|abort> -TaskId T1 -Attempt 1
+```
+```bash
+.agents/workflow/scripts/dispatch-worktree.sh <create|collect|remove|abort> T1 1
+```
+
+- `create`: WT を HEAD から作る。試行回数が 2 以上で、前の試行に `collected`(collect が成功した印)があれば、
+  前の試行の変更(`changes.patch`)を本体から取り除き(取り除いたら `$RUN/reverted` に前のパッチのパスを書く)、
+  新しい WT に 3way で持ち越す。`collected` が無い前の試行(collect が衝突・失敗して取り込まれなかった)の変更は
+  本体に無いので持ち越さない。stdout に `Carried: <パッチ>` / `Carried: none` /
+  `Carried: none (not collected: <前のパッチのパス>)` のどれかと、`Worktree: <パス>`、`Branch: <名前>` を出す。
+  持ち越しが衝突したら exit 40 で、WT・ブランチを残さず、取り除いた変更を本体に戻す
+- `collect`: WT の変更(未追跡・WT でコミットした変更を含む。`.agents/workflow` は除く)の、`worktree.txt` の
+  `base` との差分を `$RUN/changes.patch` にして本体へ `git apply` し、空の `$RUN/collected` を作って
+  WT・ブランチ・`worktree.txt` を消す(`base` の行が無ければ `HEAD` との差分)。tasks.md の `changed` に無い
+  ファイルは `Undeclared: <path>`(無ければ `Undeclared: none`)で出す。成功時は `Applied: <N> files`・
+  `Patch: <パス>`・`Next: review <ID>`。WT の中の git(`git add` 等)が失敗したときは exit 30 で、
+  WT・ブランチ・`worktree.txt` を残す(原因を直して collect し直せる)
+- `remove`: WT・ブランチ・`worktree.txt` を消す(無くてもエラーにしない)。`create` が取り除いた前の試行の変更は
+  本体に当て直さない(試行 2 以降で引き取らない run には `abort` を使う)
+- `abort`: `remove` と同じく消したうえで、`$RUN/reverted` があれば、そこに書かれた前のパッチを本体に
+  `git apply` で当て直して `reverted` を消す(`create` で取り除いた前の試行の変更を戻す)。
+  当て直せなければ stderr にパッチのパスを出して exit 20。`dispatch-start` が起動前の失敗で呼ぶ
+
+**Windows でのパスの長さ**: WT は `.agents/workflow/runs/<ID>-<N>/worktree/` に作るので、WT 内のパスは
+本体より約35文字長くなる。`dispatch-worktree` は WT に対する git の操作に `core.longpaths` を付けて作るが、
+子の CLI やツールが長いパスを扱えないことがある。プロジェクトは短いパスに置く(例: `C:\work\proj`)。
+
+`worktree.txt` は `$RUN/` に書く3行(`dispatch-run` と `dispatch-check` が読む):
+
+```
+path <WT の絶対パス>
+branch refs/heads/agents-run/<ID>-<N>
+base <作成時の HEAD>
+```
+
+| exit | 意味 |
+|------|------|
+| `0` | 成功 |
+| `1` | 使い方不備 |
+| `20` | `reason=dirty-tree`。`create` では前の試行の変更を本体から取り除けない、`collect` では本体の作業ツリーが clean でない、`abort` では `reverted` のパッチを本体に当て直せない |
+| `30` | `reason=worktree`。WT が既にある・作成に失敗した。`collect` では `worktree.txt` または WT のディレクトリが無い、WT の中の git が失敗した(WT は残る) |
+| `40` | `reason=conflict`。`collect` で `changes.patch` を本体に当てられない、`create` で前の試行の持ち越しが衝突した |
+
+使い方不備の exit 1 を除き、stdout の最後の行に `Next:`(`continue` / `review <ID>` /
+`escalate reason=<理由>`)を出す。
+
 ### workflow-logs — 複数の run のログを1つの画面に流す
 
 `tail -f` の複数 run 版。実行中の子エージェント run の `output.log` を1つの画面にまとめて流す。
@@ -658,7 +769,9 @@ run の完了をポーリングで待つ。1回の呼び出しで `--max-wait` �
   (`.agents/workflow/config.json`。読めない・正の整数でなければ 1800)より前の run は、
   止まった run(kill・クラッシュで `done` が無い)として新たには追わない。追跡中の run と `--run` 指定の run には当てない
 - 文字コード: `output.log` の先頭が BOM `FF FE` なら UTF-16LE(Windows PowerShell 5.1 の `*>`)として、
-  `EF BB BF` なら UTF-8 の BOM を除いて読む。それ以外は UTF-8。2バイト単位に満たない端数は次の読み込みに回す
+  `EF BB BF` なら UTF-8 の BOM を除いて読む。それ以外は UTF-8。2バイト単位に満たない端数は次の読み込みに回す。
+  出力は BOM なしの UTF-8。`.ps1` 版は、出力が端末のときだけ出力コードページ(`[Console]::OutputEncoding`)を
+  UTF-8 に切り替えて終了時に戻す(日本語環境の 932 での文字化けを防ぐ)。リダイレクトされているときは切り替えない
 - 出力: 各行の先頭に `[<run>] ` を付ける。出力が端末へ向いていて環境変数 `NO_COLOR` が空か未設定なら、
   接頭辞に run ごとに違う色(ANSI 31〜36)を付ける(`NO_COLOR` は値が空でないときだけ色を止める)。
   初回は末尾の `--tail` 行、以後は追記された完成した行だけ。
@@ -689,6 +802,22 @@ config <git config ファイルの SHA-256(16進小文字)>
 ```
 
 `refs` は push で正当に変わる `refs/remotes` を含めない。
+
+`--ref <refname>`(ps1 は `-Ref <refname>`)を付けると、`refs` 行はその参照だけの
+`git for-each-ref` の出力の SHA-256 になる(参照が無ければ空の出力のハッシュ)。worktree の run が
+自分のブランチだけを見て、並列の他の run が作るブランチや参照の変化を改ざんと誤検知しないために使う。
+`--run <refname> --parent <refname>`(ps1 は `-Run`・`-Parent`)を付けると、`refs` 行は既定の参照一覧から
+次の行を除いたものの SHA-256 になる: 参照名が `refs/heads/agents-run/` で始まり `--run` の値と一致しない行
+(ほかの run のブランチ)、`--parent` の値と一致する行(親の作業ブランチ。`-` か空なら除かない)。
+worktree の run が、並列の他の run や親のコミットを改ざんと誤検知せず、タグなど共有の参照の変化は検知するために使う。
+`--other-runs <ID,ID,...>`(ps1 は `-OtherRuns`)は `--run` のときだけ使え、ほかの run のブランチの除外を
+`refs/heads/agents-run/<ID>-<数字>` で `<ID>` が一覧にある行に限る。`dispatch-run`・`dispatch-check` は
+一覧に、自分以外の `in_progress`・`in_review` のタスク(=実行中または回収待ちの run)の ID を渡す。
+実行中でないタスクの run のブランチを子が作ると、除かれずに `refs` の変化として検知される。
+一覧が無い・空なら、自分以外の `agents-run/*` を何も除かない。
+`--run` と `--parent` は両方そろって使い、`--ref` とは併用できない。
+未知の引数・値の無いオプション・上の組み合わせの誤りは stderr に
+`Usage: git-state.sh [--ref <refname> | --run <refname> --parent <refname> [--other-runs <ID,ID,...>]]` を出して exit 1。
 `dispatch-run` が子の起動時にこの出力を `git-state.txt` に記録し、`dispatch-check` が実行後の
 出力と比べて、子がリポジトリのどこを変えたか(HEAD・ブランチ・参照・設定)を特定する。
 
@@ -1010,6 +1139,17 @@ state.json の並び順ではなく依存関係を見るため、挿入したタ
 1. `in_progress` / `in_review` のタスク(中断からの再開対象)があれば、その最初のもの
 2. なければ、依存タスクがすべて `done` の最初の `pending` タスク
 
+`max_parallel` が 2 以上のとき(config.json。整数で 1 以上のとき以外は 1 として扱う)は、
+`in_review` のタスクを先に返し、全 `done`(exit 3)・グループ完了(exit 6)の判定を通ったあと、
+依存がすべて `done` の `pending` タスクから、実行中のタスク(`in_progress`)とも互いにも
+変更対象のファイルが重ならないものを `max_parallel` から実行中の数を引いた数まで選ぶ。
+`parallel_exclusive_files`(文字列の配列。既定 `["AGENTS.md", "README.md"]`、空配列も有効)に
+挙げたファイルを変更対象に持つタスク(変更対象が1つも無いタスクも同じ)は単独で実行し、
+他のタスクが実行中のときは選ばず、選ぶときも他のタスクと一緒には選ばない。
+選べたら `Next: dispatch <ID> <ID>...`(exit 0)、選べず実行中のタスクがあれば
+`Next: wait <ID>...`(exit 5)、どちらも無ければ blocked(exit 4)になる。
+`max_parallel` が 1 のときは従来どおり。
+
 ```powershell
 .agents/workflow/scripts/next-task.ps1
 ```
@@ -1027,6 +1167,7 @@ stdout に `<タスクID> <status>`(例: `T8 pending`)を出力する。config �
 exit code: `0`=該当タスクあり、`1`=tasks.md/state.json 不在・依存欄の不正(形式違反・
 存在しないID・自己依存・循環依存)、`3`=全タスク `done`、
 `4`=実行可能なタスクが無い(`failed` や未完了の依存で止まっている。原因を stderr に列挙)、
+`5`=実行中のタスクの完了待ち(`max_parallel` が 2 以上のとき。`Next: wait <ID>...`)、
 `6`=作業グループ完了(他グループに未完了あり。`group-advance` で分岐する)。
 
 stdout の最後の行には `Next:` 行を出す(「Next: 行」の節を参照)。

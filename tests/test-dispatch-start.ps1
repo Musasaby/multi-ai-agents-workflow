@@ -241,4 +241,51 @@ Invoke-TestCase "start: -Pr で main 上なら exit 12" {
     Assert-Eq 12 $script:Code "exit code: $($script:Err)"
 }
 
+function Set-MaxParallel { param([int]$Value)
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg | Add-Member -NotePropertyName max_parallel -NotePropertyValue $Value -Force
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+}
+
+Invoke-TestCase "start: max_parallel 2 は未コミットの変更があっても worktree の run を起動する" {
+    Initialize-StartProject 'T1:pending', 'T2:pending'
+    Set-MaxParallel 2
+    Write-Utf8File "$script:Proj/x.txt" "x`n"
+    Invoke-Script dispatch-start.ps1 -TaskId T1
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "Next: wait" (Get-LastLine $script:Out) "last line"
+    Assert-Contains $script:Out "Worktree:" "Worktree line"
+    Assert-FileExists "$script:Proj/.agents/workflow/runs/T1-1/worktree.txt" "worktree.txt"
+    Assert-Eq in_progress (Get-StateTask T1).status "T1 status"
+    Wait-Done T1-1
+}
+
+Invoke-TestCase "start: max_parallel 2 で worktree が既にあれば exit 61" {
+    Initialize-StartProject 'T1:pending', 'T2:pending'
+    Set-MaxParallel 2
+    New-Item -ItemType Directory -Force "$script:Proj/.agents/workflow/runs/T1-1/worktree" | Out-Null
+    Invoke-Script dispatch-start.ps1 -TaskId T1
+    Assert-Eq 61 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "Next: escalate reason=worktree" (Get-LastLine $script:Out) "last line"
+    Assert-Eq pending (Get-StateTask T1).status "T1 status"
+}
+
+Invoke-TestCase "start: max_parallel 2 で healthcheck が失敗すると exit 30 で worktree・ブランチが残らない" {
+    Initialize-StartProject 'T1:pending', 'T2:pending'
+    Set-MaxParallel 2
+    Set-ChildCfg healthcheck_command 'exit 3'
+    Invoke-Script dispatch-start.ps1 -TaskId T1
+    Assert-Eq 30 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "Next: escalate reason=healthcheck" (Get-LastLine $script:Out) "last line"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/runs/T1-1/worktree" "worktree が残らない"
+    git -C $script:Proj rev-parse --verify -q refs/heads/agents-run/T1-1 *> $null
+    Assert-Eq 1 $LASTEXITCODE "ブランチが残らない"
+
+    Set-ChildCfg healthcheck_command ''
+    Invoke-Script dispatch-start.ps1 -TaskId T1
+    Assert-Eq 0 $script:Code "healthcheck を外すと同じ試行で起動できる: $($script:Err)"
+    Wait-Done T1-1
+}
+
 Show-Summary

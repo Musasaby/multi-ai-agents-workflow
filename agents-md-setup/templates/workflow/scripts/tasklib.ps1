@@ -98,7 +98,7 @@ function Read-TaskList {
         }
         if ($line.StartsWith('## ')) {
             if ($line -cmatch '^## (T\d+):\s*(.+)') {
-                $current = [pscustomobject]@{ id = $Matches[1]; title = $Matches[2].Trim(); depRaw = $null; depLine = -1; group = $currentGroup; groupRaw = $null; reqRaw = $null }
+                $current = [pscustomobject]@{ id = $Matches[1]; title = $Matches[2].Trim(); depRaw = $null; depLine = -1; group = $currentGroup; groupRaw = $null; reqRaw = $null; changed = [System.Collections.Generic.List[string]]::new() }
                 $tasks[$current.id] = $current
             } else {
                 $current = $null
@@ -115,10 +115,17 @@ function Read-TaskList {
         if ($null -ne $current -and $null -eq $current.reqRaw -and $line -cmatch $script:ReqFieldPattern) {
             $current.reqRaw = $Matches[2]
         }
+        if ($null -ne $current) {
+            foreach ($cm in [regex]::Matches($line, '`([^`]+)`[(（]変更対象')) {
+                $path = $cm.Groups[1].Value -replace ':\d+(-\d+)?$', ''
+                if (-not $current.changed.Contains($path)) { $current.changed.Add($path) }
+            }
+        }
     }
     # グループ欄による上書き(欄の名前が区切りに存在する場合のみ)
     foreach ($t in $tasks.Values) {
         if ($null -ne $t.groupRaw -and $declared.Contains($t.groupRaw)) { $t.group = $t.groupRaw }
+        $t.changed = [string[]]@($t.changed)
     }
     return @($tasks.Values)
 }

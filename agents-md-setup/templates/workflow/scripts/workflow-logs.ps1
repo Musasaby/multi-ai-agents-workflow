@@ -14,6 +14,8 @@
 #   止まった run(kill・クラッシュで done が無い)として対象にしない。-Run 指定の run には当てない
 # 文字コード: output.log の先頭が BOM FF FE なら UTF-16LE(Windows PowerShell 5.1 の `*>`)として、
 #   EF BB BF なら UTF-8 の BOM を除いて読む。それ以外は UTF-8。2バイト単位に満たない端数は次の読み込みに回す
+#   出力が端末のときは、書き始める前に [Console]::OutputEncoding を BOM なしの UTF-8 にし、終了時に元へ戻す。
+#   リダイレクトされているときは BOM なしの UTF-8 のバイト列を出すだけで、OutputEncoding は変えない
 # 出力: 各行の先頭に `[<run>] ` を付ける。出力が端末へ向いていて環境変数 NO_COLOR が空か未設定なら、
 #   接頭辞に run ごとに違う色(ANSI 31〜36)を付ける。初回は末尾の -Tail 行、以後は追記された完成した行だけ。
 #   output.log が短くなったら先頭から読み直し `[<run>] --- log truncated` を出す。
@@ -334,6 +336,18 @@ if (-not [Console]::IsInputRedirected) {
         $origTreatCtrlC = $null
     }
 }
+
+# 出力が端末のときだけ、出力コードページを UTF-8(BOM なし)にする(日本語環境の 932 では、UTF-8 のバイト列が化ける)。
+# 元の値は finally で戻す。リダイレクトされているときは変えない
+$origOutputEncoding = $null
+if (-not [Console]::IsOutputRedirected) {
+    try {
+        $origOutputEncoding = [Console]::OutputEncoding
+        [Console]::OutputEncoding = $utf8
+    } catch {
+        $origOutputEncoding = $null
+    }
+}
 try {
     while ($true) {
         Invoke-Poll
@@ -351,5 +365,8 @@ try {
     # 出力先が閉じられた(パイプの切断)場合は正常終了として扱う
 } finally {
     if ($null -ne $origTreatCtrlC) { [Console]::TreatControlCAsInput = $origTreatCtrlC }
+    if ($null -ne $origOutputEncoding) {
+        try { [Console]::OutputEncoding = $origOutputEncoding } catch { }
+    }
 }
 exit 0

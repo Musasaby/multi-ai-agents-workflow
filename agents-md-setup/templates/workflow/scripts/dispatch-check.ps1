@@ -10,7 +10,7 @@
 #     最後のツール実行の後に出力が無い場合は、その旨を理由に書く
 #   7=変更0件(完了報告はあるが作業ツリーに変更が無い。PR 作成の run(pr-*)では判定しない)
 #   0=正常終了かつ完了報告あり / 2=done マーカーが無い(まだ実行中) / 1=使い方不備
-# stdout の最後の行には次のアクションを示す `Next:` 行を出す(wait / review <TaskId> /
+# stdout の最後の行には次のアクションを示す `Next:` 行を出す(wait / review <TaskId> / collect <TaskId>(worktree の run で正常のとき)/
 # escalate reason=<理由>。使い方不備の exit 1 では出さない)
 # Windows にはシグナルの仕組みが無いため、dispatch-run.ps1 は signal:* を書き出さない
 # (強制終了は通常の非0終了として記録される)。POSIX 版が書き出した done も同じ規則で判定する。
@@ -92,6 +92,93 @@ if (-not (Test-Path $guardPath)) {
     }
 }
 
+function Get-StateEntryText {
+    param([string]$TaskId)
+    try {
+        $st = Get-Content -LiteralPath '.agents/workflow/state.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+        foreach ($e in @($st.tasks)) {
+            if ("$($e.id)" -ne $TaskId) { continue }
+            $parts = foreach ($k in @('commit', 'retries', 'status')) {
+                $v = $e.$k
+                if ($null -eq $v) { $j = 'null' }
+                elseif ($v -is [string]) { $j = '"' + ($v.Replace('\', '\\').Replace('"', '\"')) + '"' }
+                elseif ($v -is [bool]) { $j = $v.ToString().ToLowerInvariant() }
+                else { $j = "$v" }
+                '"' + $k + '": ' + $j
+            }
+            return '{' + ($parts -join ', ') + '}'
+        }
+    } catch {}
+    return '-'
+}
+function Get-OtherRunIds {
+    param([string]$TaskId)
+    try {
+        $st = Get-Content -LiteralPath '.agents/workflow/state.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+        $ids = foreach ($e in @($st.tasks)) {
+            if ("$($e.id)" -ne $TaskId -and "$($e.status)" -in @('in_progress', 'in_review')) { "$($e.id)" }
+        }
+        return (@($ids) -join ',')
+    } catch {}
+    return ''
+}
+# worktree の run は、本体の state.json の自分のタスクの欄が起動時から変わっていないかも確かめる
+if (Test-Path -LiteralPath "$runDir/worktree.txt") {
+    $entryPath = "$runDir/state-entry.txt"
+    if (-not (Test-Path -LiteralPath $entryPath -PathType Leaf)) {
+        $guardIssues += 'state-entry.txt not found'
+    } else {
+        $recordedEntry = ([System.IO.File]::ReadAllText((Resolve-Path $entryPath), [System.Text.Encoding]::UTF8) -split "`r?`n")[0]
+        if ((Get-StateEntryText $TaskId) -ne $recordedEntry) {
+            $guardIssues += "changed: .agents/workflow/state.json ($TaskId)"
+        }
+    }
+    # 自分以外のタスクの欄は、親の正規の遷移(task-state・state-sync --insert)だけを許す
+    $tasksPath = "$runDir/state-tasks.json"
+    if (-not (Test-Path -LiteralPath $tasksPath -PathType Leaf)) {
+        $guardIssues += 'state-tasks.json not found'
+    } else {
+        $before = $null
+        try {
+            $before = @([System.IO.File]::ReadAllText((Resolve-Path $tasksPath), [System.Text.Encoding]::UTF8) | ConvertFrom-Json)
+        } catch {}
+        $nowMap = @{}
+        try {
+            $stNow = Get-Content -LiteralPath '.agents/workflow/state.json' -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
+            foreach ($e in @($stNow.tasks)) { $nowMap["$($e.id)"] = $e }
+        } catch {}
+        if ($null -eq $before) {
+            $guardIssues += "changed: .agents/workflow/state.json ($TaskId)"
+        } else {
+            $badTasks = @()
+            $beforeIds = @{}
+            foreach ($b in $before) {
+                if ($null -eq $b) { continue }
+                $tid = "$($b.id)"
+                $beforeIds[$tid] = $true
+                if ($tid -eq $TaskId) { continue }
+                $n = $nowMap[$tid]
+                if ($null -eq $n) { $badTasks += $tid; continue }
+                if ("$($b.status)" -eq 'done') {
+                    if ("$($n.status)" -ne 'done' -or "$($n.commit)" -ne "$($b.commit)") { $badTasks += $tid }
+                } elseif ("$($n.status)" -eq 'done') {
+                    $c = "$($n.commit)"
+                    $isAnc = $false
+                    if ($c) {
+                        & git merge-base --is-ancestor $c HEAD 2> $null
+                        $isAnc = ($LASTEXITCODE -eq 0)
+                    }
+                    if (-not $isAnc) { $badTasks += $tid }
+                }
+            }
+            foreach ($tid in $nowMap.Keys) {
+                if (-not $beforeIds.ContainsKey($tid) -and "$($nowMap[$tid].status)" -ne 'pending') { $badTasks += $tid }
+            }
+            foreach ($tid in $badTasks) { $guardIssues += "changed: .agents/workflow/state.json ($tid)" }
+        }
+    }
+}
+
 # --- 本物のリポジトリの git 状態の検証(dispatch-run が起動時に git-state.txt に記録した値と比べる) ---
 # タスク種別の判定(完了報告の必須項目と変更0件の判定で使う)は、ここでも $isPr を使うため
 # この位置に置いている。PR 作成の run(タスクIDが pr- で始まる)は config を比べない
@@ -110,13 +197,61 @@ function ConvertTo-StateMap {
     }
     return $map
 }
+# worktree.txt がある run(dispatch-worktree create 済み)は、worktree の中で git-state -Run <branch> -Parent <親の作業ブランチ> を
+# 実行した値で比べ、変更の取得も worktree の中で行う($wtDir が空でなければ worktree の run)
+$wtDir = ''
+$wtBranch = ''
+$wtMissing = $false
+$wtTxt = "$runDir/worktree.txt"
+if (Test-Path $wtTxt -PathType Leaf) {
+    foreach ($wl in @([System.IO.File]::ReadAllText((Resolve-Path $wtTxt), [System.Text.Encoding]::UTF8) -split "`r?`n")) {
+        if (-not $wtDir -and $wl.StartsWith('path ')) { $wtDir = $wl.Substring(5) }
+        if (-not $wtBranch -and $wl.StartsWith('branch ')) { $wtBranch = $wl.Substring(7) }
+    }
+    if (-not $wtDir -or -not (Test-Path $wtDir -PathType Container)) {
+        $wtMissing = $true
+        $guardIssues += "worktree not found: $wtDir"
+    }
+}
 $gitStatePath = "$runDir/git-state.txt"
 if (-not (Test-Path $gitStatePath)) {
     $guardIssues += 'git-state.txt not found (deleted, or the run was not started by dispatch-run)'
+} elseif ($wtMissing) {
+    # worktree が無いので比べない(Guard には worktree not found を出している)
 } else {
     $recordedState = ConvertTo-StateMap @([System.IO.File]::ReadAllText((Resolve-Path $gitStatePath), [System.Text.Encoding]::UTF8) -split "`r?`n")
     # git-state.ps1 の stderr は捨てる(失敗時は空出力になり、全項目が変わったと判定される)
-    $currentState = ConvertTo-StateMap @(& pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1" 2> $null)
+    if ($wtDir) {
+        $parentRef = "$(& git symbolic-ref -q HEAD 2> $null)".Trim()
+        if (-not $parentRef) { $parentRef = '-' }
+        $otherRuns = Get-OtherRunIds $TaskId
+        Push-Location $wtDir
+        try { $currentState = ConvertTo-StateMap @(& pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1" -Run $wtBranch -Parent $parentRef -OtherRuns $otherRuns 2> $null) }
+        finally { Pop-Location }
+        # 親の作業ブランチが、起動時の参照名のまま、記録した値から進む方向にだけ動いたかを確かめる
+        $parentHeadPath = "$runDir/parent-head.txt"
+        if (-not (Test-Path -LiteralPath $parentHeadPath -PathType Leaf)) {
+            $guardIssues += 'parent-head.txt not found'
+        } else {
+            $phLines = [System.IO.File]::ReadAllText((Resolve-Path $parentHeadPath), [System.Text.Encoding]::UTF8) -split "`r?`n"
+            $recParentRef = "$($phLines[0])"
+            $recParentSha = "$($phLines[1])"
+            $curParentSha = "$(& git rev-parse --verify -q HEAD 2> $null)".Trim()
+            if (-not $curParentSha) { $curParentSha = '-' }
+            $parentBad = $false
+            if ($recParentRef -cne $parentRef) { $parentBad = $true }
+            elseif ($recParentSha -cne $curParentSha) {
+                if ($recParentSha -eq '-' -or $curParentSha -eq '-') { $parentBad = $true }
+                else {
+                    $null = & git merge-base --is-ancestor $recParentSha $curParentSha 2> $null
+                    if ($LASTEXITCODE -ne 0) { $parentBad = $true }
+                }
+            }
+            if ($parentBad) { $guardIssues += 'git changed: parent' }
+        }
+    } else {
+        $currentState = ConvertTo-StateMap @(& pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1" 2> $null)
+    }
     foreach ($name in @('head', 'branch', 'refs', 'config')) {
         if ($isPr -and $name -eq 'config') { continue }
         if ("$($recordedState[$name])" -ne "$($currentState[$name])") {
@@ -256,7 +391,9 @@ function Get-ReportResult {
 }
 $reportResult = Get-ReportResult $cleanLines $toolFlags $required
 
-$changes = @(git status --porcelain | Where-Object { $_ })
+# worktree の run は worktree の中で変更を取る(worktree が無いときは本体で取る)
+$gitArgs = if ($wtDir -and -not $wtMissing) { @('-C', $wtDir) } else { @() }
+$changes = @(git @gitArgs status --porcelain | Where-Object { $_ })
 $changeCount = $changes.Count
 
 if ($guardIssues.Count -gt 0) {
@@ -344,9 +481,9 @@ if ($reportSaved) {
 Write-Output "Changes: $changeCount"
 Write-Output "Verdict: $verdict"
 Write-Output "--- git status --porcelain"
-git status --porcelain
+git @gitArgs status --porcelain
 Write-Output "--- git diff --stat"
-git diff --stat
+git @gitArgs diff --stat
 Write-Output "--- output.log (last $tailLines lines)"
 if (Test-Path $logPath) {
     # 切り詰められた output.log(先頭の NUL)がそのまま出力されるため行ごとに除く(sh 版と揃える)
@@ -358,7 +495,12 @@ if (Test-Path $logPath) {
 # --- 次のアクションの判定(stdout の最後の行に出す) ---
 # PR 作成の run(pr-*)はレビューしない。PR を検証して報告し、マージを待つ
 $next = switch ($code) {
-    0 { if ($isPr) { 'wait-merge' } else { "review $TaskId" }; break }
+    0 {
+        if ($isPr) { 'wait-merge' }
+        elseif ($wtDir) { "collect $TaskId" }
+        else { "review $TaskId" }
+        break
+    }
     8 { 'escalate reason=tampered'; break }
     4 {
         if ($providerError -eq 'yes') { 'escalate reason=provider-error' }

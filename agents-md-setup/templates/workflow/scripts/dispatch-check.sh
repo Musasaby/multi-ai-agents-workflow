@@ -15,6 +15,7 @@ set -uo pipefail
 #   7=変更0件(完了報告はあるが作業ツリーに変更が無い。PR 作成の run(pr-*)では判定しない)
 #   0=正常終了かつ完了報告あり / 2=done マーカーが無い(まだ実行中) / 1=使い方不備
 # stdout の最後の行には次のアクションを示す `Next:` 行を出す(wait / review <TaskId> /
+# collect <TaskId>(worktree の run で正常のとき)/
 # escalate reason=<理由>。使い方不備の exit 1 では出さない)
 
 TASK_ID="${1:?Usage: dispatch-check.sh <TaskId> [Attempt]}"
@@ -113,6 +114,83 @@ else
     done < <(LC_ALL=C tr -d '\r' < "$GUARD_PATH")
 fi
 
+# worktree の run は、本体の state.json の自分のタスクの欄が起動時から変わっていないかも確かめる
+if [ -f "$RUN_DIR/worktree.txt" ]; then
+    if [ ! -f "$RUN_DIR/state-entry.txt" ]; then
+        GUARD_ISSUES="${GUARD_ISSUES}state-entry.txt not found
+"
+    else
+        CURRENT_ENTRY="$(python3 -c "
+import json, sys
+try:
+    with open('.agents/workflow/state.json', encoding='utf-8') as f:
+        tasks = json.load(f).get('tasks', [])
+    for e in tasks:
+        if e.get('id') == sys.argv[1]:
+            print(json.dumps({k: e.get(k) for k in ('status', 'retries', 'commit')}, sort_keys=True))
+            break
+    else:
+        print('-')
+except Exception:
+    print('-')
+" "$TASK_ID" 2> /dev/null | tr -d '\r')"
+        if [ "$CURRENT_ENTRY" != "$(LC_ALL=C tr -d '\r' < "$RUN_DIR/state-entry.txt" | head -n 1)" ]; then
+            GUARD_ISSUES="${GUARD_ISSUES}changed: .agents/workflow/state.json ($TASK_ID)
+"
+        fi
+    fi
+    # 自分以外のタスクの欄は、親の正規の遷移(task-state・state-sync --insert)だけを許す
+    if [ ! -f "$RUN_DIR/state-tasks.json" ]; then
+        GUARD_ISSUES="${GUARD_ISSUES}state-tasks.json not found
+"
+    else
+        BAD_TASKS="$(python3 -c "
+import json, subprocess, sys
+try:
+    with open(sys.argv[2], encoding='utf-8') as f:
+        before = {e['id']: e for e in json.load(f)}
+except Exception:
+    before = None
+if before is None:
+    print(sys.argv[1])
+    sys.exit(0)
+try:
+    with open('.agents/workflow/state.json', encoding='utf-8') as f:
+        now = {str(e.get('id')): e for e in json.load(f).get('tasks', [])}
+except Exception:
+    now = {}
+
+def is_ancestor(c):
+    if not c or not isinstance(c, str):
+        return False
+    r = subprocess.run(['git', 'merge-base', '--is-ancestor', c, 'HEAD'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return r.returncode == 0
+
+bad = []
+for tid, b in before.items():
+    if tid == sys.argv[1]:
+        continue
+    n = now.get(tid)
+    if n is None:
+        bad.append(tid)
+    elif b.get('status') == 'done':
+        if n.get('status') != 'done' or n.get('commit') != b.get('commit'):
+            bad.append(tid)
+    else:
+        if n.get('status') == 'done' and not is_ancestor(n.get('commit')):
+            bad.append(tid)
+for tid, n in now.items():
+    if tid not in before and n.get('status') != 'pending':
+        bad.append(tid)
+print(' '.join(bad))
+" "$TASK_ID" "$RUN_DIR/state-tasks.json" 2> /dev/null | tr -d '\r')"
+        for bad_id in $BAD_TASKS; do
+            GUARD_ISSUES="${GUARD_ISSUES}changed: .agents/workflow/state.json ($bad_id)
+"
+        done
+    fi
+fi
+
 # --- 本物のリポジトリの git 状態の検証(dispatch-run が起動時に git-state.txt に記録した値と比べる) ---
 # タスク種別の判定(完了報告の必須項目と変更0件の判定で使う case)は、ここでも IS_PR を使うため
 # この位置に置いている。PR 作成の run(IS_PR=true。タスクIDが pr- で始まる)は config を比べない
@@ -121,14 +199,66 @@ case "$TASK_ID" in
     pr-*) IS_PR=true; REQUIRED='PR URL' ;;
     *) IS_PR=false; REQUIRED='変更ファイル|テスト結果' ;;
 esac
+# worktree.txt がある run(dispatch-worktree create 済み)は、worktree の中で git-state --run <branch> --parent <親の作業ブランチ> を
+# 実行した値で比べ、変更の取得も worktree の中で行う(WT_DIR が空でなければ worktree の run)
+WT_DIR=""
+WT_BRANCH=""
+WT_MISSING=false
+if [ -f "$RUN_DIR/worktree.txt" ]; then
+    WT_DIR="$(sed -n 's/^path //p' "$RUN_DIR/worktree.txt" | head -n 1 | tr -d '\r')"
+    WT_BRANCH="$(sed -n 's/^branch //p' "$RUN_DIR/worktree.txt" | head -n 1 | tr -d '\r')"
+    if [ -z "$WT_DIR" ] || [ ! -d "$WT_DIR" ]; then
+        WT_MISSING=true
+        GUARD_ISSUES="${GUARD_ISSUES}worktree not found: $WT_DIR
+"
+    fi
+fi
 GIT_STATE_PATH="$RUN_DIR/git-state.txt"
 if [ ! -f "$GIT_STATE_PATH" ]; then
     GUARD_ISSUES="${GUARD_ISSUES}git-state.txt not found (deleted, or the run was not started by dispatch-run)
 "
+elif [ "$WT_MISSING" = true ]; then
+    :
 else
     RECORDED_STATE="$(LC_ALL=C tr -d '\r' < "$GIT_STATE_PATH")"
     # 実行権限に頼らず bash で呼ぶ(リポジトリ上のスクリプトは mode 100644 のため)
-    CURRENT_STATE="$(bash "$SCRIPT_DIR/git-state.sh" 2> /dev/null | LC_ALL=C tr -d '\r')"
+    if [ -n "$WT_DIR" ]; then
+        PARENT_REF="$(git symbolic-ref -q HEAD 2> /dev/null || true)"
+        [ -n "$PARENT_REF" ] || PARENT_REF=-
+        OTHER_RUNS="$(python3 -c "
+import json, sys
+try:
+    with open('.agents/workflow/state.json', encoding='utf-8') as f:
+        tasks = json.load(f).get('tasks', [])
+    print(','.join(str(e.get('id')) for e in tasks if e.get('id') != sys.argv[1] and e.get('status') in ('in_progress', 'in_review')))
+except Exception:
+    print('')
+" "$TASK_ID" 2> /dev/null | tr -d '\r')"
+        CURRENT_STATE="$(cd "$WT_DIR" && bash "$SCRIPT_DIR/git-state.sh" --run "$WT_BRANCH" --parent "$PARENT_REF" --other-runs "$OTHER_RUNS" 2> /dev/null | LC_ALL=C tr -d '\r')"
+        # 親の作業ブランチが、起動時の参照名のまま、記録した値から進む方向にだけ動いたかを確かめる
+        if [ ! -f "$RUN_DIR/parent-head.txt" ]; then
+            GUARD_ISSUES="${GUARD_ISSUES}parent-head.txt not found
+"
+        else
+            REC_PARENT_REF="$(sed -n 1p "$RUN_DIR/parent-head.txt" | tr -d '\r')"
+            REC_PARENT_SHA="$(sed -n 2p "$RUN_DIR/parent-head.txt" | tr -d '\r')"
+            CUR_PARENT_SHA="$(git rev-parse --verify -q HEAD 2> /dev/null || echo -)"
+            PARENT_BAD=false
+            if [ "$REC_PARENT_REF" != "$PARENT_REF" ]; then
+                PARENT_BAD=true
+            elif [ "$REC_PARENT_SHA" != "$CUR_PARENT_SHA" ]; then
+                if [ "$REC_PARENT_SHA" = - ] || [ "$CUR_PARENT_SHA" = - ] || ! git merge-base --is-ancestor "$REC_PARENT_SHA" "$CUR_PARENT_SHA" 2> /dev/null; then
+                    PARENT_BAD=true
+                fi
+            fi
+            if [ "$PARENT_BAD" = true ]; then
+                GUARD_ISSUES="${GUARD_ISSUES}git changed: parent
+"
+            fi
+        fi
+    else
+        CURRENT_STATE="$(bash "$SCRIPT_DIR/git-state.sh" 2> /dev/null | LC_ALL=C tr -d '\r')"
+    fi
     for name in head branch refs config; do
         if [ "$IS_PR" = true ] && [ "$name" = config ]; then continue; fi
         recorded="$(printf '%s\n' "$RECORDED_STATE" | LC_ALL=C awk -v name="$name" '$1 == name { print $2 }')"
@@ -271,7 +401,15 @@ REPORT_RESULT="$(printf '%s\n' "$RAW_LOG" | TOOL_ACTIVITY_RE="$TOOL_ACTIVITY_RE"
         print "found"
     }')"
 
-CHANGES="$(git status --porcelain)"
+# worktree の run は worktree の中で変更を取る(worktree が無いときは本体で取る)
+git_in_wt() {
+    if [ -n "$WT_DIR" ] && [ "$WT_MISSING" = false ]; then
+        git -C "$WT_DIR" "$@"
+    else
+        git "$@"
+    fi
+}
+CHANGES="$(git_in_wt status --porcelain)"
 CHANGE_COUNT=0
 [ -n "$CHANGES" ] && CHANGE_COUNT="$(printf '%s\n' "$CHANGES" | wc -l | tr -d ' ')"
 
@@ -364,9 +502,9 @@ fi
 echo "Changes: ${CHANGE_COUNT}"
 echo "Verdict: ${VERDICT}"
 echo "--- git status --porcelain"
-git status --porcelain
+git_in_wt status --porcelain
 echo "--- git diff --stat"
-git diff --stat
+git_in_wt diff --stat
 echo "--- output.log (last ${TAIL_LINES} lines)"
 if [ -f "$LOG_PATH" ]; then
     # 切り詰められた output.log(先頭の NUL)をそのまま tail に渡すと stdout に NUL が流れるため除く
@@ -378,7 +516,15 @@ fi
 # --- 次のアクションの判定(stdout の最後の行に出す) ---
 # PR 作成の run(pr-*)はレビューしない。PR を検証して報告し、マージを待つ
 case "$CODE" in
-    0) if [ "$IS_PR" = true ]; then NEXT="wait-merge"; else NEXT="review $TASK_ID"; fi ;;
+    0)
+        if [ "$IS_PR" = true ]; then
+            NEXT="wait-merge"
+        elif [ -n "$WT_DIR" ]; then
+            NEXT="collect $TASK_ID"
+        else
+            NEXT="review $TASK_ID"
+        fi
+        ;;
     8) NEXT="escalate reason=tampered" ;;
     4)
         if [ "$PROVIDER_ERROR" = yes ]; then

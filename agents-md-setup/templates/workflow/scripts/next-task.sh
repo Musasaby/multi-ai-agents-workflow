@@ -12,7 +12,11 @@ set -euo pipefail
 #       (exit 0=dispatch/review <タスクID>、exit 3=finish、exit 4=escalate reason=blocked、
 #       exit 6=group-advance。exit 1 では出さない)
 # exit: 0=該当あり / 1=使い方・tasks.md/state.json 不備 / 3=全タスク done /
-#       4=実行可能なタスクなし / 6=作業グループ完了(他グループに未完了あり)
+#       4=実行可能なタスクなし / 5=実行中のタスクの完了待ち(max_parallel が 2 以上) /
+#       6=作業グループ完了(他グループに未完了あり)
+# max_parallel(config.json)が 2 以上のときは、in_review があればそれを優先し、なければ
+# in_progress を active として空きの分だけ、変更対象(changed)が重ならない pending を
+# "Next: dispatch <ID> <ID> ..." で複数選ぶ
 
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
@@ -78,6 +82,14 @@ try:
 except OSError:
     config = {}
 branch_per_group = config.get('branch_per_group', True)
+# max_parallel: 整数で 2 以上のときだけ並列選択を行う(無い・1 未満・整数でなければ 1)
+max_parallel = config.get('max_parallel', 1)
+if isinstance(max_parallel, bool) or not isinstance(max_parallel, int) or max_parallel < 1:
+    max_parallel = 1
+exclusive_files = config.get('parallel_exclusive_files')
+if not isinstance(exclusive_files, list) or not all(isinstance(x, str) for x in exclusive_files):
+    exclusive_files = ['AGENTS.md', 'README.md']
+changed_of = {t['id']: t.get('changed', []) for t in tasks}
 
 group_of = {t['id']: t['group'] for t in tasks}
 group_names = tasklib.group_order(content)
@@ -92,7 +104,7 @@ def unfinished_group():
     return None
 
 for t in state_tasks:
-    if t['status'] in ('in_progress', 'in_review'):
+    if t['status'] == 'in_review' or (max_parallel < 2 and t['status'] == 'in_progress'):
         print(t['id'] + ' ' + t['status'])
         if t['status'] == 'in_review':
             print('Next: review ' + t['id'])
@@ -123,6 +135,54 @@ if group_mode:
         sys.exit(6)
 else:
     candidates = state_tasks
+
+if max_parallel >= 2:
+    active = [t['id'] for t in state_tasks if t['status'] == 'in_progress']
+
+    def paths_overlap(a, b):
+        # 末尾の / を除いて比べ、同じパスか、一方がもう一方のディレクトリの下なら重なる
+        a = a.rstrip('/')
+        b = b.rstrip('/')
+        return a == b or b.startswith(a + '/') or a.startswith(b + '/')
+
+    def is_solo(tid):
+        ch = changed_of.get(tid, [])
+        return not ch or any(f in exclusive_files for f in ch)
+
+    chosen = []
+    if not any(is_solo(a) for a in active):
+        busy = set()
+        for a in active:
+            busy.update(changed_of.get(a, []))
+        for t in candidates:
+            if t['status'] != 'pending':
+                continue
+            if t['id'] not in graph:
+                print("Task '" + t['id'] + "' is in state.json but not in tasks.md", file=sys.stderr)
+                sys.exit(1)
+            if max_parallel - len(active) - len(chosen) <= 0:
+                break
+            if any(status.get(d) != 'done' for d in graph[t['id']]):
+                continue
+            ch = changed_of.get(t['id'], [])
+            if is_solo(t['id']):
+                if not active and not chosen:
+                    chosen.append(t['id'])
+                    break
+                continue
+            if not any(paths_overlap(a, b) for a in ch for b in busy):
+                chosen.append(t['id'])
+                busy.update(ch)
+    if chosen or active:
+        for a in active:
+            print(a + ' in_progress')
+        for c in chosen:
+            print(c + ' pending')
+        if chosen:
+            print('Next: dispatch ' + ' '.join(chosen))
+            sys.exit(0)
+        print('Next: wait ' + ' '.join(active))
+        sys.exit(5)
 
 blocked = []
 for t in candidates:

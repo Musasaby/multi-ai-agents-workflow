@@ -84,6 +84,7 @@ stdout の最後の `Next:` 行に従う: `dispatch <ID>` → `/agent-dispatch <
 `group-advance` → 「グループ単位の PR とブランチ切替」、`escalate` → reason と stderr を
 ユーザーに説明する。`Next:` 行が無ければ stderr を添えて報告する。
 語彙は `.agents/workflow/README.md` の「Next: 行」の節。
+`max_parallel` が 2 以上なら、`dispatch`・`wait` の後の手順は [並列の実行](references/parallel.md) に従う。
 tasks.md の記述順や ID 順、state.json の並び順で次のタスクを決めない
 (挿入したタスクの順序が崩れるため)。
 
