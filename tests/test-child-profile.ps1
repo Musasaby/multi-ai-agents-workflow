@@ -57,7 +57,7 @@ Invoke-TestCase "profile: 未定義の名前は exit 1" {
     Set-ChildAgent "nope" 'opencode run "{prompt}"'
     Invoke-Profile
     Assert-Eq 1 $script:Code "unknown profile rejected"
-    Assert-Contains $script:Err "Unknown child profile: nope (defined: auto, claude-stream-json, opencode, plain)" "message"
+    Assert-Contains $script:Err "Unknown child profile: nope (defined: auto, claude-stream-json, opencode, plain, subagent)" "message"
 }
 
 Show-Summary

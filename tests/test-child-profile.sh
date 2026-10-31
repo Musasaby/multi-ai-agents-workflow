@@ -59,7 +59,7 @@ t_unknown_profile() {
     set_child_agent "nope" 'opencode run "{prompt}"'
     run_profile
     assert_eq 1 "$CODE" "unknown profile rejected"
-    assert_contains "$ERR" "Unknown child profile: nope (defined: auto, claude-stream-json, opencode, plain)" "message"
+    assert_contains "$ERR" "Unknown child profile: nope (defined: auto, claude-stream-json, opencode, plain, subagent)" "message"
 }
 
 echo "test-child-profile.sh"
