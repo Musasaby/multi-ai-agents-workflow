@@ -651,8 +651,9 @@ exit code(複数に当たる場合は上の行を優先する):
   親の正規の遷移(`task-state`・`state-sync --insert`。`pending` → `in_progress` → `in_review` → `done` と、
   `commit` が HEAD の祖先である `done`、新しい `pending` のタスクの追加)は許す。次は不正として、
   タスクごとに `changed: .agents/workflow/state.json (<ID>)` を出す: 起動時に `done` だったタスクの
-  `status`・`commit` が変わった、タスクが消えた、`retries` が減った(`failed` からの `pending` を除く)、
-  `commit` が HEAD の祖先でない `done`、起動後に追加されたタスクが `pending` 以外
+  `status`・`commit` が変わった、タスクが消えた、
+  `commit` が HEAD の祖先でない `done`、起動後に追加されたタスクが `pending` 以外。
+  `retries` の増減は調べない(`fail` は `pending` 以外のどの状態からもでき、`reset` で `retries` が 0 に戻るため)
 - `Changes:`・`git status --porcelain`・`git diff --stat` は WT の中で取る
 - WT のディレクトリが無いときは `Guard:` に `worktree not found: <path>` を加え(Verdict は `tampered`)、
   git 状態の比較は行わず、`Changes:` は本体で取る
