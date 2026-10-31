@@ -159,14 +159,8 @@ if (Test-Path -LiteralPath "$runDir/worktree.txt") {
                 if ($tid -eq $TaskId) { continue }
                 $n = $nowMap[$tid]
                 if ($null -eq $n) { $badTasks += $tid; continue }
-                $bRetries = [int]$b.retries
-                $nRetries = [int]$n.retries
                 if ("$($b.status)" -eq 'done') {
                     if ("$($n.status)" -ne 'done' -or "$($n.commit)" -ne "$($b.commit)") { $badTasks += $tid }
-                } elseif ("$($n.status)" -ne 'pending' -and $nRetries -lt $bRetries) {
-                    $badTasks += $tid
-                } elseif ("$($n.status)" -eq 'pending' -and "$($b.status)" -ne 'failed' -and $nRetries -lt $bRetries) {
-                    $badTasks += $tid
                 } elseif ("$($n.status)" -eq 'done') {
                     $c = "$($n.commit)"
                     $isAnc = $false

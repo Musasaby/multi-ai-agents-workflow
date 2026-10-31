@@ -413,15 +413,16 @@ Invoke-TestCase "dispatch-worktree: 実行中の親の commit・ほかのタス�
 }
 
 # 子の worktree に、本体の state.json の 1 タスクの欄を書き換えるスクリプト setstate.ps1 を置く
-# 使い方: pwsh -NoProfile -File setstate.ps1 <state.json> <ID> <status> [<commit>]
+# 使い方: pwsh -NoProfile -File setstate.ps1 <state.json> <ID> <status> [<commit>] [<retries>]
 function Write-SetStateScript {
     Write-Plain "$script:Proj/.agents/workflow/runs/T1-1/worktree/setstate.ps1" @'
-param([string]$Path, [string]$Id, [string]$Status, [string]$Commit = '')
+param([string]$Path, [string]$Id, [string]$Status, [string]$Commit = '', [string]$Retries = '')
 $s = [System.IO.File]::ReadAllText($Path) | ConvertFrom-Json
 foreach ($e in @($s.tasks)) {
     if ("$($e.id)" -eq $Id) {
         $e.status = $Status
         if ($Commit) { $e.commit = $Commit }
+        if ($Retries -ne '') { $e.retries = [int]$Retries }
     }
 }
 [System.IO.File]::WriteAllText($Path, ($s | ConvertTo-Json -Depth 10))
@@ -459,6 +460,17 @@ Invoke-TestCase "dispatch-worktree: 実行中に親がほかのタスクを正�
     Assert-Eq "EXIT:0" (Get-Content "$script:Proj/.agents/workflow/runs/T1-1/done" -Encoding utf8)[0] "done marker"
     Invoke-Script dispatch-check.ps1 T1 1
     Assert-Eq 0 $script:Code "親の正規の遷移(commit は本体の HEAD の祖先)では tampered にならない: $($script:Out)"
+    Assert-NotContains $script:Out "changed" "changed は出ない"
+}
+
+Invoke-TestCase "dispatch-worktree: 実行中に親がほかのタスクを fail → reset → start しても tampered にならない" {
+    Set-State 'T1:in_progress' 'T2:in_progress:1'
+    $sp = "$script:Proj/.agents/workflow/state.json"
+    Initialize-WtChild "& ./setstate.ps1 '$sp' T2 failed; & ./setstate.ps1 '$sp' T2 pending '' 0; & ./setstate.ps1 '$sp' T2 in_progress '' 0; Set-Content a.txt hello; $WtReport"
+    Write-SetStateScript
+    Invoke-Script dispatch-run.ps1 T1 1
+    Invoke-Script dispatch-check.ps1 T1 1
+    Assert-Eq 0 $script:Code "親がほかのタスクを fail → reset → start しても tampered にならない: $($script:Out)"
     Assert-NotContains $script:Out "changed" "changed は出ない"
 }
 

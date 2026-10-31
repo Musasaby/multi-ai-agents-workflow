@@ -177,11 +177,7 @@ for tid, b in before.items():
         if n.get('status') != 'done' or n.get('commit') != b.get('commit'):
             bad.append(tid)
     else:
-        if n.get('status') != 'pending' and (n.get('retries') or 0) < (b.get('retries') or 0):
-            bad.append(tid)
-        elif n.get('status') == 'pending' and b.get('status') != 'failed' and (n.get('retries') or 0) < (b.get('retries') or 0):
-            bad.append(tid)
-        elif n.get('status') == 'done' and not is_ancestor(n.get('commit')):
+        if n.get('status') == 'done' and not is_ancestor(n.get('commit')):
             bad.append(tid)
 for tid, n in now.items():
     if tid not in before and n.get('status') != 'pending':
