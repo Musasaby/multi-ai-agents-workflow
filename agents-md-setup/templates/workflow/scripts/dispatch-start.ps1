@@ -1,6 +1,15 @@
 ﻿# 子エージェントの起動までの事前チェックを順に行い、デタッチ起動する。失敗した段階で止める
 # (止めたときは state.json を変えず、子も起動しない)。
-# Usage: dispatch-start.ps1 -TaskId <TaskId> [-Attempt <N>] | dispatch-start.ps1 -Pr
+# Usage: dispatch-start.ps1 -TaskId <TaskId> [-Attempt <N>] [-SubagentCapable] | dispatch-start.ps1 -Pr [-SubagentCapable]
+#   -SubagentCapable: 親がサブエージェントを起動できるとき付ける。起動方法(launcher)を次で決め、
+#     プロンプト生成の前に runs/<ID>-<N>/launcher へ cli か subagent を1行で書く(-Pr は RunId が決まった後)。
+#     config.json の child_agent.subagent(auto / always / never。無い・他の値は auto)が never か、
+#     このオプションが無ければ cli。always なら subagent。auto は childprofile の出力形式が
+#     claude-stream-json のとき subagent、それ以外は cli
+#   launcher が subagent のときは、デタッチ起動の代わりに dispatch-run -PrepareOnly を同期で実行し(失敗は exit 60・
+#     Next: escalate reason=launch)、Run:・Launcher: subagent・Prompt:・Workdir:・Output:・Model:
+#     (child_agent.subagent_model。無い・空なら default)を出して `Next: subagent <ID> <N>` で exit 0 する
+#     (疎通確認・ウォームアップは行わない)。cli のときは出力に `Launcher: cli` 行が加わるだけ
 #   -Pr: PR 作成の run(pr-<N>-1)を起動する(タスクの状態確認・task-state は行わず、ウォームアップもしない)
 # config.json の max_parallel が 2 以上で -Pr でないときは、作業ツリーの確認を飛ばし、
 # タスクの状態の確認の後に dispatch-worktree create で worktree の run にする(Carried: 行と Worktree: 行を出す)
@@ -19,7 +28,8 @@
 param(
     [string]$TaskId = '',
     [int]$Attempt = 1,
-    [switch]$Pr
+    [switch]$Pr,
+    [switch]$SubagentCapable
 )
 if ($Pr) {
     $TaskId = 'pr'
@@ -156,8 +166,29 @@ function Stop-RunWorktree {
     }
 }
 
+# 起動方法(launcher)の決定
+$launcher = 'cli'
+if ($SubagentCapable) {
+    $subMode = Get-ChildCfg 'subagent'
+    if ($subMode -eq 'always') {
+        $launcher = 'subagent'
+    } elseif ($subMode -ne 'never') {
+        . "$PSScriptRoot/childprofile.ps1"
+        try {
+            if ((Get-ChildProfile -Root '.').OutputFormat -eq 'claude-stream-json') { $launcher = 'subagent' }
+        } catch {
+            $launcher = 'cli'
+        }
+    }
+}
+if (-not $Pr) {
+    New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path (Get-Location).Path "$runDir/launcher"), "$launcher`n", (New-Object System.Text.UTF8Encoding($false)))
+}
+
 # 3a. 疎通確認
 $healthcheck = Get-ChildCfg 'healthcheck_command'
+if ($launcher -eq 'subagent') { $healthcheck = '' }
 if ($healthcheck) {
     if (-not (Invoke-CheckCommand $healthcheck)) {
         Stop-RunWorktree
@@ -168,7 +199,7 @@ if ($healthcheck) {
 
 # 3b. ウォームアップ(このサイクルの最初の dispatch のときだけ)
 $warmup = Get-ChildCfg 'warmup_command'
-if (-not $Pr -and $warmup -and -not (Test-Path '.agents/workflow/runs/*/guard.sha256')) {
+if (-not $Pr -and $launcher -eq 'cli' -and $warmup -and -not (Test-Path '.agents/workflow/runs/*/guard.sha256')) {
     if (-not (Invoke-CheckCommand $warmup)) {
         Stop-RunWorktree
         Write-Output "Next: escalate reason=warmup"
@@ -199,6 +230,8 @@ if ($Pr) {
         exit 41
     }
     $runDir = ".agents/workflow/runs/$TaskId-$Attempt"
+    New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path (Get-Location).Path "$runDir/launcher"), "$launcher`n", (New-Object System.Text.UTF8Encoding($false)))
 } else {
     # 5. 状態を in_progress にする
     & pwsh -NoProfile -File "$PSScriptRoot/task-state.ps1" $TaskId start
@@ -207,6 +240,29 @@ if ($Pr) {
         Write-Output "Next: escalate reason=task-state"
         exit 50
     }
+}
+
+# 6'. サブエージェントでの起動(子は起動せず、guard と git-state の記録だけ同期で行う)
+if ($launcher -eq 'subagent') {
+    Remove-Item -LiteralPath "$runDir/guard.sha256" -Force -ErrorAction SilentlyContinue
+    & pwsh -NoProfile -File "$PSScriptRoot/dispatch-run.ps1" -TaskId $TaskId -Attempt $Attempt -PrepareOnly *> $null
+    if ($LASTEXITCODE -ne 0) {
+        [Console]::Error.WriteLine("dispatch-run -PrepareOnly failed: $runDir")
+        Write-Output "Next: escalate reason=launch"
+        exit 60
+    }
+    $rootAbs = (Get-Location).Path
+    $workdir = if ($parallel) { "$rootAbs/$runDir/worktree" } else { $rootAbs }
+    $subModel = Get-ChildCfg 'subagent_model'
+    if (-not $subModel) { $subModel = 'default' }
+    Write-Output "Run: $TaskId-$Attempt"
+    Write-Output "Launcher: subagent"
+    Write-Output "Prompt: $rootAbs/$runDir/prompt.md"
+    Write-Output "Workdir: $workdir"
+    Write-Output "Output: $rootAbs/$runDir/output.log"
+    Write-Output "Model: $subModel"
+    Write-Output "Next: subagent $TaskId $Attempt"
+    exit 0
 }
 
 # 6. デタッチ起動
@@ -227,6 +283,7 @@ while (-not (Test-Path -LiteralPath "$runDir/guard.sha256" -PathType Leaf)) {
 }
 
 Write-Output "Run: $TaskId-$Attempt"
+Write-Output "Launcher: cli"
 Write-Output "Log: $runDir/output.log"
 Write-Output "Watch: Get-Content $runDir/output.log -Wait -Tail 20"
 Write-Output "Watch all: pwsh -NoProfile -File .agents/workflow/scripts/workflow-logs.ps1"
