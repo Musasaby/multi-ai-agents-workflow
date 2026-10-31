@@ -1,4 +1,11 @@
 #!/bin/bash
+# オプション --prepare-only は位置引数より前でも後でも指定できる
+PREPARE_ONLY=false
+POSARGS=()
+for a in "$@"; do
+  if [ "$a" = "--prepare-only" ]; then PREPARE_ONLY=true; else POSARGS+=("$a"); fi
+done
+set -- "${POSARGS[@]}"
 TASK_ID="${1:?TaskId required}"
 ATTEMPT="${2:-1}"
 # パスや埋め込みコードに使うため、タスクIDと試行回数の形式を検証する
@@ -137,6 +144,11 @@ except Exception:
   (cd "$WT_PATH" && bash "$SCRIPT_DIR/git-state.sh" --run "$WT_BRANCH" --parent "$PARENT_REF" --other-runs "$OTHER_RUNS") > "$RUN_DIR/git-state.txt"
 else
   bash "$SCRIPT_DIR/git-state.sh" > "$RUN_DIR/git-state.txt"
+fi
+
+# --prepare-only: guard・git-state・tmp を用意したところで終える(子は起動せず、done も書かない)
+if [ "$PREPARE_ONLY" = true ]; then
+  exit 0
 fi
 
 CMD_TEMPLATE=$(jq -r '.child_agent.command_template' .agents/workflow/config.json 2>/dev/null || \

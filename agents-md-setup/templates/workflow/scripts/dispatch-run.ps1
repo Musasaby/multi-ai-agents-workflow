@@ -1,6 +1,7 @@
 ﻿param(
     [Parameter(Mandatory = $true)][string]$TaskId,
-    [int]$Attempt = 1
+    [int]$Attempt = 1,
+    [switch]$PrepareOnly
 )
 . "$PSScriptRoot/childprofile.ps1"
 # パスや埋め込みに使うため、タスクIDと試行回数の形式を検証する
@@ -105,6 +106,12 @@ if ($wtPath) {
     $gitState = & pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1"
 }
 [System.IO.File]::WriteAllText((Join-Path (Get-Location) "$runDir/git-state.txt"), (($gitState -join "`n") + "`n"), [System.Text.UTF8Encoding]::new($false))
+# -PrepareOnly: guard・git-state・tmp を用意したところで終える(子は起動せず、done も書かない)
+if ($PrepareOnly) {
+    $prepBase = if ($wtPath) { Join-Path $wtPath $runDir } else { Join-Path (Get-Location).Path $runDir }
+    $null = New-Item -ItemType Directory -Force (Join-Path $prepBase "tmp")
+    exit 0
+}
 $prompt = Get-Content $promptPath -Raw
 $config = Get-Content ".agents/workflow/config.json" -Raw | ConvertFrom-Json
 # child_agent.isolate_xdg が true のときだけ、子CLIの設定・データの置き場所をプロジェクト内に切り替える
