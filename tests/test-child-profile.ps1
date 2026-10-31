@@ -17,12 +17,17 @@ function Set-ChildAgent {
 
 # Invoke-Profile: Get-ChildProfile を呼び $script:Prof / $script:Err / $script:Code を設定する
 function Invoke-Profile {
+    param([string]$Name = '')
     $script:Prof = $null
     $script:Err = ''
     $script:Code = 0
     . "$script:Proj/.agents/workflow/scripts/childprofile.ps1"
     try {
-        $script:Prof = Get-ChildProfile -Root $script:Proj
+        if ($Name) {
+            $script:Prof = Get-ChildProfile -Root $script:Proj -Name $Name
+        } else {
+            $script:Prof = Get-ChildProfile -Root $script:Proj
+        }
     } catch {
         $script:Code = 1
         $script:Err = $_.Exception.Message
@@ -57,6 +62,21 @@ Invoke-TestCase "profile: 未定義の名前は exit 1" {
     Set-ChildAgent "nope" 'opencode run "{prompt}"'
     Invoke-Profile
     Assert-Eq 1 $script:Code "unknown profile rejected"
+    Assert-Contains $script:Err "Unknown child profile: nope (defined: auto, claude-stream-json, opencode, plain, subagent)" "message"
+}
+
+Invoke-TestCase "profile: プロファイル名の上書きが config.json の profile より優先される" {
+    Set-ChildAgent "opencode" 'opencode run "{prompt}"'
+    Invoke-Profile "subagent"
+    Assert-Eq 0 $script:Code "exit: $($script:Err)"
+    Assert-Eq "subagent" $script:Prof.Name "name overridden by -Name"
+    Assert-Eq "True" $script:Prof.AgentsMdImports "agents_md_imports of subagent"
+}
+
+Invoke-TestCase "profile: 上書きに未定義の名前を渡すと exit 1" {
+    Set-ChildAgent "opencode" 'opencode run "{prompt}"'
+    Invoke-Profile "nope"
+    Assert-Eq 1 $script:Code "unknown -Name rejected"
     Assert-Contains $script:Err "Unknown child profile: nope (defined: auto, claude-stream-json, opencode, plain, subagent)" "message"
 }
 
