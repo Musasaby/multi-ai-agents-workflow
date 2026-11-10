@@ -63,6 +63,8 @@
 |------|------|-----------|
 | `child_agent.command_template` | 子エージェントCLIのコマンドテンプレート。`{prompt}` はプロンプト本文、`{prompt_file}` は prompt.md の絶対パス(`/` 区切り)に展開される。どちらも無ければプロンプトを stdin で渡す | `opencode run "{prompt}"` |
 | `child_agent.profile` | 子CLIのプロファイル名。出力の変換方法とログからの検知パターンを決める。未指定・空は `auto`(「子CLIのプロファイル」を参照) | `""` |
+| `child_agent.subagent` | 子の実行を親のサブエージェント機能(Claude Code の Agent ツール等)に任せるか。`auto`: 親が `dispatch-start` に `--subagent-capable` を付け、かつ子プロファイルの出力形式が `claude-stream-json` のときだけ使う。`always`: `--subagent-capable` があれば出力形式によらず使う。`never`: 使わず常に子CLIを起動する。未指定・他の値は `auto` 扱い。テンプレートの config.json には書かれていないので、変えたいときに足す | `auto` |
+| `child_agent.subagent_model` | サブエージェントで実行するときのモデル名。未指定・空なら親ツールの既定のモデル。テンプレートの config.json には書かれていないので、変えたいときに足す | 未指定 |
 | `child_agent.timeout_seconds` | 子エージェント実行のタイムアウト(秒)。`dispatch-wait` が判定する | `1800` |
 | `child_agent.isolate_xdg` | `true` なら `dispatch-run` が子CLIの `XDG_CONFIG_HOME` / `XDG_DATA_HOME` を `.agents/workflow/.config` に切り替える(sandbox で `~/.config` 等に書けない環境向け)。切り替えると `~/.local/share/<CLI>/auth.json` 等の認証情報が見えなくなる。未指定は `false` | `false` |
 | `child_agent.healthcheck_command` | `dispatch-start` が起動前に実行する疎通確認のコマンド。空なら省略 | `""` |
@@ -105,6 +107,7 @@ Git Bash を使うなら `"C:/Program Files/Git/usr/bin/bash.exe" ./x.sh "{promp
 | `opencode` | `opencode run`。テキスト出力のまま `output.log` に書く。ツール実行の ANSI 色付きマーカー行・`permission requested ... auto-rejecting` 等を検知する |
 | `claude-stream-json` | Claude Code(`claude -p ... --output-format stream-json --verbose`)。JSON 行を `[tool_use]` / `[tool_result]` 等の行に変換する。`AGENTS.md` の `@` 参照(import)を子が解決できる |
 | `plain` | 出力形式が不明な CLI。出力をそのまま書き、ログに依存する検知はすべて無効 |
+| `subagent` | 親のサブエージェント機能で実行した run 用(`runs/<ID>-<N>/launcher` が `subagent` の run は、`dispatch-check` が config.json の `profile` によらずこのプロファイルで判定する)。ツール実行のログが無いため、ログに依存する検知はすべて無効。`AGENTS.md` の `@` 参照は解決できる |
 
 **定義ファイル**: 組み込みは `.agents/workflow/scripts/child-profiles.json`。利用先で追加・上書きするときは
 `.agents/workflow/child-profiles.json` を置く(組み込みと同じ形式のオブジェクト)。同名のプロファイルは
