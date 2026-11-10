@@ -17,6 +17,8 @@ config.json の `max_parallel` が 2 以上のとき、`next-task` は `Next: di
      ```
      成功すると `Next: review <ID>` が出る
    - **`Next: review`**: `task-state <ID> review` を実行し、`/agent-review-commit <ID>` に進む
+   - サブエージェントの run(`Launcher: subagent`)は `dispatch-wait` の代わりに完了通知を待ち、
+     `dispatch-finish` を実行する(`agent-dispatch/references/subagent.md`)
 3. 完了の処理(collect・レビュー・コミット)は**1件ずつ**行う。collect は本体の作業ツリーが
    クリーンなときだけ実行できるので、前のタスクをコミットしてから次を collect する
 
