@@ -51,6 +51,39 @@ CONFIG_PATH_PY="$(to_py_path "$CONFIG_PATH")"
 TEMPLATE_PATH_PY="$(to_py_path "$TEMPLATE_PATH")"
 PROMPT_PATH_PY="$(to_py_path "$PROMPT_PATH")"
 
+# runs/<ID>-<N>/launcher が subagent の run は、prompt.md の末尾にサブエージェント用の節を足す
+# 引数: run ディレクトリ(絶対パス)
+append_subagent_section() {
+    local run_dir="$1"
+    [ -f "$run_dir/launcher" ] || return 0
+    [ "$(tr -d '[:space:]' < "$run_dir/launcher")" = "subagent" ] || return 0
+    local workdir
+    workdir="$ROOT"
+    if [ -f "$run_dir/worktree.txt" ]; then
+        local wt
+        wt="$(sed -n 's/^path //p' "$run_dir/worktree.txt" | head -n 1 | tr -d '\r')"
+        [ -n "$wt" ] && workdir="$wt"
+    fi
+    python3 - "$(to_py_path "$workdir")" "$(to_py_path "$run_dir")" "$(to_py_path "$SCRIPT_DIR/dispatch-subagent-template.md")" <<'PY'
+import os, sys
+workdir, run_dir, template_path = sys.argv[1:4]
+workdir = workdir.replace('\\', '/').rstrip('/')
+run_dir = run_dir.replace('\\', '/').rstrip('/')
+run_name = run_dir.rsplit('/', 1)[-1]
+tmp_dir = workdir + '/.agents/workflow/runs/' + run_name + '/tmp'
+output_log = run_dir + '/output.log'
+with open(template_path, encoding='utf-8') as f:
+    section = f.read()
+for key, value in (('{workdir}', workdir), ('{tmp_dir}', tmp_dir), ('{output_log}', output_log)):
+    section = section.replace(key, value)
+prompt_path = os.path.join(run_dir, 'prompt.md')
+with open(prompt_path, encoding='utf-8', newline='') as f:
+    text = f.read()
+with open(prompt_path, 'w', encoding='utf-8', newline='\n') as f:
+    f.write(text.rstrip('\n') + '\n\n' + section)
+PY
+}
+
 # --- PR mode: PR作成を子に単発依頼するプロンプトを生成する ---
 # 対象タスク = state.json で done かつ commit が git log origin/<base>..HEAD に含まれるもの。
 # 出力先は runs/pr-<連番>-1/prompt.md。stdout に "RunId: pr-<連番>" を出す。
@@ -134,6 +167,7 @@ for key, value in (('{task_list}', '\n'.join(selected)), ('{requirement_list}', 
 with open(prompt_path, 'w', encoding='utf-8', newline='\n') as f:
     f.write(text)
 PY
+    append_subagent_section "$PR_RUN_DIR"
     echo "Generated: $PR_RUN_DIR/prompt.md"
     echo "RunId: pr-${PR_N}"
     exit 0
@@ -488,5 +522,7 @@ result = result.replace('{verify_instruction}', verify_instruction)
 with open('$PROMPT_PATH_PY', 'w', encoding='utf-8', newline='\n') as f:
     f.write(result)
 " "$FIX_NOTES" "$TASK_SECTION" "$HANDOFF_REPORTS" "$VERIFY_LINES"
+
+append_subagent_section "$RUN_DIR"
 
 echo "Generated: $PROMPT_PATH"

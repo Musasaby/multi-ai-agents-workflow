@@ -14,6 +14,32 @@ $ConfigPath = "$Root/.agents/workflow/config.json"
 $RunsBase = "$Root/.agents/workflow/runs"
 . "$PSScriptRoot/tasklib.ps1"
 
+# runs/<ID>-<N>/launcher が subagent の run は、prompt.md の末尾にサブエージェント用の節を足す
+function Add-SubagentSection {
+    param([string]$RunDirPath)
+    $launcherPath = Join-Path $RunDirPath 'launcher'
+    if (-not (Test-Path -LiteralPath $launcherPath -PathType Leaf)) { return }
+    if ((Get-Content -LiteralPath $launcherPath -Raw -Encoding UTF8).Trim() -ne 'subagent') { return }
+    $workdir = "$Root"
+    $wtFile = Join-Path $RunDirPath 'worktree.txt'
+    if (Test-Path -LiteralPath $wtFile -PathType Leaf) {
+        foreach ($l in (Get-Content -LiteralPath $wtFile -Encoding UTF8)) {
+            if ($l -match '^path (.+)$') { $workdir = $Matches[1].Trim(); break }
+        }
+    }
+    $workdir = $workdir.Replace('\', '/').TrimEnd('/')
+    $runDirFwd = "$RunDirPath".Replace('\', '/').TrimEnd('/')
+    $runName = $runDirFwd.Substring($runDirFwd.LastIndexOf('/') + 1)
+    $section = Get-Content "$PSScriptRoot/dispatch-subagent-template.md" -Raw -Encoding UTF8
+    $section = $section.Replace('{workdir}', $workdir)
+    $section = $section.Replace('{tmp_dir}', "$workdir/.agents/workflow/runs/$runName/tmp")
+    $section = $section.Replace('{output_log}', "$runDirFwd/output.log")
+    $promptFile = Join-Path $RunDirPath 'prompt.md'
+    $text = [System.IO.File]::ReadAllText($promptFile, [System.Text.Encoding]::UTF8)
+    $text = $text.TrimEnd("`n", "`r") + "`n`n" + $section.Replace("`r`n", "`n")
+    [System.IO.File]::WriteAllText($promptFile, $text, [System.Text.UTF8Encoding]::new($false))
+}
+
 # --- PR mode: PR作成を子に単発依頼するプロンプトを生成する ---
 # 対象タスク = state.json で done かつ commit が git log origin/<base>..HEAD に含まれるもの。
 # 出力先は runs/pr-<連番>-1/prompt.md。stdout に "RunId: pr-<連番>" を出す。
@@ -88,6 +114,7 @@ if ($Pr) {
     $text = $text.Replace('{base_ref}', $baseRef)
     $text = $text.Replace('{run_dir}', ".agents/workflow/runs/pr-$prN-1")
     [System.IO.File]::WriteAllText("$prRunDir/prompt.md", $text, [System.Text.UTF8Encoding]::new($false))
+    Add-SubagentSection $prRunDir
     Write-Output "Generated: $prRunDir/prompt.md"
     Write-Output "RunId: pr-$prN"
     exit 0
@@ -389,5 +416,6 @@ $generated = $generated.Replace('{handoff_reports}', $handoffReports)
 $generated = $generated.Replace('{verify_instruction}', $verifyInstruction)
 
 [System.IO.File]::WriteAllText($PromptPath, $generated, [System.Text.UTF8Encoding]::new($false))
+Add-SubagentSection $RunDir
 Write-Output "Generated: $PromptPath"
 exit 0
