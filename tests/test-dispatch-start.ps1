@@ -288,4 +288,41 @@ Invoke-TestCase "start: max_parallel 2 で healthcheck が失敗すると exit 3
     Wait-Done T1-1
 }
 
+Invoke-TestCase "start: subagent always + -SubagentCapable は子を起動せず subagent で準備する" {
+    Initialize-StartProject 'T1:pending', 'T2:pending'
+    Set-ChildCfg subagent always
+    Set-ChildCfg subagent_model sonnet
+    Invoke-Script dispatch-start.ps1 -TaskId T1 -SubagentCapable
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Out "Launcher: subagent" "Launcher line"
+    Assert-Contains $script:Out "Model: sonnet" "Model line"
+    Assert-Eq "Next: subagent T1 1" ((Get-LastLine $script:Out).Trim()) "last line"
+    Assert-NotContains $script:Out "Watch all:" "no Watch all"
+    Assert-FileExists "$script:Proj/.agents/workflow/runs/T1-1/guard.sha256" "guard.sha256"
+    Assert-FileExists "$script:Proj/.agents/workflow/runs/T1-1/git-state.txt" "git-state.txt"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/runs/T1-1/done" "child not started"
+}
+
+Invoke-TestCase "start: subagent auto + opencode プロファイルは -SubagentCapable があっても cli" {
+    Initialize-StartProject 'T1:pending', 'T2:pending'
+    Set-ChildCfg profile opencode
+    Set-ChildCfg subagent auto
+    Invoke-Script dispatch-start.ps1 -TaskId T1 -SubagentCapable
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Out "Launcher: cli" "Launcher line"
+    Assert-Eq "Next: wait" ((Get-LastLine $script:Out).Trim()) "last line"
+    Wait-Done T1-1
+}
+
+Invoke-TestCase "start: subagent never + claude-stream-json プロファイルは -SubagentCapable があっても cli" {
+    Initialize-StartProject 'T1:pending', 'T2:pending'
+    Set-ChildCfg profile claude-stream-json
+    Set-ChildCfg subagent never
+    Invoke-Script dispatch-start.ps1 -TaskId T1 -SubagentCapable
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Out "Launcher: cli" "Launcher line"
+    Assert-Eq "Next: wait" ((Get-LastLine $script:Out).Trim()) "last line"
+    Wait-Done T1-1
+}
+
 Show-Summary

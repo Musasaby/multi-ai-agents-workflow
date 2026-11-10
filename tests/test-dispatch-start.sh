@@ -309,6 +309,43 @@ t_parallel_healthcheck_cleanup() {
     wait_done T1-1
 }
 
+t_subagent_always() {
+    setup "T1:pending" "T2:pending"
+    set_child_cfg subagent always
+    set_child_cfg subagent_model sonnet
+    run_script dispatch-start.sh T1 --subagent-capable
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "Launcher: subagent" "Launcher line"
+    assert_contains "$OUT" "Model: sonnet" "Model line"
+    assert_eq "Next: subagent T1 1" "$(printf '%s\n' "$OUT" | tail -1 | tr -d '\r')" "last line"
+    assert_not_contains "$OUT" "Watch all:" "no Watch all"
+    assert_file_exists "$PROJ/.agents/workflow/runs/T1-1/guard.sha256" "guard.sha256"
+    assert_file_exists "$PROJ/.agents/workflow/runs/T1-1/git-state.txt" "git-state.txt"
+    assert_file_absent "$PROJ/.agents/workflow/runs/T1-1/done" "child not started"
+}
+
+t_subagent_auto_opencode_cli() {
+    setup "T1:pending" "T2:pending"
+    set_child_cfg profile opencode
+    set_child_cfg subagent auto
+    run_script dispatch-start.sh T1 --subagent-capable
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "Launcher: cli" "Launcher line"
+    assert_eq "Next: wait" "$(printf '%s\n' "$OUT" | tail -1 | tr -d '\r')" "last line"
+    wait_done T1-1
+}
+
+t_subagent_never_stream_json_cli() {
+    setup "T1:pending" "T2:pending"
+    set_child_cfg profile claude-stream-json
+    set_child_cfg subagent never
+    run_script dispatch-start.sh T1 --subagent-capable
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "Launcher: cli" "Launcher line"
+    assert_eq "Next: wait" "$(printf '%s\n' "$OUT" | tail -1 | tr -d '\r')" "last line"
+    wait_done T1-1
+}
+
 echo "test-dispatch-start.sh"
 test_case "start: 起動して prompt.md・in_progress・done ができる" t_start_ok
 test_case "start: 戻った時点で guard.sha256 がある" t_start_guard_ready
@@ -329,4 +366,7 @@ test_case "start: --pr で main 上なら exit 12" t_pr_on_main
 test_case "start: max_parallel 2 は未コミットの変更があっても worktree の run を起動する" t_parallel_dirty_ok
 test_case "start: max_parallel 2 で worktree が既にあれば exit 61" t_parallel_worktree_exists
 test_case "start: max_parallel 2 で healthcheck が失敗すると exit 30 で worktree・ブランチが残らない" t_parallel_healthcheck_cleanup
+test_case "start: subagent always + --subagent-capable は子を起動せず subagent で準備する" t_subagent_always
+test_case "start: subagent auto + opencode プロファイルは --subagent-capable があっても cli" t_subagent_auto_opencode_cli
+test_case "start: subagent never + claude-stream-json プロファイルは --subagent-capable があっても cli" t_subagent_never_stream_json_cli
 summary
