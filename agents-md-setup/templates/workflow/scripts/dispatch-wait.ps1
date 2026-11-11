@@ -9,6 +9,7 @@
 #   -Interval の既定は 15(ポーリング間隔)
 # exit: 0/4/5/6/7/8 = dispatch-check.ps1 の結果をそのまま(done があった場合)
 #       1 = 使い方不備、または run が起動されていない(guard.sha256 が無い)
+#           、またはサブエージェントの run(launcher が subagent。dispatch-finish を使う)
 #       2 = まだ実行中(この呼び出しの待ち時間が -MaxWait に達した)
 #       3 = 経過が config.json の child_agent.timeout_seconds を超えた
 # exit 2/3 のとき、stdout に状況行(Run / Status: running / Elapsed / Log idle / Log)を
@@ -43,6 +44,14 @@ function Get-SecondsSince {
     } catch {
         return 0
     }
+}
+
+# サブエージェントの run は待たない(完了は dispatch-finish で記録する)
+$launcherPath = "$runDir/launcher"
+if ((Test-Path -LiteralPath $launcherPath -PathType Leaf) -and
+    ([System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $launcherPath)).Trim() -eq 'subagent')) {
+    [Console]::Error.WriteLine("subagent run: use dispatch-finish after the subagent returns")
+    exit 1
 }
 
 # run が dispatch-run で起動されていなければ待てない(guard.sha256 は dispatch-run が

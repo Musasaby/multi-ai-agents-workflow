@@ -31,8 +31,11 @@ description: タスクIDを引数に取り、子エージェント(OpenCode等�
 .agents/workflow/scripts/dispatch-start.sh T3
 ```
 
+サブエージェント機能を持つ親は `--subagent-capable` を付ける。
+
 stdout の最後の `Next:` 行で分岐する(exit code と reason は `.agents/workflow/README.md` の dispatch-start の節):
 
+- **`Next: subagent <ID> <N>`**: [サブエージェントでの起動](references/subagent.md)の手順に進む
 - **`Next: wait`**: 起動できた。Run ID・`Log:`・`Watch:` の行をユーザーに報告して §2 へ。`Watch all:` の行(1回起動すれば以後の run のログもまとめて流れる)も利用者に伝える
 - **`Next: switch-branch` / `Next: escalate`**: 起動していない。reason と stderr をユーザーに説明して中断する。
   `reason=launch` は state.json が `in_progress` のままなので、原因を直して同じ引数で再実行できる

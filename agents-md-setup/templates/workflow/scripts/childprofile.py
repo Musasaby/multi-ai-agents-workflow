@@ -55,9 +55,9 @@ def _read_child_agent(root):
     return (profile if isinstance(profile, str) else ''), (template if isinstance(template, str) else '')
 
 
-def load_profile(root):
-    name, command_template = _read_child_agent(root)
-    name = name or DEFAULT_PROFILE
+def load_profile(root, name=None):
+    config_name, command_template = _read_child_agent(root)
+    name = name or config_name or DEFAULT_PROFILE
 
     builtin = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'child-profiles.json')
     definitions = _load_definitions(builtin)
@@ -88,11 +88,14 @@ def load_profile(root):
 
 
 def main(argv):
-    if len(argv) != 2:
-        sys.stderr.write('Usage: childprofile.py <root>\n')
+    override = None
+    if len(argv) == 4 and argv[2] == '--profile':
+        override = argv[3]
+    elif len(argv) != 2:
+        sys.stderr.write('Usage: childprofile.py <root> [--profile <name>]\n')
         return 1
     try:
-        p = load_profile(argv[1])
+        p = load_profile(argv[1], override)
     except ProfileError as e:
         sys.stderr.write('%s\n' % e)
         return 1

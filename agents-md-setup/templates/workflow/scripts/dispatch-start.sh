@@ -3,7 +3,17 @@ set -uo pipefail
 
 # 子エージェントの起動までの事前チェックを順に行い、デタッチ起動する。失敗した段階で止める
 # (止めたときは state.json を変えず、子も起動しない)。
-# Usage: dispatch-start.sh <TaskId> [Attempt] | dispatch-start.sh --pr
+# Usage: dispatch-start.sh <TaskId> [Attempt] [--subagent-capable] | dispatch-start.sh --pr [--subagent-capable]
+#   --subagent-capable: 親がサブエージェントを起動できるとき付ける。起動方法(launcher)を次で決め、
+#     プロンプト生成の前に runs/<ID>-<N>/launcher へ cli か subagent を1行で書く
+#     (--pr は値を dispatch-prompt-gen --pr --launcher に渡し、prompt-gen が runs/pr-<N>-1/launcher を書く)。
+#     config.json の child_agent.subagent(auto / always / never。無い・他の値は auto)が never か、
+#     このオプションが無ければ cli。always なら subagent。auto は childprofile の出力形式が
+#     claude-stream-json のとき subagent、それ以外は cli
+#   launcher が subagent のときは、デタッチ起動の代わりに dispatch-run --prepare-only を同期で実行し(失敗は exit 60・
+#     Next: escalate reason=launch)、Run:・Launcher: subagent・Prompt:・Workdir:・Output:・Model:
+#     (child_agent.subagent_model。無い・空なら default)を出して `Next: subagent <ID> <N>` で exit 0 する
+#     (疎通確認・ウォームアップは行わない)。cli のときは出力に `Launcher: cli` 行が加わるだけ
 #   --pr: PR 作成の run(pr-<N>-1)を起動する(タスクの状態確認・task-state は行わず、ウォームアップもしない)
 # config.json の max_parallel が 2 以上で --pr でないときは、作業ツリーの確認を飛ばし、
 # タスクの状態の確認の後に dispatch-worktree create で worktree の run にする(Carried: 行と Worktree: 行を出す)
@@ -22,6 +32,13 @@ set -uo pipefail
 
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
+
+SUBAGENT_CAPABLE=false
+ARGS=()
+for a in "$@"; do
+    if [ "$a" = "--subagent-capable" ]; then SUBAGENT_CAPABLE=true; else ARGS+=("$a"); fi
+done
+set -- ${ARGS[@]+"${ARGS[@]}"}
 
 PR_MODE=false
 if [ "${1:-}" = "--pr" ]; then
@@ -163,8 +180,30 @@ run_check_command() {
     return "$code"
 }
 
+# 起動方法(launcher)の決定
+to_py_path() {
+    if command -v cygpath > /dev/null 2>&1; then cygpath -m "$1"; else echo "$1"; fi
+}
+LAUNCHER=cli
+if [ "$SUBAGENT_CAPABLE" = true ]; then
+    SUB_MODE="$(cfg_get subagent)"
+    case "$SUB_MODE" in
+        always) LAUNCHER=subagent ;;
+        never) LAUNCHER=cli ;;
+        *)
+            FORMAT="$(python3 -I "$(to_py_path "$SCRIPT_DIR/childprofile.py")" . 2> /dev/null | tr -d '\r' | sed -n 2p)"
+            if [ "$FORMAT" = "claude-stream-json" ]; then LAUNCHER=subagent; fi
+            ;;
+    esac
+fi
+if [ "$PR_MODE" = false ]; then
+    mkdir -p "$RUN_DIR"
+    printf '%s\n' "$LAUNCHER" > "$RUN_DIR/launcher"
+fi
+
 # 3a. 疎通確認
 HEALTHCHECK="$(cfg_get healthcheck_command)"
+if [ "$LAUNCHER" = subagent ]; then HEALTHCHECK=""; fi
 if [ -n "$HEALTHCHECK" ]; then
     if ! run_check_command "$HEALTHCHECK"; then
         abort_worktree
@@ -173,9 +212,20 @@ if [ -n "$HEALTHCHECK" ]; then
     fi
 fi
 
-# 3b. ウォームアップ(このサイクルの最初の dispatch のときだけ)
+# 3b. ウォームアップ(このサイクルの最初の CLI の dispatch のときだけ)
+# CLI の run = guard.sha256 があり、launcher が無いか subagent でない run
+has_cli_run() {
+    local g d
+    for g in .agents/workflow/runs/*/guard.sha256; do
+        [ -f "$g" ] || continue
+        d="${g%/guard.sha256}"
+        if [ -f "$d/launcher" ] && [ "$(tr -d '[:space:]' < "$d/launcher")" = subagent ]; then continue; fi
+        return 0
+    done
+    return 1
+}
 WARMUP="$(cfg_get warmup_command)"
-if [ "$PR_MODE" = false ] && [ -n "$WARMUP" ] && ! compgen -G ".agents/workflow/runs/*/guard.sha256" > /dev/null; then
+if [ "$PR_MODE" = false ] && [ "$LAUNCHER" = cli ] && [ -n "$WARMUP" ] && ! has_cli_run; then
     if ! run_check_command "$WARMUP"; then
         abort_worktree
         echo "Next: escalate reason=warmup"
@@ -185,7 +235,7 @@ fi
 
 # 4. プロンプト生成
 if [ "$PR_MODE" = true ]; then
-    GEN_OUT="$(bash "$SCRIPT_DIR/dispatch-prompt-gen.sh" --pr)"
+    GEN_OUT="$(bash "$SCRIPT_DIR/dispatch-prompt-gen.sh" --pr --launcher "$LAUNCHER")"
 else
     GEN_OUT="$(bash "$SCRIPT_DIR/dispatch-prompt-gen.sh" "$TASK_ID" "$ATTEMPT")"
 fi
@@ -214,6 +264,27 @@ else
     fi
 fi
 
+# 6'. サブエージェントでの起動(子は起動せず、guard と git-state の記録だけ同期で行う)
+if [ "$LAUNCHER" = subagent ]; then
+    rm -f "$RUN_DIR/guard.sha256"
+    if ! bash "$SCRIPT_DIR/dispatch-run.sh" --prepare-only "$TASK_ID" "$ATTEMPT" > /dev/null 2>&1; then
+        echo "dispatch-run --prepare-only failed: $RUN_DIR" >&2
+        echo "Next: escalate reason=launch"
+        exit 60
+    fi
+    ROOT_ABS="$(to_py_path "$PWD")"
+    if [ "$PARALLEL" = true ]; then WORKDIR="$ROOT_ABS/$RUN_DIR/worktree"; else WORKDIR="$ROOT_ABS"; fi
+    SUB_MODEL="$(cfg_get subagent_model)"
+    echo "Run: ${TASK_ID}-${ATTEMPT}"
+    echo "Launcher: subagent"
+    echo "Prompt: $ROOT_ABS/$RUN_DIR/prompt.md"
+    echo "Workdir: $WORKDIR"
+    echo "Output: $ROOT_ABS/$RUN_DIR/output.log"
+    echo "Model: ${SUB_MODEL:-default}"
+    echo "Next: subagent ${TASK_ID} ${ATTEMPT}"
+    exit 0
+fi
+
 # 6. デタッチ起動
 rm -f "$RUN_DIR/guard.sha256"
 nohup bash "$SCRIPT_DIR/dispatch-run.sh" "$TASK_ID" "$ATTEMPT" > /dev/null 2>&1 &
@@ -233,6 +304,7 @@ while [ ! -f "$RUN_DIR/guard.sha256" ]; do
 done
 
 echo "Run: ${TASK_ID}-${ATTEMPT}"
+echo "Launcher: cli"
 echo "Log: $RUN_DIR/output.log"
 echo "Watch: tail -f $RUN_DIR/output.log"
 echo "Watch all: bash .agents/workflow/scripts/workflow-logs.sh"

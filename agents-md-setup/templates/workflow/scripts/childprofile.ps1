@@ -28,8 +28,9 @@ function Read-ChildProfileDefinitions {
 }
 
 function Get-ChildProfile {
-    param([Parameter(Mandatory)][string]$Root)
+    param([Parameter(Mandatory)][string]$Root, [string]$Name = '')
 
+    $override = $Name
     $name = ''
     $commandTemplate = ''
     try {
@@ -43,6 +44,7 @@ function Get-ChildProfile {
         $name = ''
         $commandTemplate = ''
     }
+    if ($override) { $name = $override }
     if (-not $name) { $name = 'auto' }
 
     $definitions = Read-ChildProfileDefinitions (Join-Path $script:ChildProfileScriptDir 'child-profiles.json')

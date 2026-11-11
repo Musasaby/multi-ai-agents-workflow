@@ -198,6 +198,28 @@ t_warmup_once() {
     assert_eq 1 "$(wc -l < "$PROJ/.agents/warmup.log" | tr -d ' ')" "warmup.log lines"
 }
 
+t_warmup_after_subagent() {
+    setup "T1:pending" "T2:pending"
+    set_child_cfg warmup_command 'echo w >> .agents/warmup.log'
+    set_child_cfg subagent always
+    run_script dispatch-start.sh T1 --subagent-capable
+    assert_eq 0 "$CODE" "exit code (T1): $ERR"
+    assert_contains "$OUT" "Launcher: subagent" "Launcher line (T1)"
+    assert_file_absent "$PROJ/.agents/warmup.log" "no warmup for subagent run"
+    printf '## 完了報告
+- 変更ファイル: なし
+' > "$PROJ/.agents/workflow/runs/T1-1/report.md"
+    write_state "T1:done" "T2:pending"
+    set_state_branch develop/t
+    set_child_cfg subagent never
+    run_script dispatch-start.sh T2
+    assert_eq 0 "$CODE" "exit code (T2): $ERR"
+    wait_done T2-1
+    assert_file_exists "$PROJ/.agents/workflow/runs/T2-1/done" "T2 done"
+    assert_file_exists "$PROJ/.agents/warmup.log" "warmup.log"
+    assert_eq 1 "$(wc -l < "$PROJ/.agents/warmup.log" | tr -d ' ')" "warmup.log lines"
+}
+
 t_warmup_fail() {
     setup "T1:pending" "T2:pending"
     set_child_cfg warmup_command 'exit 1'
@@ -309,6 +331,60 @@ t_parallel_healthcheck_cleanup() {
     wait_done T1-1
 }
 
+t_subagent_always() {
+    setup "T1:pending" "T2:pending"
+    set_child_cfg subagent always
+    set_child_cfg subagent_model sonnet
+    run_script dispatch-start.sh T1 --subagent-capable
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "Launcher: subagent" "Launcher line"
+    assert_contains "$OUT" "Model: sonnet" "Model line"
+    local root_abs
+    root_abs="$(py_path "$PROJ")"
+    assert_eq "$root_abs/.agents/workflow/runs/T1-1/prompt.md" "$(printf '%s\n' "$OUT" | sed -n 's/^Prompt: //p' | tr -d '\r')" "Prompt line"
+    assert_eq "$root_abs" "$(printf '%s\n' "$OUT" | sed -n 's/^Workdir: //p' | tr -d '\r')" "Workdir line"
+    assert_eq "$root_abs/.agents/workflow/runs/T1-1/output.log" "$(printf '%s\n' "$OUT" | sed -n 's/^Output: //p' | tr -d '\r')" "Output line"
+    assert_eq "Next: subagent T1 1" "$(printf '%s\n' "$OUT" | tail -1 | tr -d '\r')" "last line"
+    assert_not_contains "$OUT" "Watch all:" "no Watch all"
+    assert_file_exists "$PROJ/.agents/workflow/runs/T1-1/guard.sha256" "guard.sha256"
+    assert_file_exists "$PROJ/.agents/workflow/runs/T1-1/git-state.txt" "git-state.txt"
+    assert_file_absent "$PROJ/.agents/workflow/runs/T1-1/done" "child not started"
+}
+
+t_subagent_auto_opencode_cli() {
+    setup "T1:pending" "T2:pending"
+    set_child_cfg profile opencode
+    set_child_cfg subagent auto
+    run_script dispatch-start.sh T1 --subagent-capable
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "Launcher: cli" "Launcher line"
+    assert_eq "Next: wait" "$(printf '%s\n' "$OUT" | tail -1 | tr -d '\r')" "last line"
+    wait_done T1-1
+}
+
+t_subagent_never_stream_json_cli() {
+    setup "T1:pending" "T2:pending"
+    set_child_cfg profile claude-stream-json
+    set_child_cfg subagent never
+    run_script dispatch-start.sh T1 --subagent-capable
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "Launcher: cli" "Launcher line"
+    assert_eq "Next: wait" "$(printf '%s\n' "$OUT" | tail -1 | tr -d '\r')" "last line"
+    wait_done T1-1
+}
+
+t_pr_subagent_section() {
+    setup_pr
+    set_child_cfg subagent always
+    run_script dispatch-start.sh --pr --subagent-capable
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "Launcher: subagent" "Launcher line"
+    assert_eq "Next: subagent pr-1 1" "$(printf '%s\n' "$OUT" | tail -1 | tr -d '\r')" "last line"
+    assert_eq subagent "$(cat "$PROJ/.agents/workflow/runs/pr-1-1/launcher")" "launcher"
+    assert_contains "$(cat "$PROJ/.agents/workflow/runs/pr-1-1/prompt.md")" "## サブエージェントとして実行する場合の追加の指示" "subagent section in PR prompt"
+    assert_file_absent "$PROJ/.agents/workflow/runs/pr-1-1/done" "child not started"
+}
+
 echo "test-dispatch-start.sh"
 test_case "start: 起動して prompt.md・in_progress・done ができる" t_start_ok
 test_case "start: 戻った時点で guard.sha256 がある" t_start_guard_ready
@@ -323,10 +399,15 @@ test_case "start: 試行回数 0 は exit 1" t_attempt_zero
 test_case "start: リトライで fix-notes が無ければ stderr に案内を出す" t_retry_dirty_no_notes_msg
 test_case "start: healthcheck_command が失敗すれば exit 30" t_healthcheck_fail
 test_case "start: warmup_command は最初の dispatch だけ実行する" t_warmup_once
+test_case "start: サブエージェントの run の後の最初の CLI の run でウォームアップする" t_warmup_after_subagent
 test_case "start: warmup_command が失敗すれば exit 31" t_warmup_fail
 test_case "start: --pr は pr-<N> の run を起動する" t_pr_ok
 test_case "start: --pr で main 上なら exit 12" t_pr_on_main
 test_case "start: max_parallel 2 は未コミットの変更があっても worktree の run を起動する" t_parallel_dirty_ok
 test_case "start: max_parallel 2 で worktree が既にあれば exit 61" t_parallel_worktree_exists
 test_case "start: max_parallel 2 で healthcheck が失敗すると exit 30 で worktree・ブランチが残らない" t_parallel_healthcheck_cleanup
+test_case "start: subagent always + --subagent-capable は子を起動せず subagent で準備する" t_subagent_always
+test_case "start: subagent auto + opencode プロファイルは --subagent-capable があっても cli" t_subagent_auto_opencode_cli
+test_case "start: subagent never + claude-stream-json プロファイルは --subagent-capable があっても cli" t_subagent_never_stream_json_cli
+test_case "start: --pr --subagent-capable は pr の prompt.md にサブエージェント用の節を足す" t_pr_subagent_section
 summary

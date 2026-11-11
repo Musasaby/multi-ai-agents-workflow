@@ -23,7 +23,7 @@ with open(p, 'w', encoding='utf-8', newline='\n') as f:
 run_profile() {
     local out_file err_file
     out_file="$(mktemp)"; err_file="$(mktemp)"
-    (cd "$PROJ" && python3 .agents/workflow/scripts/childprofile.py .) > "$out_file" 2> "$err_file"
+    (cd "$PROJ" && python3 .agents/workflow/scripts/childprofile.py . "$@") > "$out_file" 2> "$err_file"
     CODE=$?
     OUT="$(cat "$out_file")"; ERR="$(cat "$err_file")"
     LINES_OUT=()
@@ -59,11 +59,28 @@ t_unknown_profile() {
     set_child_agent "nope" 'opencode run "{prompt}"'
     run_profile
     assert_eq 1 "$CODE" "unknown profile rejected"
-    assert_contains "$ERR" "Unknown child profile: nope (defined: auto, claude-stream-json, opencode, plain)" "message"
+    assert_contains "$ERR" "Unknown child profile: nope (defined: auto, claude-stream-json, opencode, plain, subagent)" "message"
+}
+
+t_profile_override() {
+    set_child_agent "opencode" 'opencode run "{prompt}"'
+    run_profile --profile subagent
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_eq "subagent" "${LINES_OUT[0]}" "name overridden by --profile"
+    assert_eq "true" "${LINES_OUT[6]}" "agents_md_imports of subagent"
+}
+
+t_profile_override_unknown() {
+    set_child_agent "opencode" 'opencode run "{prompt}"'
+    run_profile --profile nope
+    assert_eq 1 "$CODE" "unknown --profile rejected"
+    assert_contains "$ERR" "Unknown child profile: nope (defined: auto, claude-stream-json, opencode, plain, subagent)" "message"
 }
 
 echo "test-child-profile.sh"
 test_case "profile: 未指定は auto で、command_template に stream-json があれば claude-stream-json の出力形式" t_auto_default
 test_case "profile: 利用先の child-profiles.json が同名の組み込み定義を置き換える" t_custom_replaces_builtin
 test_case "profile: 未定義の名前は exit 1" t_unknown_profile
+test_case "profile: プロファイル名の上書きが config.json の profile より優先される" t_profile_override
+test_case "profile: 上書きに未定義の名前を渡すと exit 1" t_profile_override_unknown
 summary

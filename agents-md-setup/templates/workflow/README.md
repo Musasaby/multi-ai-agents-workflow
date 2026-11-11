@@ -11,6 +11,7 @@
 │   ├── dispatch-start.ps1 / .sh  事前チェック〜デタッチ起動
 │   ├── dispatch-run.ps1 / .sh
 │   ├── dispatch-wait.ps1 / .sh  子の完了待ち(done 検知後に dispatch-check)
+│   ├── dispatch-finish.ps1 / .sh  サブエージェントの run の完了(done を書いて dispatch-check)
 │   ├── dispatch-check.ps1 / .sh
 │   ├── git-state.ps1 / .sh  git 状態(HEAD・ブランチ・参照・config)の4行出力(dispatch-run/dispatch-check が使用)
 │   ├── dispatch-prompt-gen.ps1 / .sh
@@ -34,6 +35,7 @@
 │   └── workflow-archive.ps1 / .sh
 ├── runs/<タスクID>-<試行回数>/   ← 実行単位の生成物(.gitignore対象。PR作成の単発依頼は pr-<N>-1/)
 │   ├── prompt.md        生成プロンプト
+│   ├── launcher         起動方法の1行(`cli` か `subagent`。dispatch-start が書く。無ければ `cli` 扱い)
 │   ├── fix-notes.md     リトライ時のレビュー指摘(親が作成)
 │   ├── guard.sha256     起動時の管理ファイルの SHA-256(dispatch-run が作成、dispatch-check が改ざん検知に使う)
 │   ├── git-state.txt    起動時の git 状態の4行(git-state の出力。dispatch-run が作成、dispatch-check が改ざん検知に使う)
@@ -63,10 +65,12 @@
 |------|------|-----------|
 | `child_agent.command_template` | 子エージェントCLIのコマンドテンプレート。`{prompt}` はプロンプト本文、`{prompt_file}` は prompt.md の絶対パス(`/` 区切り)に展開される。どちらも無ければプロンプトを stdin で渡す | `opencode run "{prompt}"` |
 | `child_agent.profile` | 子CLIのプロファイル名。出力の変換方法とログからの検知パターンを決める。未指定・空は `auto`(「子CLIのプロファイル」を参照) | `""` |
+| `child_agent.subagent` | 子の実行を親のサブエージェント機能(Claude Code の Agent ツール等)に任せるか。`auto`: 親が `dispatch-start` に `--subagent-capable` を付け、かつ子プロファイルの出力形式が `claude-stream-json` のときだけ使う。`always`: `--subagent-capable` があれば出力形式によらず使う。`never`: 使わず常に子CLIを起動する。未指定・他の値は `auto` 扱い。テンプレートの config.json には書かれていないので、変えたいときに足す | `auto` |
+| `child_agent.subagent_model` | サブエージェントで実行するときのモデル名。未指定・空なら親ツールの既定のモデル。テンプレートの config.json には書かれていないので、変えたいときに足す | 未指定 |
 | `child_agent.timeout_seconds` | 子エージェント実行のタイムアウト(秒)。`dispatch-wait` が判定する | `1800` |
 | `child_agent.isolate_xdg` | `true` なら `dispatch-run` が子CLIの `XDG_CONFIG_HOME` / `XDG_DATA_HOME` を `.agents/workflow/.config` に切り替える(sandbox で `~/.config` 等に書けない環境向け)。切り替えると `~/.local/share/<CLI>/auth.json` 等の認証情報が見えなくなる。未指定は `false` | `false` |
 | `child_agent.healthcheck_command` | `dispatch-start` が起動前に実行する疎通確認のコマンド。空なら省略 | `""` |
-| `child_agent.warmup_command` | サイクルの最初の dispatch の前に1回だけ実行するコマンド(例: ビルドツールのデーモン起動・依存の取得など)。空なら省略 | `""` |
+| `child_agent.warmup_command` | サイクルの最初の dispatch(サブエージェントの run は数えない)の前に1回だけ実行するコマンド(例: ビルドツールのデーモン起動・依存の取得など)。空なら省略 | `""` |
 | `child_agent.idle_timeout_seconds` | 子のログ(`output.log`)が更新されない時間の上限(秒)。超えると `dispatch-run` が子を止め、`done` に `EXIT:idle-timeout` を記録する(`dispatch-check` は exit 4)。未指定・0 以下は無効。POSIX 版は python3 経路のみ対応 | `600` |
 | `child_agent.cli_log` | 子CLI自身のログファイルのパス(先頭の `~/` はホームディレクトリ。例: opencode は `~/.local/share/opencode/log/opencode.log`)。`dispatch-check` がエラー行を出す | 未指定 |
 | `test_command` | 子エージェントに実行させるテストコマンド。空ならタスクごとに親が指定。`quality_gate.steps` の test ステップと同じコマンドに揃える | `""` |
@@ -105,6 +109,7 @@ Git Bash を使うなら `"C:/Program Files/Git/usr/bin/bash.exe" ./x.sh "{promp
 | `opencode` | `opencode run`。テキスト出力のまま `output.log` に書く。ツール実行の ANSI 色付きマーカー行・`permission requested ... auto-rejecting` 等を検知する |
 | `claude-stream-json` | Claude Code(`claude -p ... --output-format stream-json --verbose`)。JSON 行を `[tool_use]` / `[tool_result]` 等の行に変換する。`AGENTS.md` の `@` 参照(import)を子が解決できる |
 | `plain` | 出力形式が不明な CLI。出力をそのまま書き、ログに依存する検知はすべて無効 |
+| `subagent` | 親のサブエージェント機能で実行した run 用(`runs/<ID>-<N>/launcher` が `subagent` の run は、`dispatch-check` が config.json の `profile` によらずこのプロファイルで判定する)。ツール実行のログが無いため、ログに依存する検知はすべて無効。`AGENTS.md` の `@` 参照は解決できる |
 
 **定義ファイル**: 組み込みは `.agents/workflow/scripts/child-profiles.json`。利用先で追加・上書きするときは
 `.agents/workflow/child-profiles.json` を置く(組み込みと同じ形式のオブジェクト)。同名のプロファイルは
@@ -302,7 +307,7 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 
 ### Next: 行 — 次の行動の機械可読な指示
 
-判定系スクリプト(`next-task`・`branch-check`・`group-advance`・`dispatch-start`・`dispatch-wait`・`dispatch-check`・`workflow-status`)は、stdout の
+判定系スクリプト(`next-task`・`branch-check`・`group-advance`・`dispatch-start`・`dispatch-wait`・`dispatch-finish`(`dispatch-check` の結果のまま)・`dispatch-check`・`workflow-status`)は、stdout の
 最後の行に `Next: <行動> [<タスクID>] [reason=<理由>]` を出す。親は exit code の表ではなく
 この行に従う。`Next:` 行が無い(exit 1 等の使い方不備・入力不備)ときは `escalate reason=error`
 として stderr をユーザーに報告する。
@@ -314,6 +319,7 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 | `wait <ID>...` | 実行中のタスクの完了を待つ(同時に始められるタスクが無い) | next-task(exit 5) |
 | `collect <ID>` | worktree の run の変更を本体へ取り込む(`dispatch-worktree collect`)。その後 review する | dispatch-check(exit 0、worktree の run) |
 | `review <ID>` | そのタスクをレビューする | next-task(exit 0、`in_review`)・dispatch-check(exit 0。PR 作成の run を除く) |
+| `subagent <ID> <N>` | サブエージェントの run を用意した。`Prompt:` の内容でサブエージェントを起動し、最終応答を `Output:` に書いて `dispatch-finish` を呼ぶ | dispatch-start(exit 0、launcher が `subagent`) |
 | `wait` | 子がまだ実行中。完了を待つ | dispatch-start(exit 0)・dispatch-wait(exit 2)・dispatch-check(exit 2)・workflow-status(実行中の run があるとき) |
 | `finish` | 全タスク完了。サマリー報告へ | next-task(exit 3)・workflow-status |
 | `group-advance` | グループ境界。group-advance を実行する | next-task(exit 6)・workflow-status |
@@ -412,12 +418,16 @@ PR が既にある場合は、子が未 push のコミットを push し、PR �
 プロンプトには要件の一覧も入る。tasks.md の要件のうち、この PR のタスクを含むものだけを
 `- R1: <本文>(この PR: T1 / 他の PR: T3)` の形で並べる。対応する要件が無い場合(要件の節が無い場合を含む)は
 `- なし(...)` の1行になる。子はこの一覧を PR 本文に「要件と対応タスク」として載せる。
+`--launcher <cli|subagent>`(ps1 は `-Launcher`)を付けると、prompt.md を書いた後に
+`runs/pr-<N>-1/launcher` へその値を1行で書き、`subagent` なら prompt.md にサブエージェント用の節を足す
+(`dispatch-start --pr` が起動方法を渡すのに使う)。値が `cli`・`subagent` 以外(空を含む)なら
+使い方を stderr に出して exit 1(run ディレクトリは作らない)。ps1 では `-Pr` なしで `-Launcher` を付けても exit 1。
 
 ```powershell
-.agents/workflow/scripts/dispatch-prompt-gen.ps1 -Pr
+.agents/workflow/scripts/dispatch-prompt-gen.ps1 -Pr [-Launcher cli|subagent]
 ```
 ```bash
-.agents/workflow/scripts/dispatch-prompt-gen.sh --pr
+.agents/workflow/scripts/dispatch-prompt-gen.sh --pr [--launcher cli|subagent]
 ```
 exit 0 の場合も生成されたプロンプト全文は会話に読み込まない
 (読み込むと機械生成によるトークン節約が無意味になる)。
@@ -432,7 +442,7 @@ exit 0 の場合も生成されたプロンプト全文は会話に読み込ま�
    確認しない。前の試行の変更を引き継ぐため)
 3. タスクの状態が `pending` / `in_progress` か
 4. 疎通確認(`child_agent.healthcheck_command`。空なら省略)
-5. ウォームアップ(`child_agent.warmup_command`。空なら省略。`guard.sha256` が1つも無い = サイクルの最初の dispatch のときだけ)
+5. ウォームアップ(`child_agent.warmup_command`。空なら省略。CLI の run(launcher が `subagent` でない run)の `guard.sha256` が1つも無い = サイクルの最初の dispatch のときだけ)
 6. `dispatch-prompt-gen`
 7. `task-state <ID> start`(状態を `in_progress` にする)
 8. `dispatch-run` のデタッチ起動(`guard.sha256` が現れるまで最大30秒待つ。環境変数
@@ -442,12 +452,12 @@ exit 0 の場合も生成されたプロンプト全文は会話に読み込ま�
 `.agents/workflow/.config` にして実行する。
 
 ```powershell
-.agents/workflow/scripts/dispatch-start.ps1 -TaskId T1 [-Attempt 1]
-.agents/workflow/scripts/dispatch-start.ps1 -Pr
+.agents/workflow/scripts/dispatch-start.ps1 -TaskId T1 [-Attempt 1] [-SubagentCapable]
+.agents/workflow/scripts/dispatch-start.ps1 -Pr [-SubagentCapable]
 ```
 ```bash
-.agents/workflow/scripts/dispatch-start.sh T1 [1]
-.agents/workflow/scripts/dispatch-start.sh --pr
+.agents/workflow/scripts/dispatch-start.sh T1 [1] [--subagent-capable]
+.agents/workflow/scripts/dispatch-start.sh --pr [--subagent-capable]
 ```
 
 **並列実行(`max_parallel` が 2 以上、`--pr` でないとき)**: 手順2(作業ツリーの確認)は行わない。
@@ -482,7 +492,32 @@ exit 60 のときは、`dispatch-run` のプロセスが動いていないこと
 
 `healthcheck_command` / `warmup_command` は sh 版では `bash -c`、ps1 版では `pwsh -Command` で実行する。
 
-stdout は成功時に `Run: <ID>-<N>`・`Log: <output.log のパス>`・`Watch:`(sh 版は `tail -f <パス>`、
+**サブエージェントでの起動(`--subagent-capable`)**: 親がサブエージェントを起動できるとき `--subagent-capable`
+(ps1 は `-SubagentCapable`)を付ける。起動方法(launcher)は次で決め、手順6(`dispatch-prompt-gen`)の前に
+`runs/<ID>-<N>/launcher` へ `cli` か `subagent` を1行で書く(`--pr` は `dispatch-prompt-gen --pr --launcher <値>` が書く)。
+
+- オプションが無い、または `child_agent.subagent` が `never` → `cli`
+- `always` → `subagent`
+- `auto`(未指定・他の値を含む)→ 子プロファイルの出力形式が `claude-stream-json` のときだけ `subagent`、それ以外は `cli`
+
+`subagent` のときは疎通確認(手順4)・ウォームアップ(手順5)を行わず、手順8のデタッチ起動の代わりに
+`dispatch-run --prepare-only` を同期で実行する。失敗すると exit 60(`Next: escalate reason=launch`)。
+成功時の stdout は次の行で、最後は `Next: subagent <ID> <N>`(exit 0)。
+
+```
+Run: <ID>-<N>
+Launcher: subagent
+Prompt: <prompt.md の絶対パス>
+Workdir: <作業ディレクトリ>
+Output: <output.log の絶対パス>
+Model: <child_agent.subagent_model。未指定・空なら default>
+Next: subagent <ID> <N>
+```
+
+`Workdir:` は、並列(worktree)の run では `<ルート>/.agents/workflow/runs/<ID>-<N>/worktree`、そうでなければルート(どちらも絶対パス)。
+親は `Prompt:` の内容を指示にサブエージェントを起動し、最終応答を `Output:` に書いてから `dispatch-finish` を呼ぶ。
+
+stdout は `cli` の成功時に `Run: <ID>-<N>`・`Launcher: cli`・`Log: <output.log のパス>`・`Watch:`(sh 版は `tail -f <パス>`、
 ps1 版は `Get-Content <パス> -Wait -Tail 20`)・`Watch all:`(全 run のログをまとめて流す `workflow-logs` のコマンド。
 sh 版は `bash .agents/workflow/scripts/workflow-logs.sh`、ps1 版は `pwsh -NoProfile -File .agents/workflow/scripts/workflow-logs.ps1`)・`Next: wait` を出す。失敗時は最後の行に `Next: escalate reason=<理由>` を出す(使い方不備の exit 1 を除く)。
 
@@ -542,6 +577,18 @@ Start-Process pwsh -ArgumentList "-NoProfile -File .agents/workflow/scripts/disp
 ```
 ```bash
 nohup .agents/workflow/scripts/dispatch-run.sh T1 1 > /dev/null 2>&1 &
+```
+
+**`--prepare-only`(ps1 は `-PrepareOnly`)**: `guard.sha256` と `git-state.txt` を書き、`tmp/` を作ったところで
+exit 0 する。子は起動せず、`done` も書かない。サブエージェントの run で `dispatch-start` が同期で呼ぶ
+(worktree の run では上記と同じ guard と git-state を記録する)。`prompt.md` が無くても動き、guard には `-` を記録する。
+sh 版では位置引数の前でも後でも指定できる。
+
+```powershell
+.agents/workflow/scripts/dispatch-run.ps1 -TaskId T1 -Attempt 1 -PrepareOnly
+```
+```bash
+.agents/workflow/scripts/dispatch-run.sh --prepare-only T1 1
 ```
 
 ### dispatch-check — 完了検知後の終了状態・成果物の判定
@@ -638,6 +685,10 @@ exit code(複数に当たる場合は上の行を優先する):
 
 この版から、done マーカーが無いときは exit 1 ではなく exit 2 を返す(#69)。
 
+**サブエージェントの run**: `runs/<ID>-<N>/launcher` が `subagent` のとき、`config.json` の `profile` によらず
+`subagent` プロファイルで判定する(`Profile: subagent`。上記「子CLIのプロファイル」を参照)。`launcher` が無い、または `cli` の run は `config.json` の
+`profile` のまま。
+
 **worktree の run**: run のディレクトリに `worktree.txt` があるとき、次が変わる。
 - `git-state` の比較は、`worktree.txt` の `path` の WT の中で
   `git-state --run <branch> --parent <親の作業ブランチ> --other-runs <実行中のタスクの ID>` を
@@ -686,9 +737,29 @@ run の完了をポーリングで待つ。1回の呼び出しで `--max-wait` �
 | exit | 意味 |
 |------|------|
 | `0` / `4`〜`8` | `done` があった。`dispatch-check` の結果のまま(上の表) |
-| `1` | 使い方不備、または run が起動されていない |
+| `1` | 使い方不備、または run が起動されていない。サブエージェントの run(`runs/<ID>-<N>/launcher` が `subagent`)も exit 1(`dispatch-finish` を使う。`guard.sha256` の確認より前に判定する) |
 | `2` | まだ実行中(この呼び出しの待ちが `--max-wait` に達した)。最後の行は `Next: wait`。再度呼んで待ちを続ける |
 | `3` | 経過が `child_agent.timeout_seconds` を超えた。最後の行は `Next: escalate reason=timeout` |
+
+### dispatch-finish — サブエージェントの run の完了
+
+`launcher` が `subagent` の run を完了させる。親がサブエージェントの最終応答を `output.log` に書いた後に呼ぶ。
+`done` が無ければ `dispatch-run` と同じ形式(`EXIT:<値>` / `END:<ISO 8601>`)で書き、
+`dispatch-check` を実行してその結果(stdout・stderr・exit code)をそのまま返す。`done` が既にあれば上書きしない。
+
+```powershell
+.agents/workflow/scripts/dispatch-finish.ps1 -TaskId T1 -Attempt 1 [-Exit 0]
+```
+```bash
+.agents/workflow/scripts/dispatch-finish.sh T1 1 [--exit 0]
+```
+
+- `--exit` / `-Exit`: `done` に書く `EXIT:` の値(0 以上の整数、既定 0)
+
+| exit | 意味 |
+|------|------|
+| `1` | 使い方不備(`--exit` が不正を含む)、`launcher` が `subagent` でない、`output.log` が無い |
+| それ以外 | `dispatch-check` の exit code のまま(上の `dispatch-check` の表) |
 
 ### dispatch-worktree — 子エージェントの run 用 git worktree の作成・回収・削除
 

@@ -34,5 +34,14 @@
     "permission_denied_pattern": "",
     "provider_error_pattern": "",
     "agents_md_imports": false
+  },
+  "subagent": {
+    "description": "親のサブエージェント機能(Claude Code の Agent ツール等)で実行した run。ツール実行のログが無いため、ログに依存する検知はすべて無効",
+    "output_format": "text",
+    "tool_activity_pattern": "",
+    "tool_call_pattern": "",
+    "permission_denied_pattern": "",
+    "provider_error_pattern": "",
+    "agents_md_imports": true
   }
 }

@@ -43,7 +43,14 @@ if (-not (Test-Path $donePath)) {
 # 解決できない(未定義の profile・定義ファイルが読めない)場合は、Next: 行を出さずに exit 1 で終わる
 . "$PSScriptRoot/childprofile.ps1"
 try {
-    $childProfile = Get-ChildProfile -Root (Get-Location).Path
+    # runs/<ID>-<N>/launcher が subagent の run は subagent プロファイルで判定する(無い・cli は config.json のまま)
+    $launcherPath = "$runDir/launcher"
+    if ((Test-Path -LiteralPath $launcherPath) -and
+        ([System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $launcherPath)).Trim() -eq 'subagent')) {
+        $childProfile = Get-ChildProfile -Root (Get-Location).Path -Name subagent
+    } else {
+        $childProfile = Get-ChildProfile -Root (Get-Location).Path
+    }
 } catch {
     [Console]::Error.WriteLine($_.Exception.Message)
     exit 1

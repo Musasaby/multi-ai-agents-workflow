@@ -140,4 +140,42 @@ Invoke-TestCase "pr: 要件の節が無ければなしと書く" {
     Assert-NotContains $prompt "{requirement_list}" "placeholder replaced"
 }
 
+Invoke-TestCase "pr: -Launcher subagent で launcher を書き、サブエージェント用の節を足す" {
+    Initialize-Branch
+    Invoke-Script dispatch-prompt-gen.ps1 '-Pr' '-Launcher' 'subagent'
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    $runDir = "$script:Proj/.agents/workflow/runs/pr-1-1"
+    $bytes = [System.IO.File]::ReadAllBytes("$runDir/launcher")
+    Assert-Eq 'subagent|10' ("$([System.Text.Encoding]::ASCII.GetString($bytes, 0, $bytes.Length - 1))|$($bytes[-1])") "launcher content (LF, no BOM)"
+    $prompt = [System.IO.File]::ReadAllText("$runDir/prompt.md")
+    Assert-Contains $prompt "## サブエージェントとして実行する場合の追加の指示" "subagent section appended"
+}
+
+Invoke-TestCase "pr: -Launcher cli は launcher を書き、節を足さない" {
+    Initialize-Branch
+    Invoke-Script dispatch-prompt-gen.ps1 '-Pr' '-Launcher' 'cli'
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    $runDir = "$script:Proj/.agents/workflow/runs/pr-1-1"
+    Assert-Eq "cli`n" ([System.IO.File]::ReadAllText("$runDir/launcher")) "launcher content"
+    Assert-NotContains ([System.IO.File]::ReadAllText("$runDir/prompt.md")) "## サブエージェントとして実行する場合の追加の指示" "no subagent section"
+}
+
+Invoke-TestCase "pr: -Launcher が無ければ launcher を書かない" {
+    Initialize-Branch
+    Invoke-Script dispatch-prompt-gen.ps1 '-Pr'
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/runs/pr-1-1/launcher" "launcher not written"
+}
+
+Invoke-TestCase "pr: -Launcher の値が不正なら exit 1" {
+    Initialize-Branch
+    Invoke-Script dispatch-prompt-gen.ps1 '-Pr' '-Launcher' 'foo'
+    Assert-Eq 1 $script:Code "invalid value -> exit 1"
+    Invoke-Script dispatch-prompt-gen.ps1 '-Pr' '-Launcher' ''
+    Assert-Eq 1 $script:Code "empty value -> exit 1"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/runs/pr-1-1" "run dir not created"
+    Invoke-Script dispatch-prompt-gen.ps1 '-TaskId' 'T1' '-Launcher' 'cli'
+    Assert-Eq 1 $script:Code "-Launcher without -Pr -> exit 1"
+}
+
 Show-Summary

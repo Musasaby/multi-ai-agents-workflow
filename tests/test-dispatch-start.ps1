@@ -194,6 +194,26 @@ Invoke-TestCase "start: warmup_command は最初の dispatch だけ実行する"
     Assert-Eq 1 @(Get-Content "$script:Proj/.agents/warmup.log").Count "warmup.log lines"
 }
 
+Invoke-TestCase "start: サブエージェントの run の後の最初の CLI の run でウォームアップする" {
+    Initialize-StartProject 'T1:pending', 'T2:pending'
+    Set-ChildCfg warmup_command 'Add-Content .agents/warmup.log w'
+    Set-ChildCfg subagent always
+    Invoke-Script dispatch-start.ps1 -TaskId T1 -SubagentCapable
+    Assert-Eq 0 $script:Code "exit code (T1): $($script:Err)"
+    Assert-Contains $script:Out "Launcher: subagent" "Launcher line (T1)"
+    Assert-FileAbsent "$script:Proj/.agents/warmup.log" "no warmup for subagent run"
+    Set-Report T1 1
+    Set-State 'T1:done' 'T2:pending'
+    Set-StateBranch develop/t
+    Set-ChildCfg subagent never
+    Invoke-Script dispatch-start.ps1 -TaskId T2
+    Assert-Eq 0 $script:Code "exit code (T2): $($script:Err)"
+    Wait-Done T2-1
+    Assert-FileExists "$script:Proj/.agents/workflow/runs/T2-1/done" "T2 done"
+    Assert-FileExists "$script:Proj/.agents/warmup.log" "warmup.log"
+    Assert-Eq 1 @(Get-Content "$script:Proj/.agents/warmup.log").Count "warmup.log lines"
+}
+
 Invoke-TestCase "start: warmup_command が失敗すれば exit 31" {
     Initialize-StartProject 'T1:pending', 'T2:pending'
     Set-ChildCfg warmup_command 'exit 1'
@@ -286,6 +306,64 @@ Invoke-TestCase "start: max_parallel 2 で healthcheck が失敗すると exit 3
     Invoke-Script dispatch-start.ps1 -TaskId T1
     Assert-Eq 0 $script:Code "healthcheck を外すと同じ試行で起動できる: $($script:Err)"
     Wait-Done T1-1
+}
+
+Invoke-TestCase "start: subagent always + -SubagentCapable は子を起動せず subagent で準備する" {
+    Initialize-StartProject 'T1:pending', 'T2:pending'
+    Set-ChildCfg subagent always
+    Set-ChildCfg subagent_model sonnet
+    Invoke-Script dispatch-start.ps1 -TaskId T1 -SubagentCapable
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Out "Launcher: subagent" "Launcher line"
+    Assert-Contains $script:Out "Model: sonnet" "Model line"
+    $rootAbs = $script:Proj.Replace('\', '/')
+    $outLines = @($script:Out -split "`n" | ForEach-Object { $_.TrimEnd("`r") })
+    $promptLine = @($outLines | Where-Object { $_ -like 'Prompt: *' })[0]
+    $workdirLine = @($outLines | Where-Object { $_ -like 'Workdir: *' })[0]
+    $outputLine = @($outLines | Where-Object { $_ -like 'Output: *' })[0]
+    Assert-Eq "Prompt: $rootAbs/.agents/workflow/runs/T1-1/prompt.md" $promptLine "Prompt line"
+    Assert-Eq "Workdir: $rootAbs" $workdirLine "Workdir line"
+    Assert-Eq "Output: $rootAbs/.agents/workflow/runs/T1-1/output.log" $outputLine "Output line"
+    Assert-Eq "Next: subagent T1 1" ((Get-LastLine $script:Out).Trim()) "last line"
+    Assert-NotContains $script:Out "Watch all:" "no Watch all"
+    Assert-FileExists "$script:Proj/.agents/workflow/runs/T1-1/guard.sha256" "guard.sha256"
+    Assert-FileExists "$script:Proj/.agents/workflow/runs/T1-1/git-state.txt" "git-state.txt"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/runs/T1-1/done" "child not started"
+}
+
+Invoke-TestCase "start: subagent auto + opencode プロファイルは -SubagentCapable があっても cli" {
+    Initialize-StartProject 'T1:pending', 'T2:pending'
+    Set-ChildCfg profile opencode
+    Set-ChildCfg subagent auto
+    Invoke-Script dispatch-start.ps1 -TaskId T1 -SubagentCapable
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Out "Launcher: cli" "Launcher line"
+    Assert-Eq "Next: wait" ((Get-LastLine $script:Out).Trim()) "last line"
+    Wait-Done T1-1
+}
+
+Invoke-TestCase "start: subagent never + claude-stream-json プロファイルは -SubagentCapable があっても cli" {
+    Initialize-StartProject 'T1:pending', 'T2:pending'
+    Set-ChildCfg profile claude-stream-json
+    Set-ChildCfg subagent never
+    Invoke-Script dispatch-start.ps1 -TaskId T1 -SubagentCapable
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Out "Launcher: cli" "Launcher line"
+    Assert-Eq "Next: wait" ((Get-LastLine $script:Out).Trim()) "last line"
+    Wait-Done T1-1
+}
+
+Invoke-TestCase "start: -Pr -SubagentCapable は pr の prompt.md にサブエージェント用の節を足す" {
+    Initialize-PrProject
+    Set-ChildCfg subagent always
+    Invoke-Script dispatch-start.ps1 '-Pr' '-SubagentCapable'
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Out "Launcher: subagent" "Launcher line"
+    Assert-Eq "Next: subagent pr-1 1" ((Get-LastLine $script:Out).Trim()) "last line"
+    $runDir = "$script:Proj/.agents/workflow/runs/pr-1-1"
+    Assert-Eq "subagent`n" ([System.IO.File]::ReadAllText("$runDir/launcher")) "launcher"
+    Assert-Contains ([System.IO.File]::ReadAllText("$runDir/prompt.md")) "## サブエージェントとして実行する場合の追加の指示" "subagent section in PR prompt"
+    Assert-FileAbsent "$runDir/done" "child not started"
 }
 
 Show-Summary
