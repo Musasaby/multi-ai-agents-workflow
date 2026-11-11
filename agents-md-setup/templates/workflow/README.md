@@ -332,6 +332,8 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 | `wait <ID>...` | 実行中のタスクの完了を待つ(同時に始められるタスクが無い) | next-task(exit 5) |
 | `collect <ID>` | worktree の run の変更を本体へ取り込む(`dispatch-worktree collect`)。その後 review する | dispatch-check(exit 0、worktree の run) |
 | `review <ID>` | そのタスクをレビューする | next-task(exit 0、`in_review`)・dispatch-check(exit 0。PR 作成の run を除く) |
+| `commit <ID>` | レビュー合格(pass)。品質ゲートを実行してコミットする(`agent-review-commit` skill) | dispatch-check(exit 0、レビューの run で `Verdict: pass`) |
+| `retry <ID>` | レビュー不合格(fail)。`fix-notes.md` は書かれているので次の試行で子に渡す | dispatch-check(exit 0、レビューの run で `Verdict: fail`) |
 | `subagent <ID> <N>` | サブエージェントの run を用意した。`Prompt:` の内容でサブエージェントを起動し、最終応答を `Output:` に書いて `dispatch-finish` を呼ぶ | dispatch-start(exit 0、launcher が `subagent`) |
 | `wait` | 子がまだ実行中。完了を待つ | dispatch-start(exit 0)・dispatch-wait(exit 2)・dispatch-check(exit 2)・workflow-status(実行中の run があるとき) |
 | `finish` | 全タスク完了。サマリー報告へ | next-task(exit 3)・workflow-status |
@@ -349,6 +351,8 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 `escalate` の reason 一覧:
 
 - `dirty-tree` / `task-status` / `healthcheck` / `warmup` / `prompt-gen` / `task-state` / `launch` — dispatch-start の失敗(exit 20 / 21 / 30 / 31 / 41〜43 / 50 / 60)
+- `review-mode` — dispatch-start --review の exit 23(config.json の `review.mode` が `dispatch` でない。`Next: escalate reason=review-mode`)
+- `review-config` — dispatch-start --review の exit 24(レビューの run の launcher が `cli` なのに `review.command_template` が空。`Next: escalate reason=review-config`)
 - `timeout` — dispatch-wait の exit 3(経過が `child_agent.timeout_seconds` を超えた)
 - `blocked` — next-task の exit 4(実行可能なタスクが無い)
 - `gh-unavailable` — branch-check の exit 4(gh で PR 状態を判定できない)
@@ -448,6 +452,28 @@ PR が既にある場合は、子が未 push のコミットを push し、PR �
 ```bash
 .agents/workflow/scripts/dispatch-prompt-gen.sh --pr [--launcher cli|subagent]
 ```
+
+**レビューモード**(`-Review` / `--review <TaskId> <Attempt>`): 子の実装をレビューする役の
+プロンプトを `dispatch-review-template.md` から生成し、`runs/review-<ID>-<N>/prompt.md` に書き出す
+(`<N>` はレビューの試行回数。`dispatch-start --review` は省略時に state.json のタスクの `retries` + 1 を渡す)。
+材料は tasks.md の該当節(`{task_section}`)と完了報告 `.agents/workflow/runs/<ID>-<N>/report.md`
+(`{report_path}`)。置換するのは `{task_id}`・`{attempt}`・`{task_section}`・`{report_path}`・
+`{fix_notes_path}`(=`runs/<ID>-<N+1>/fix-notes.md`)・`{comprehension_instruction}`
+(config の `comprehension_check.enabled` が true なら理解確認の質問ファイルを作る指示、false なら
+作らない指示)。stdout に `RunId: review-<ID>` を出すので、`dispatch-run` に `review-<ID>` と `<N>` を
+渡して起動する。`--launcher <cli|subagent>`(ps1 は `-Launcher`)は PR モードと同じく
+`runs/review-<ID>-<N>/launcher` へ値を1行で書き、`subagent` ならサブエージェント用の節を足す。
+タスクIDの形式違反、tasks.md が無い、または tasks.md に該当タスクの節が無い場合は exit 1、
+完了報告 `report.md` が無い場合は exit 2(レビューできない)。ps1 では `-Review` と
+`-TaskId`・`-Attempt` を組み合わせる。
+
+```powershell
+.agents/workflow/scripts/dispatch-prompt-gen.ps1 -Review -TaskId T1 -Attempt 1 [-Launcher cli|subagent]
+```
+```bash
+.agents/workflow/scripts/dispatch-prompt-gen.sh --review T1 1 [--launcher cli|subagent]
+```
+
 exit 0 の場合も生成されたプロンプト全文は会話に読み込まない
 (読み込むと機械生成によるトークン節約が無意味になる)。
 
@@ -473,10 +499,12 @@ exit 0 の場合も生成されたプロンプト全文は会話に読み込ま�
 ```powershell
 .agents/workflow/scripts/dispatch-start.ps1 -TaskId T1 [-Attempt 1] [-SubagentCapable]
 .agents/workflow/scripts/dispatch-start.ps1 -Pr [-SubagentCapable]
+.agents/workflow/scripts/dispatch-start.ps1 -Review -TaskId T1 [-Attempt 1] [-SubagentCapable]
 ```
 ```bash
 .agents/workflow/scripts/dispatch-start.sh T1 [1] [--subagent-capable]
 .agents/workflow/scripts/dispatch-start.sh --pr [--subagent-capable]
+.agents/workflow/scripts/dispatch-start.sh --review T1 [1] [--subagent-capable]
 ```
 
 **並列実行(`max_parallel` が 2 以上、`--pr` でないとき)**: 手順2(作業ツリーの確認)は行わない。
@@ -493,6 +521,25 @@ exit 60 のときは、`dispatch-run` のプロセスが動いていないこと
 `--pr` / `-Pr` は PR 作成の run(`pr-<N>-1`)を起動する。手順3・5・7は行わず、手順6は
 `dispatch-prompt-gen --pr` になる(stdout の `RunId` で起動する)。
 
+**レビューの run(`--review <ID>` / `-Review -TaskId <ID>`)**: レビュー役の run
+(`review-<ID>-<N>`)を起動する。処理の順は次のとおり。
+
+1. `branch-check --state`(非0なら `Next:` 行を流して止める)
+2. `review.mode` が `dispatch` か(違えば exit 23)
+3. タスクの状態が `in_review` か(違えば exit 21)
+4. launcher の決定(`--subagent-capable` があるときだけ。`review.subagent` が `always` なら
+   `subagent`、`never` なら `cli`、それ以外(`auto`)は `review-<ID>` のプロファイルが
+   `claude-stream-json` のときだけ `subagent`)。省略時は `cli`
+5. launcher が `cli` なら `review.command_template` が空でないか(空なら exit 24)
+6. `dispatch-prompt-gen --review <ID> <N> --launcher <値>`(stdout の `RunId: review-<ID>`)
+7. `dispatch-run` に `review-<ID>` と `<N>` を渡してデタッチ起動する(`--subagent-capable` かつ
+   launcher が `subagent` なら `dispatch-run --prepare-only` を同期で実行し `Next: subagent review-<ID> <N>`)
+
+行わないこと: 作業ツリーの確認・worktree の作成(`max_parallel` が 2 以上でも同じ)・
+疎通確認・ウォームアップ・`task-state`。レビュー役は状態を変えず、コードも変えない
+(`fix-notes.md` と理解確認の質問ファイルだけを書く)。`<N>` の省略時は state.json の
+そのタスクの `retries` + 1。
+
 **exit code 規約**:
 
 | exit | 意味 |
@@ -501,7 +548,9 @@ exit 60 のときは、`dispatch-run` のプロセスが動いていないこと
 | `1` | 使い方不備 |
 | `11`〜`15` | `branch-check --state` の exit 1〜5(stdout の `Next:` 行はそのまま流す) |
 | `20` | 作業ツリーが汚れている(リトライで fix-notes.md がある場合を除く。`reason=dirty-tree`) |
-| `21` | タスクの状態が不正(`pending` / `in_progress` 以外、タスク無しを含む。`reason=task-status`) |
+| `21` | タスクの状態が不正(`pending` / `in_progress` 以外、タスク無しを含む。`--review` では `in_review` 以外。`reason=task-status`) |
+| `23` | `--review` なのに config.json の `review.mode` が `dispatch` でない(`reason=review-mode`) |
+| `24` | `--review` で launcher が `cli` なのに `review.command_template` が空(`reason=review-config`) |
 | `30` / `31` | 疎通確認 / ウォームアップの失敗(`reason=healthcheck` / `warmup`。出力の末尾20行を stderr に出す) |
 | `41`〜`43` | `dispatch-prompt-gen` の exit 1〜3(`reason=prompt-gen`。依存未完了・report.md の欠落は 42。`--pr` で RunId が取れない場合は 41) |
 | `22` | `max_parallel` が 2 以上で、worktree の作成が dirty-tree(`dispatch-worktree` の exit 20。`reason=dirty-tree`) |
@@ -620,6 +669,8 @@ sh 版では位置引数の前でも後でも指定できる。
 プロジェクト外アクセスの検出(`Outside access:`)、子CLI自身のログのエラー(`CLI log:` と
 `Provider error:`)、完了報告の判定(`Completion report:`)、変更件数(`Changes:`)、
 `git status --porcelain`、`git diff --stat`、`output.log` の末尾30行をまとめて出力する。
+レビューの run(`review-*`)では、これに `Review verdict:`・`Review findings:`・`Review summary:`・
+`Fix notes:` の4行を加える(後述)。
 
 - **改ざん検知**: `dispatch-run` は起動時に `prompt.md`・`state.json`・`tasks.md`・`config.json`・
   `.agents/workflow/child-profiles.json` の
@@ -748,6 +799,28 @@ exit code(複数に当たる場合は上の行を優先する):
   本体の `state.json` は親が並列中に更新するため丸ごとは比べず、`dispatch-run` が起動時に
   `state-entry.txt` に記録した自分のタスクの欄だけを比べる(`state-entry.txt` が無いのも改ざんとみなす)
 - Verdict が `ok` のときの `Next:` は `collect <ID>`(`dispatch-worktree collect` で本体へ集める)
+
+**レビューの run**(`review-*`): 終了状態・改ざん検知などは通常の run と同じ。加えて次を判定する。
+
+- **完了報告の必須項目**: `Verdict`・`指摘`・`要約`・`fix-notes`・`理解確認` の5つ(`Completion report:` で判定)
+- **追加の検証**: 完了報告が有効なとき、`Verdict` が `pass` / `fail` 以外なら
+  `invalid (Verdict must be pass or fail)`、`fail` なのに
+  `.agents/workflow/runs/<ID>-<N+1>/fix-notes.md` が無ければ `invalid (fix-notes not found: <パス>)`、
+  `pass` で `comprehension_check.enabled` が true なのに `.agents/workflow/comprehension/<ID>.md` が
+  無ければ `invalid (comprehension file not found: <パス>)`。いずれも `Completion report:` が invalid に
+  なり exit 5(`reason=no-report`)
+- **変更0件の判定**: 行わない(`pr-*` と同じく exit 7 にしない)
+- **プロファイル**: `review.profile` と `review-<ID>` のプロファイルで判定する(launcher が `subagent` なら
+  `subagent` プロファイル)
+- **本体の変更の検知**: `dispatch-run` はレビューの run でも起動時に `main-tree.txt`
+  (`git-state --main-tree` の値)を記録する。`dispatch-check` は今の値と比べ、起動時に無かったパスと
+  ハッシュが変わったパスを `changed: main worktree: <パス>` として `Guard:` に加える
+  (`main-tree.txt` が無いのも改ざん)。レビュー役はコードを変えないため、本体の変更は tampered(exit 8)
+  になる
+- **出力**: 通常の行に加えて `Review verdict:`(pass / fail)・`Review findings:`(`指摘` の値)・
+  `Review summary:`(`要約` の値)・`Fix notes:`(`fix-notes.md` があればそのパス、無ければ `none`)の4行を出す
+- **Next**: exit 0 で `Verdict` が `pass` なら `Next: commit <ID>`(品質ゲートとコミットへ)、`fail` なら
+  `Next: retry <ID>`(`fix-notes.md` は書かれているので次の試行で子に渡す)
 
 `0` 以外の場合はレビューに進まず、出力された内容をユーザーに報告する(`7` は、変更が無いのが
 正しいタスクに限り検証に進んでよい。詳細は `agent-dispatch` skill §2)。
