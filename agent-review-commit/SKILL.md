@@ -15,6 +15,12 @@ description: 子エージェントの実装をタスクの受け入れ基準に�
 
 ## 手順
 
+### レビューの方式
+
+`config.json` の `review.mode` が `dispatch` なら、§1〜§3 と §5.2 の代わりに
+[レビュー役への dispatch](references/review-dispatch.md) の手順でレビューする。
+それ以外(`parent` を含む)は次の §1〜§3 と §5.2 を親が行う。
+
 ### 1. レビュー材料の収集
 
 - `git diff` / `git status` で変更全体を取得
