@@ -20,9 +20,10 @@ function Get-FirstLineMatching {
     return ''
 }
 
-# 1 行の表示幅(全角 2 桁。テストで使う日本語の範囲だけを判定する)
+# 1 行の表示幅(全角 2 桁。ANSI エスケープは除く。テストで使う日本語の範囲だけを判定する)
 function Get-TestDisplayWidth {
     param([string]$Text)
+    $Text = [regex]::Replace($Text, '\x1b\[[0-9;?]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)', '')
     $w = 0
     foreach ($ch in $Text.ToCharArray()) {
         $c = [int]$ch
@@ -212,6 +213,45 @@ Invoke-TestCase "logs: columns は全角の行を列の幅で折り返す" {
     Assert-NotContains $script:Out $jp "折り返さずに1行では出さない"
     $maxw = Get-MaxLineWidth $script:Out
     Assert-Eq 'True' "$($maxw -le 20)" "どの行も幅を超えない (max=$maxw)"
+}
+
+Invoke-TestCase "logs: columns は制御文字を整える" {
+    $log = "`u{1B}[31mred`nprogress 10%`rprogress 90%`n`ttab`n`u{1B}[2Kclear"
+    New-LogRun 'T1-1' $log
+    New-LogRun 'T2-1' 'normal line'
+    Invoke-Script workflow-logs.ps1 -Once -Layout columns -Width 70 -Height 8
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-NotContains $script:Out "`r" "復帰(`r)を残さない"
+    Assert-NotContains $script:Out "`t" "タブを残さない"
+    Assert-NotContains $script:Out "`u{1B}[2K" "SGR 以外の ANSI を残さない"
+    Assert-Contains $script:Out 'progress 90%' "同じ行の後半だけ残す"
+    Assert-NotContains $script:Out 'progress 10%' "`r より前は残さない"
+    $redLine = Get-FirstLineMatching $script:Out 'red'
+    $escIdx = $redLine.IndexOf("`u{1B}[0m")
+    $sepIdx = $redLine.IndexOf(' │ ')
+    Assert-Eq 'True' "$($escIdx -ge 0 -and $sepIdx -ge 0 -and $escIdx -lt $sepIdx)" "red の行で色を戻す ANSI が区切りより前にある"
+    $maxw = Get-MaxLineWidth $script:Out
+    Assert-Eq 'True' "$($maxw -le 70)" "ANSI を除いた幅が画面の幅を超えない (max=$maxw)"
+}
+
+Invoke-TestCase "logs: columns は全角の記号を列の幅で折り返す" {
+    New-LogRun 'T1-1' ('✅' * 12)
+    Invoke-Script workflow-logs.ps1 -Once -Layout columns -Width 20
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Out ('✅' * 10) "全角の記号は10個で折り返す"
+    Assert-NotContains $script:Out ('✅' * 11) "11個以上を1行に出さない"
+}
+
+Invoke-TestCase "logs: columns は長いログの末尾だけを出す" {
+    $log = ((0..1999 | ForEach-Object { 'line {0:0000}' -f $_ }) -join "`n")
+    New-LogRun 'T1-1' $log
+    Invoke-Script workflow-logs.ps1 -Once -Layout columns -Width 40 -Height 6
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-NotContains $script:Out 'line 1996' "末尾より前の行は出さない"
+    $i97 = $script:Out.IndexOf('line 1997')
+    $i98 = $script:Out.IndexOf('line 1998')
+    $i99 = $script:Out.IndexOf('line 1999')
+    Assert-Eq 'True' "$($i97 -ge 0 -and $i97 -lt $i98 -and $i98 -lt $i99)" "末尾の3行をこの順で出す"
 }
 
 Invoke-TestCase "logs: columns は入りきらない run を +N more で出す" {

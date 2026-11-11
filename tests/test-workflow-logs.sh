@@ -23,12 +23,14 @@ first_line_matching() {
     done <<< "$1"
 }
 
-# 標準入力の各行の表示幅(全角 2 桁)の最大値を返す
+# 標準入力の各行の表示幅(全角 2 桁。ANSI エスケープは除く)の最大値を返す
 max_display_width() {
     python3 -c '
-import sys, unicodedata
+import re, sys, unicodedata
+ansi = re.compile(r"\x1b\[[0-9;?]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)")
 m = 0
 for line in sys.stdin.read().splitlines():
+    line = ansi.sub("", line)
     w = 0
     for ch in line:
         if unicodedata.combining(ch):
@@ -193,6 +195,58 @@ t_columns_wrap_wide() {
     assert_eq 1 "$([ "$maxw" -le 20 ] && echo 1 || echo 0)" "どの行も幅を超えない (max=$maxw)"
 }
 
+t_columns_control_chars() {
+    make_run T1-1 $'\033[31mred\nprogress 10%\rprogress 90%\n\ttab\n\033[2Kclear'
+    make_run T2-1 'normal line'
+    run_script workflow-logs.sh --once --layout columns --width 70 --height 8
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_not_contains "$OUT" $'\r' "復帰(\\r)を残さない"
+    assert_not_contains "$OUT" $'\t' "タブを残さない"
+    assert_not_contains "$OUT" $'\033[2K' "SGR 以外の ANSI を残さない"
+    assert_contains "$OUT" 'progress 90%' "同じ行の後半だけ残す"
+    assert_not_contains "$OUT" 'progress 10%' "\\r より前は残さない"
+    local red_line
+    red_line="$(first_line_matching "$OUT" 'red')"
+    case "$red_line" in
+        *$'\033[0m'*' │ '*) red_line="ok" ;;
+        *) red_line="" ;;
+    esac
+    assert_eq "ok" "$red_line" "red の行で色を戻す ANSI が区切りより前にある"
+    local maxw
+    maxw="$(printf '%s\n' "$OUT" | max_display_width)"
+    assert_eq 1 "$([ "$maxw" -le 70 ] && echo 1 || echo 0)" "ANSI を除いた幅が画面の幅を超えない (max=$maxw)"
+}
+
+t_columns_wrap_emoji() {
+    local ten eleven
+    ten="$(printf '✅%.0s' {1..10})"
+    eleven="$(printf '✅%.0s' {1..11})"
+    make_run T1-1 "$(printf '✅%.0s' {1..12})"
+    run_script workflow-logs.sh --once --layout columns --width 20
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "$ten" "全角の記号は10個で折り返す"
+    assert_not_contains "$OUT" "$eleven" "11個以上を1行に出さない"
+}
+
+t_columns_tail_long_log() {
+    local lines
+    lines="$(python3 -c 'print("\n".join("line %04d" % i for i in range(2000)))')"
+    make_run T1-1 "$lines"
+    run_script workflow-logs.sh --once --layout columns --width 40 --height 6
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_not_contains "$OUT" 'line 1996' "末尾より前の行は出さない"
+    local order
+    order="$(printf '%s\n' "$OUT" | python3 -c '
+import sys
+t = sys.stdin.read()
+i97 = t.find("line 1997")
+i98 = t.find("line 1998")
+i99 = t.find("line 1999")
+print(1 if 0 <= i97 < i98 < i99 else 0)
+')"
+    assert_eq 1 "$order" "末尾の3行をこの順で出す"
+}
+
 t_columns_overflow() {
     make_run T1-1 't1 line'
     make_run T2-1 't2 line'
@@ -225,6 +279,9 @@ test_case "logs: EXIT: 行の無い done は finished (unknown)" t_done_without_
 test_case "logs: columns は run ごとに列を分けて並べる" t_columns_split_runs
 test_case "logs: columns の2行目は更新時刻と running / finished" t_columns_updated_clock
 test_case "logs: columns は全角の行を列の幅で折り返す" t_columns_wrap_wide
+test_case "logs: columns は制御文字を整える" t_columns_control_chars
+test_case "logs: columns は全角の記号を列の幅で折り返す" t_columns_wrap_emoji
+test_case "logs: columns は長いログの末尾だけを出す" t_columns_tail_long_log
 test_case "logs: columns は入りきらない run を +N more で出す" t_columns_overflow
 test_case "logs: stream は watching の行に更新時刻を出す" t_stream_watching_clock
 summary
