@@ -261,7 +261,7 @@ if [ "$LAUNCHER" = subagent ]; then
         echo "Next: escalate reason=launch"
         exit 60
     fi
-    ROOT_ABS="$PWD"
+    ROOT_ABS="$(to_py_path "$PWD")"
     if [ "$PARALLEL" = true ]; then WORKDIR="$ROOT_ABS/$RUN_DIR/worktree"; else WORKDIR="$ROOT_ABS"; fi
     SUB_MODEL="$(cfg_get subagent_model)"
     echo "Run: ${TASK_ID}-${ATTEMPT}"

@@ -296,6 +296,14 @@ Invoke-TestCase "start: subagent always + -SubagentCapable は子を起動せず
     Assert-Eq 0 $script:Code "exit code: $($script:Err)"
     Assert-Contains $script:Out "Launcher: subagent" "Launcher line"
     Assert-Contains $script:Out "Model: sonnet" "Model line"
+    $rootAbs = $script:Proj.Replace('\', '/')
+    $outLines = @($script:Out -split "`n" | ForEach-Object { $_.TrimEnd("`r") })
+    $promptLine = @($outLines | Where-Object { $_ -like 'Prompt: *' })[0]
+    $workdirLine = @($outLines | Where-Object { $_ -like 'Workdir: *' })[0]
+    $outputLine = @($outLines | Where-Object { $_ -like 'Output: *' })[0]
+    Assert-Eq "Prompt: $rootAbs/.agents/workflow/runs/T1-1/prompt.md" $promptLine "Prompt line"
+    Assert-Eq "Workdir: $rootAbs" $workdirLine "Workdir line"
+    Assert-Eq "Output: $rootAbs/.agents/workflow/runs/T1-1/output.log" $outputLine "Output line"
     Assert-Eq "Next: subagent T1 1" ((Get-LastLine $script:Out).Trim()) "last line"
     Assert-NotContains $script:Out "Watch all:" "no Watch all"
     Assert-FileExists "$script:Proj/.agents/workflow/runs/T1-1/guard.sha256" "guard.sha256"

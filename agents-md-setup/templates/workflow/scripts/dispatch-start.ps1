@@ -250,7 +250,7 @@ if ($launcher -eq 'subagent') {
         Write-Output "Next: escalate reason=launch"
         exit 60
     }
-    $rootAbs = (Get-Location).Path
+    $rootAbs = (Get-Location).Path.Replace('\', '/')
     $workdir = if ($parallel) { "$rootAbs/$runDir/worktree" } else { $rootAbs }
     $subModel = Get-ChildCfg 'subagent_model'
     if (-not $subModel) { $subModel = 'default' }

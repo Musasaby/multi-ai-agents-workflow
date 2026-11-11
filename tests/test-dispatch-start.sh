@@ -317,6 +317,11 @@ t_subagent_always() {
     assert_eq 0 "$CODE" "exit code: $ERR"
     assert_contains "$OUT" "Launcher: subagent" "Launcher line"
     assert_contains "$OUT" "Model: sonnet" "Model line"
+    local root_abs
+    root_abs="$(py_path "$PROJ")"
+    assert_eq "$root_abs/.agents/workflow/runs/T1-1/prompt.md" "$(printf '%s\n' "$OUT" | sed -n 's/^Prompt: //p' | tr -d '\r')" "Prompt line"
+    assert_eq "$root_abs" "$(printf '%s\n' "$OUT" | sed -n 's/^Workdir: //p' | tr -d '\r')" "Workdir line"
+    assert_eq "$root_abs/.agents/workflow/runs/T1-1/output.log" "$(printf '%s\n' "$OUT" | sed -n 's/^Output: //p' | tr -d '\r')" "Output line"
     assert_eq "Next: subagent T1 1" "$(printf '%s\n' "$OUT" | tail -1 | tr -d '\r')" "last line"
     assert_not_contains "$OUT" "Watch all:" "no Watch all"
     assert_file_exists "$PROJ/.agents/workflow/runs/T1-1/guard.sha256" "guard.sha256"
