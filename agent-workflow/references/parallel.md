@@ -45,8 +45,12 @@ config.json の `max_parallel` が 2 以上のとき、`next-task` は `Next: di
 ## ログの見方
 
 全 run のログは `workflow-logs` を1回起動すれば1画面で見られる。`--run <ID>-<N>` で1つに絞れる。
+端末では既定で run ごとの列に分かれて表示され、各列に run の名前・`updated HH:MM:SS`(最終更新)と
+状態(`running` / `finished`)・ログの末尾が並ぶ。1列に流したいときは `--layout stream` を付ける
+(`--width` / `--height` で画面の幅・高さを指定できる)。
 
 ```bash
 bash .agents/workflow/scripts/workflow-logs.sh
 bash .agents/workflow/scripts/workflow-logs.sh --run T1-1
+bash .agents/workflow/scripts/workflow-logs.sh --layout stream
 ```

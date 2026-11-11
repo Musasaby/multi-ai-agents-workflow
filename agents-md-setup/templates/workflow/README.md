@@ -821,10 +821,10 @@ base <作成時の HEAD>
 何も書き換えない。sh 版は python3 が必要(ps1 版は不要)。
 
 ```powershell
-.agents/workflow/scripts/workflow-logs.ps1 [-Run <ID>-<N>[,...]] [-Tail 20] [-Interval 1] [-Duration <秒>] [-Once]
+.agents/workflow/scripts/workflow-logs.ps1 [-Run <ID>-<N>[,...]] [-Tail 20] [-Interval 1] [-Duration <秒>] [-Once] [-Layout <columns|stream>] [-Width <桁>] [-Height <行>]
 ```
 ```bash
-.agents/workflow/scripts/workflow-logs.sh [--run <ID>-<N>]... [--tail 20] [--interval 1] [--duration <秒>] [--once]
+.agents/workflow/scripts/workflow-logs.sh [--run <ID>-<N>]... [--tail 20] [--interval 1] [--duration <秒>] [--once] [--layout <columns|stream>] [--width <桁>] [--height <行>]
 ```
 
 - `--run`: 指定した名前の run だけを追う(複数指定可。ps1 版は `-Run` にカンマ区切りで渡す。形式は `^[A-Za-z0-9_-]+-[0-9]+$`)。
@@ -832,7 +832,11 @@ base <作成時の HEAD>
 - `--tail`: run を初めて見つけたとき、`output.log` の末尾から出す行数(既定 20)
 - `--interval`: run の探し直しとログ確認の間隔(秒、既定 1。0 より大きい数だけ。0・0.0 は使い方の誤りで exit 1)
 - `--duration`: 指定した秒数で終了する
-- `--once`: 対象の run の末尾を出して終了する
+- `--once`: 対象の run を1回だけ描いて終了する(stream は末尾の行、columns は1画面)
+- `--layout`: 表示のしかた。`columns` は run ごとに横へ列を並べる、`stream` は全 run の行を1列に流す。
+  既定は出力が端末なら `columns`、そうでなければ `stream`(パイプ・テストでは `stream` のまま)
+- `--width`: 画面の幅(桁)。無ければ端末の幅、取れなければ 120
+- `--height`: 画面の高さ(行)。無ければ端末の高さ、取れなければ 30
 - 対象の run: `--run` があればその名前の run。無ければ `.agents/workflow/runs/*/` のうち
   `guard.sha256` があり `done` が無いもの(`--interval` ごとに探し直し、新しい run を加える)。
   1回起動すれば、以後に dispatch した run のログもまとめて流れる。
@@ -843,13 +847,25 @@ base <作成時の HEAD>
   `EF BB BF` なら UTF-8 の BOM を除いて読む。それ以外は UTF-8。2バイト単位に満たない端数は次の読み込みに回す。
   出力は BOM なしの UTF-8。`.ps1` 版は、出力が端末のときだけ出力コードページ(`[Console]::OutputEncoding`)を
   UTF-8 に切り替えて終了時に戻す(日本語環境の 932 での文字化けを防ぐ)。リダイレクトされているときは切り替えない
+- columns レイアウト: run を見つけた順に左から並べ、列の間に ` │ ` を挟む。列の幅は画面の幅を列の数で割る。
+  各列は 1 行目が run の名前、2 行目が `updated HH:MM:SS` と状態(`running` / `finished (<EXIT の値>)`)、
+  3 行目が区切りの線、4 行目から下がその run のログの末尾(列の幅で折り返す)。2 行目は
+  `updated HH:MM:SS (<N>s ago) running` の形で、列の幅に入らないときは `(<N>s ago)` を外し、それでも
+  入らなければ先頭の `updated ` も外し、最後は列の幅で切る。列の幅が 30 桁に満たなくなる数の run があるときは
+  入るだけの列を出し、入らない run は最下行に `+<N> more: <run> (updated HH:MM:SS) ...` で出す。
+  列に入れる行は制御文字を整える: `\r` を含む行は最後の `\r` より後ろだけを出し、色(SGR)以外のエスケープと
+  タブ以外の制御文字は消し、タブは空白 4 個にする。行を切ったときは色を戻す `\x1b[0m` を足す。
+  終わった run の列は、新しい run が入りきらなくなるまで残す。再描画は `--interval` ごとに画面全体で、
+  端末では代替画面に切り替えて終了時(Ctrl+C を含む)に戻す(`--once` は ESC を使わず1画面だけ出す)
+- stream レイアウト: run を最初に見つけたとき `[<run>] --- watching (updated HH:MM:SS)`、新しい行が
+  60 秒出ないごとに `[<run>] --- no output for <N>s (updated HH:MM:SS)` を出す(`updated` は最終更新のローカル時刻)
 - 出力: 各行の先頭に `[<run>] ` を付ける。出力が端末へ向いていて環境変数 `NO_COLOR` が空か未設定なら、
   接頭辞に run ごとに違う色(ANSI 31〜36)を付ける(`NO_COLOR` は値が空でないときだけ色を止める)。
   初回は末尾の `--tail` 行、以後は追記された完成した行だけ。
   `output.log` が短くなったら先頭から読み直し `[<run>] --- log truncated` を出す。
   `done` が現れたら残りの行(末尾の改行の無い行を含む)と `[<run>] --- finished (<EXIT の値>)` を出し、
   その run の追跡をやめる(`EXIT:` 行がまだ無ければ 0.1 秒おきに最大 10 回読み直す)。開始時に stderr へ `Watching: ...` を出す
-- 終わり方: `--once` は末尾を出して終了 / `--duration` は指定秒数で終了 /
+- 終わり方: `--once` は1回描いて終了 / `--duration` は指定秒数で終了 /
   `--run` 指定時は指定した run がすべて終わったら終了 / それ以外は Ctrl+C まで続ける。
   どちらの版も Ctrl+C は exit 0 で終わる(sh 版は traceback を出さない。ps1 版は入力がリダイレクトされていなければ
   Ctrl+C を自分で受け取り、待ちの間に見つけて終わる)

@@ -13,6 +13,34 @@ make_run() {
     fi
 }
 
+# $1 のうち $2 を含む最初の行を返す(columns の行の並びを見るため)
+first_line_matching() {
+    local line
+    while IFS= read -r line; do
+        case "$line" in
+            *"$2"*) printf '%s' "$line"; return ;;
+        esac
+    done <<< "$1"
+}
+
+# 標準入力の各行の表示幅(全角 2 桁。ANSI エスケープは除く)の最大値を返す
+max_display_width() {
+    python3 -c '
+import re, sys, unicodedata
+ansi = re.compile(r"\x1b\[[0-9;?]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)")
+m = 0
+for line in sys.stdin.read().splitlines():
+    line = ansi.sub("", line)
+    w = 0
+    for ch in line:
+        if unicodedata.combining(ch):
+            continue
+        w += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+    m = max(m, w)
+print(m)
+'
+}
+
 t_once_running_only() {
     make_run T1-1 $'t1 line a\nt1 line b'
     make_run T2-1 't2 line a'
@@ -129,6 +157,113 @@ t_done_without_exit() {
     assert_contains "$OUT" "[T1-1] --- finished (unknown)" "EXIT: 行が無い done"
 }
 
+t_columns_split_runs() {
+    make_run T1-1 $'alpha one\nalpha two'
+    make_run T2-1 $'beta one\nbeta two'
+    run_script workflow-logs.sh --once --layout columns --width 80 --height 10
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    local header row1 row2
+    header="$(first_line_matching "$OUT" 'T1-1')"
+    assert_contains "$header" "T2-1" "run の数だけ横に並ぶ"
+    row1="$(first_line_matching "$OUT" "alpha one")"
+    assert_contains "$row1" "beta one" "同じ行に別の列の行が並ぶ"
+    assert_not_contains "$row1" "beta two" "ほかの run の行が混ざらない"
+    row2="$(first_line_matching "$OUT" "alpha two")"
+    assert_contains "$row2" "beta two" "2 行目も列がずれない"
+}
+
+t_columns_updated_clock() {
+    make_run T1-1 'running line'
+    make_run T2-1 'finished line' 3
+    touch -d '2020-01-02 03:04:05' "$PROJ/.agents/workflow/runs/T1-1/output.log" \
+        "$PROJ/.agents/workflow/runs/T2-1/output.log"
+    run_script workflow-logs.sh --once --layout columns --width 70 --height 8 --run T1-1 --run T2-1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "updated 03:04:05 running" "running の列の2行目は更新時刻"
+    assert_contains "$OUT" "updated 03:04:05 finished (3)" "done のある run は finished (EXIT の値)"
+}
+
+t_columns_wrap_wide() {
+    local jp="あいうえおかきくけこさしすせそたちつてとなにぬねの"
+    make_run T1-1 "$jp"
+    run_script workflow-logs.sh --once --layout columns --width 20 --height 10
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "あいうえおかきくけこ" "全角は列の幅で折り返す"
+    assert_not_contains "$OUT" "$jp" "折り返さずに1行では出さない"
+    local maxw
+    maxw="$(printf '%s\n' "$OUT" | max_display_width)"
+    assert_eq 1 "$([ "$maxw" -le 20 ] && echo 1 || echo 0)" "どの行も幅を超えない (max=$maxw)"
+}
+
+t_columns_control_chars() {
+    make_run T1-1 $'\033[31mred\nprogress 10%\rprogress 90%\n\ttab\n\033[2Kclear'
+    make_run T2-1 'normal line'
+    run_script workflow-logs.sh --once --layout columns --width 70 --height 8
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_not_contains "$OUT" $'\r' "復帰(\\r)を残さない"
+    assert_not_contains "$OUT" $'\t' "タブを残さない"
+    assert_not_contains "$OUT" $'\033[2K' "SGR 以外の ANSI を残さない"
+    assert_contains "$OUT" 'progress 90%' "同じ行の後半だけ残す"
+    assert_not_contains "$OUT" 'progress 10%' "\\r より前は残さない"
+    local red_line
+    red_line="$(first_line_matching "$OUT" 'red')"
+    case "$red_line" in
+        *$'\033[0m'*' │ '*) red_line="ok" ;;
+        *) red_line="" ;;
+    esac
+    assert_eq "ok" "$red_line" "red の行で色を戻す ANSI が区切りより前にある"
+    local maxw
+    maxw="$(printf '%s\n' "$OUT" | max_display_width)"
+    assert_eq 1 "$([ "$maxw" -le 70 ] && echo 1 || echo 0)" "ANSI を除いた幅が画面の幅を超えない (max=$maxw)"
+}
+
+t_columns_wrap_emoji() {
+    local ten eleven
+    ten="$(printf '✅%.0s' {1..10})"
+    eleven="$(printf '✅%.0s' {1..11})"
+    make_run T1-1 "$(printf '✅%.0s' {1..12})"
+    run_script workflow-logs.sh --once --layout columns --width 20
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "$ten" "全角の記号は10個で折り返す"
+    assert_not_contains "$OUT" "$eleven" "11個以上を1行に出さない"
+}
+
+t_columns_tail_long_log() {
+    local lines
+    lines="$(python3 -c 'print("\n".join("line %04d" % i for i in range(2000)))')"
+    make_run T1-1 "$lines"
+    run_script workflow-logs.sh --once --layout columns --width 40 --height 6
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_not_contains "$OUT" 'line 1996' "末尾より前の行は出さない"
+    local order
+    order="$(printf '%s\n' "$OUT" | python3 -c '
+import sys
+t = sys.stdin.read()
+i97 = t.find("line 1997")
+i98 = t.find("line 1998")
+i99 = t.find("line 1999")
+print(1 if 0 <= i97 < i98 < i99 else 0)
+')"
+    assert_eq 1 "$order" "末尾の3行をこの順で出す"
+}
+
+t_columns_overflow() {
+    make_run T1-1 't1 line'
+    make_run T2-1 't2 line'
+    run_script workflow-logs.sh --once --layout columns --width 40 --height 6
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "+1 more:" "入りきらない run は最下行に出す"
+    assert_contains "$OUT" "T2-1 (updated " "最下行に run 名と更新時刻を出す"
+}
+
+t_stream_watching_clock() {
+    make_run T1-1 'line a'
+    touch -d '2020-01-02 03:04:05' "$PROJ/.agents/workflow/runs/T1-1/output.log"
+    run_script workflow-logs.sh --once --layout stream --run T1-1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "[T1-1] --- watching (updated 03:04:05)" "watching の行に更新時刻を出す"
+}
+
 echo "test-workflow-logs.sh"
 
 test_case "logs: --once は実行中の run だけを接頭辞付きで出す" t_once_running_only
@@ -141,4 +276,12 @@ test_case "logs: UTF-8 の BOM は出力に残らない" t_utf8_bom
 test_case "logs: 止まった run は探索から外し --run なら出す" t_stale_run
 test_case "logs: --interval 0 は exit 1" t_interval_zero
 test_case "logs: EXIT: 行の無い done は finished (unknown)" t_done_without_exit
+test_case "logs: columns は run ごとに列を分けて並べる" t_columns_split_runs
+test_case "logs: columns の2行目は更新時刻と running / finished" t_columns_updated_clock
+test_case "logs: columns は全角の行を列の幅で折り返す" t_columns_wrap_wide
+test_case "logs: columns は制御文字を整える" t_columns_control_chars
+test_case "logs: columns は全角の記号を列の幅で折り返す" t_columns_wrap_emoji
+test_case "logs: columns は長いログの末尾だけを出す" t_columns_tail_long_log
+test_case "logs: columns は入りきらない run を +N more で出す" t_columns_overflow
+test_case "logs: stream は watching の行に更新時刻を出す" t_stream_watching_clock
 summary
