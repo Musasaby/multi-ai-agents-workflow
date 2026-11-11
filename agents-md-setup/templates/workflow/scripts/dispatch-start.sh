@@ -212,9 +212,20 @@ if [ -n "$HEALTHCHECK" ]; then
     fi
 fi
 
-# 3b. ウォームアップ(このサイクルの最初の dispatch のときだけ)
+# 3b. ウォームアップ(このサイクルの最初の CLI の dispatch のときだけ)
+# CLI の run = guard.sha256 があり、launcher が無いか subagent でない run
+has_cli_run() {
+    local g d
+    for g in .agents/workflow/runs/*/guard.sha256; do
+        [ -f "$g" ] || continue
+        d="${g%/guard.sha256}"
+        if [ -f "$d/launcher" ] && [ "$(tr -d '[:space:]' < "$d/launcher")" = subagent ]; then continue; fi
+        return 0
+    done
+    return 1
+}
 WARMUP="$(cfg_get warmup_command)"
-if [ "$PR_MODE" = false ] && [ "$LAUNCHER" = cli ] && [ -n "$WARMUP" ] && ! compgen -G ".agents/workflow/runs/*/guard.sha256" > /dev/null; then
+if [ "$PR_MODE" = false ] && [ "$LAUNCHER" = cli ] && [ -n "$WARMUP" ] && ! has_cli_run; then
     if ! run_check_command "$WARMUP"; then
         abort_worktree
         echo "Next: escalate reason=warmup"

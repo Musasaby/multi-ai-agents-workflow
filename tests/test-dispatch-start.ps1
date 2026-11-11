@@ -194,6 +194,26 @@ Invoke-TestCase "start: warmup_command は最初の dispatch だけ実行する"
     Assert-Eq 1 @(Get-Content "$script:Proj/.agents/warmup.log").Count "warmup.log lines"
 }
 
+Invoke-TestCase "start: サブエージェントの run の後の最初の CLI の run でウォームアップする" {
+    Initialize-StartProject 'T1:pending', 'T2:pending'
+    Set-ChildCfg warmup_command 'Add-Content .agents/warmup.log w'
+    Set-ChildCfg subagent always
+    Invoke-Script dispatch-start.ps1 -TaskId T1 -SubagentCapable
+    Assert-Eq 0 $script:Code "exit code (T1): $($script:Err)"
+    Assert-Contains $script:Out "Launcher: subagent" "Launcher line (T1)"
+    Assert-FileAbsent "$script:Proj/.agents/warmup.log" "no warmup for subagent run"
+    Set-Report T1 1
+    Set-State 'T1:done' 'T2:pending'
+    Set-StateBranch develop/t
+    Set-ChildCfg subagent never
+    Invoke-Script dispatch-start.ps1 -TaskId T2
+    Assert-Eq 0 $script:Code "exit code (T2): $($script:Err)"
+    Wait-Done T2-1
+    Assert-FileExists "$script:Proj/.agents/workflow/runs/T2-1/done" "T2 done"
+    Assert-FileExists "$script:Proj/.agents/warmup.log" "warmup.log"
+    Assert-Eq 1 @(Get-Content "$script:Proj/.agents/warmup.log").Count "warmup.log lines"
+}
+
 Invoke-TestCase "start: warmup_command が失敗すれば exit 31" {
     Initialize-StartProject 'T1:pending', 'T2:pending'
     Set-ChildCfg warmup_command 'exit 1'

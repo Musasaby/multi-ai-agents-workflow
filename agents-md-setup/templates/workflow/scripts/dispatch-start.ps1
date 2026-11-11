@@ -198,9 +198,19 @@ if ($healthcheck) {
     }
 }
 
-# 3b. ウォームアップ(このサイクルの最初の dispatch のときだけ)
+# 3b. ウォームアップ(このサイクルの最初の CLI の dispatch のときだけ)
+# CLI の run = guard.sha256 があり、launcher が無いか subagent でない run
+function Test-CliRun {
+    foreach ($d in @(Get-ChildItem -Path '.agents/workflow/runs' -Directory -ErrorAction SilentlyContinue)) {
+        if (-not (Test-Path -LiteralPath (Join-Path $d.FullName 'guard.sha256') -PathType Leaf)) { continue }
+        $launcherFile = Join-Path $d.FullName 'launcher'
+        if ((Test-Path -LiteralPath $launcherFile -PathType Leaf) -and ([System.IO.File]::ReadAllText($launcherFile).Trim() -eq 'subagent')) { continue }
+        return $true
+    }
+    return $false
+}
 $warmup = Get-ChildCfg 'warmup_command'
-if (-not $Pr -and $launcher -eq 'cli' -and $warmup -and -not (Test-Path '.agents/workflow/runs/*/guard.sha256')) {
+if (-not $Pr -and $launcher -eq 'cli' -and $warmup -and -not (Test-CliRun)) {
     if (-not (Invoke-CheckCommand $warmup)) {
         Stop-RunWorktree
         Write-Output "Next: escalate reason=warmup"

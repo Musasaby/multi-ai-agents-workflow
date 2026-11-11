@@ -198,6 +198,28 @@ t_warmup_once() {
     assert_eq 1 "$(wc -l < "$PROJ/.agents/warmup.log" | tr -d ' ')" "warmup.log lines"
 }
 
+t_warmup_after_subagent() {
+    setup "T1:pending" "T2:pending"
+    set_child_cfg warmup_command 'echo w >> .agents/warmup.log'
+    set_child_cfg subagent always
+    run_script dispatch-start.sh T1 --subagent-capable
+    assert_eq 0 "$CODE" "exit code (T1): $ERR"
+    assert_contains "$OUT" "Launcher: subagent" "Launcher line (T1)"
+    assert_file_absent "$PROJ/.agents/warmup.log" "no warmup for subagent run"
+    printf '## 完了報告
+- 変更ファイル: なし
+' > "$PROJ/.agents/workflow/runs/T1-1/report.md"
+    write_state "T1:done" "T2:pending"
+    set_state_branch develop/t
+    set_child_cfg subagent never
+    run_script dispatch-start.sh T2
+    assert_eq 0 "$CODE" "exit code (T2): $ERR"
+    wait_done T2-1
+    assert_file_exists "$PROJ/.agents/workflow/runs/T2-1/done" "T2 done"
+    assert_file_exists "$PROJ/.agents/warmup.log" "warmup.log"
+    assert_eq 1 "$(wc -l < "$PROJ/.agents/warmup.log" | tr -d ' ')" "warmup.log lines"
+}
+
 t_warmup_fail() {
     setup "T1:pending" "T2:pending"
     set_child_cfg warmup_command 'exit 1'
@@ -377,6 +399,7 @@ test_case "start: 試行回数 0 は exit 1" t_attempt_zero
 test_case "start: リトライで fix-notes が無ければ stderr に案内を出す" t_retry_dirty_no_notes_msg
 test_case "start: healthcheck_command が失敗すれば exit 30" t_healthcheck_fail
 test_case "start: warmup_command は最初の dispatch だけ実行する" t_warmup_once
+test_case "start: サブエージェントの run の後の最初の CLI の run でウォームアップする" t_warmup_after_subagent
 test_case "start: warmup_command が失敗すれば exit 31" t_warmup_fail
 test_case "start: --pr は pr-<N> の run を起動する" t_pr_ok
 test_case "start: --pr で main 上なら exit 12" t_pr_on_main
