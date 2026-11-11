@@ -22,6 +22,21 @@ PY
 
 done_exit() { head -1 "$PROJ/.agents/workflow/runs/T1-1/done"; }
 
+# review.command_template を設定し、review の run 用の prompt.md を用意する
+set_review() { # $1 = review.command_template
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" "$1" <<'PY'
+import json, sys
+p, tmpl = sys.argv[1:3]
+with open(p, encoding='utf-8') as f:
+    cfg = json.load(f)
+cfg['review'] = {'command_template': tmpl}
+with open(p, 'w', encoding='utf-8') as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+PY
+    mkdir -p "$PROJ/.agents/workflow/runs/review-T1-1"
+    printf 'prompt\n' > "$PROJ/.agents/workflow/runs/review-T1-1/prompt.md"
+}
+
 # python3 を含まない PATH(dispatch-run.sh のフォールバック経路を通すため)
 path_without_python() {
     local out="" dir cmd
@@ -62,6 +77,22 @@ t_run_git_state() {
     assert_eq "head $expected" "$first" "git-state.txt first line"
     lines="$(wc -l < "$PROJ/.agents/workflow/runs/T1-1/git-state.txt" | tr -d '[:space:]')"
     assert_eq 4 "$lines" "git-state.txt has 4 lines"
+}
+
+t_run_review_uses_review_template() {
+    set_child 'exit 3'
+    printf '#!/bin/bash\nexit 0\n' > "$PROJ/review-child.sh"
+    set_review 'bash ./review-child.sh "{prompt}"'
+    run_script dispatch-run.sh review-T1 1
+    assert_eq "EXIT:0" "$(head -1 "$PROJ/.agents/workflow/runs/review-T1-1/done")" "review run uses review.command_template"
+}
+
+t_run_review_records_main_tree() {
+    set_child 'echo hello'
+    set_review 'bash ./child.sh "{prompt}"'
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-run.sh review-T1 1
+    assert_contains "$(cat "$PROJ/.agents/workflow/runs/review-T1-1/main-tree.txt")" "a.txt" "main-tree.txt records untracked file"
 }
 
 t_run_git_state_no_exec() {
@@ -1093,6 +1124,8 @@ echo "test-dispatch.sh"
 
 test_case "run: 正常終了はEXIT:0" t_run_exit0
 test_case "run: 起動時の git 状態を git-state.txt に記録する" t_run_git_state
+test_case "run: review の run は review.command_template で子を起動する" t_run_review_uses_review_template
+test_case "run: review の run は main-tree.txt を記録する" t_run_review_records_main_tree
 test_case "run: git-state.sh に実行権限が無くても git-state.txt を4行で書く" t_run_git_state_no_exec
 test_case "run: プロジェクトルート以外から相対パスで起動しても git-state.txt を書く" t_run_git_state_from_subdir
 test_case "run: 通常の非0は数値のまま" t_run_exit_nonzero
