@@ -39,6 +39,7 @@
 │   ├── fix-notes.md     リトライ時のレビュー指摘(親が作成)
 │   ├── guard.sha256     起動時の管理ファイルの SHA-256(dispatch-run が作成、dispatch-check が改ざん検知に使う)
 │   ├── git-state.txt    起動時の git 状態の4行(git-state の出力。dispatch-run が作成、dispatch-check が改ざん検知に使う)
+│   ├── started          起動時刻(UTC の `YYYY-MM-DDTHH:MM:SSZ`。dispatch-run が作成、dispatch-check が子CLIのログの絞り込みに使う)
 │   ├── worktree/        max_parallel が 2 以上のとき、その run の子が作業する git worktree(collect で消える)
 │   ├── worktree.txt     worktree の path / branch / base の3行(dispatch-worktree create が作成、dispatch-run・dispatch-check が読む)
 │   ├── main-tree.txt    起動時の本体の未コミットの変更のパスとハッシュ(git-state --main-tree の出力。dispatch-run が worktree の run のとき作成、dispatch-check が本体の変更の検知に使う)
@@ -98,6 +99,10 @@
 **Windows での `command_template`**: `bash ./x.sh "{prompt}"` のように `bash` だけで書くと、`dispatch-run` が子を起動するときの
 Windows のコマンド検索順で System32 の `bash.exe`(WSL)が Git Bash より先に選ばれ、Windows のパスが見えずに失敗することがある。
 Git Bash を使うなら `"C:/Program Files/Git/usr/bin/bash.exe" ./x.sh "{prompt}"` のようにフルパスで書く。
+また、npm でグローバルに入れた CLI(`claude`・`opencode` 等)は実体が `.cmd`(`claude.cmd` 等)のことがある。
+`dispatch-run` は `.cmd` / `.bat` を起動せずに `crashed` にするため(`output.log` に `failed to start:` を書く)、
+実体の `.exe` のフルパスを `command_template` に書く(例: npm のグローバルディレクトリ `%APPDATA%/npm` にある
+`.cmd` ではなく、パッケージが持つ `.exe` を指定する)。
 
 ### 子CLIのプロファイル
 
@@ -173,6 +178,7 @@ Git Bash を使うなら `"C:/Program Files/Git/usr/bin/bash.exe" ./x.sh "{promp
 (assistantのテキスト・使用ツール名と入力要約・`result` の要旨等)に変換して `output.log` へ逐次書き出す
 (パース不能行はそのまま `output.log` に通す)。`output.log` は実行中に随時更新されるため
 `tail -f` / `Get-Content -Wait` で閲覧できる。
+`result` 行は本文を載せず `[result] exit_subtype=<subtype>` の形で書く(本文は `output.jsonl` に残る)。
 `[tool_use]` 行の入力の要約は 300 文字で切り詰める。ツールが `Edit`・`Write`・`MultiEdit`・`NotebookEdit` のときは、
 本文(`old_string`・`new_string`・`content`・`edits`・`new_source`)を外して `file_path` 等だけを載せる
 (本文に書かれたパスの文字列をプロジェクト外アクセスと誤検知しないため。#87)。本文を含む全文は `output.jsonl` に残る。
@@ -545,7 +551,9 @@ prompt.md の絶対パス(`/` 区切り)に置き換える。どちらも無い�
 子を起動せず `output.log` に `Child profile error: <メッセージ>` を書き、`done` の `EXIT:` を `1` にして終える。
 
 `EXIT:` の値は、数値(子CLIの exit code)・`signal:<番号>`(子がシグナルで強制終了された。
-POSIX 版のみ)・`crashed:<メッセージ>`(ラッパー自体の異常終了。PowerShell 版)のいずれか。
+POSIX 版のみ)・`crashed:<メッセージ>`(ラッパー自体の異常終了、または子の起動の失敗。sh 版・ps1 版とも)のいずれか。
+子を起動できなかったとき(存在しないコマンド、`.cmd` / `.bat` の指定等)は、`output.log` に
+`failed to start: <メッセージ>` を書いて `EXIT:crashed:<メッセージ>` を記録する。
 POSIX 版は、Python 経由の起動では子の負の returncode を、bash で直接起動するフォールバック
 経路では 128 より大きい終了コードをシグナル終了とみなし、`signal:15` のように記録する
 (従来は SIGTERM が `EXIT:241` と記録され、通常の終了と区別できなかった)。
@@ -670,12 +678,15 @@ sh 版では位置引数の前でも後でも指定できる。
 - **子CLI自身のログのエラー**: config.json の `child_agent.cli_log`(子CLI自身のログファイルのパス。
   先頭の `~/` はホームディレクトリで展開する)を読む。`CLI log:` には設定したパスを出し、
   未設定なら `(not configured)`、パスのファイルが無ければ `<パス> (not found)`。次にそのログの
-  末尾200行のうち `ERROR` を含む行の最後の5行を字下げして出す。`Provider error:` はプロバイダー起因の
+  末尾200行のうち `ERROR` を含む行から、行中の最初のタイムスタンプが `runs/<ID>-<N>/started`
+  (dispatch-run が記録した起動時刻)より前の行を除き、最後の5行を字下げして出す(タイムスタンプや
+  タイムゾーンの無い行は残す。`started` が無い・sh 版で python3 が無いときは絞り込まない)。`Provider error:` はプロバイダー起因の
   失敗かどうか(`yes` / `no` / `unknown`)で、5行のいずれかが `provider_error_pattern` に一致すれば `yes`、
   一致しなければ `no`、`cli_log` が未設定・ファイルが無ければ `unknown`。`provider_error_pattern` が空なら
   `cli_log` の有無にかかわらず `disabled (profile: <name>)`(組み込みの例: `usage limit`・`rate limit`・
   `endpoint is unavailable`・429(前後に英数字を続けない。`.429Z` のようなタイムスタンプ等に
-  一致させないため))。
+  一致させないため)・ヘッダー待ちのタイムアウト(`provider response headers timed out`)・
+  残高不足(`insufficient balance`・`insufficient funds` 等)・`AI_APICallError`(小文字化して一致))。
   利用上限・レート制限・エンドポイント障害の切り分け用の参考情報で、Verdict・exit code には影響しない
 - **権限拒否**: `permission_denied_pattern` に一致する行があれば権限拒否とみなす
   (組み込みの例: opencode の拒否の記録 = 行頭が `! permission requested:` で `auto-rejecting` を含む行。

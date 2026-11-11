@@ -356,7 +356,16 @@ t_run_profile_stream_json_writes_jsonl_without_template_keyword() {
     set_profile claude-stream-json
     run_script dispatch-run.sh T1 1
     assert_file_exists "$PROJ/.agents/workflow/runs/T1-1/output.jsonl" "output.jsonl"
-    assert_contains "$(cat "$PROJ/.agents/workflow/runs/T1-1/output.log")" "[result] exit_subtype=success" "result line"
+    local log started
+    log="$(cat "$PROJ/.agents/workflow/runs/T1-1/output.log")"
+    assert_contains "$log" "[result] exit_subtype=success" "result line"
+    assert_not_contains "$log" "result=" "result body omitted"
+    started="$(cat "$PROJ/.agents/workflow/runs/T1-1/started")"
+    if printf '%s\n' "$started" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'; then
+        _record ok
+    else
+        _record ng "started format (got '$started')"
+    fi
 }
 
 t_run_stream_json_large_stdin_does_not_deadlock() {
@@ -397,6 +406,43 @@ print(json.dumps({'type': 'assistant', 'message': {'content': [{'type': 'tool_us
     assert_not_contains "$log" "content" "content key omitted"
     assert_contains "$jsonl" "~/.config" "jsonl keeps old_string value"
     assert_contains "$jsonl" "/tmp/x" "jsonl keeps content value"
+}
+
+# T12: 子を起動できないテンプレートは done に crashed を記録する
+t_run_missing_command_records_crashed() {
+    set_child ''
+    set_profile claude-stream-json
+    set_template 'no-such-command-for-dispatch-test "{prompt}"'
+    run_script dispatch-run.sh T1 1
+    local marker log
+    marker="$(done_exit)"
+    case "$marker" in
+        EXIT:crashed:*) _record ok ;;
+        *) _record ng "done marker starts with EXIT:crashed: (got '$marker')" ;;
+    esac
+    log="$(cat "$PROJ/.agents/workflow/runs/T1-1/output.log")"
+    case "$log" in
+        "failed to start: "*) _record ok ;;
+        *) _record ng "output.log starts with 'failed to start: ' (got '${log%%$'\n'*}')" ;;
+    esac
+}
+
+# T12: .cmd は起動せず、.exe を指定するよう案内して crashed にする
+t_run_cmd_command_refused() {
+    set_child ''
+    printf '@echo off\r\nexit /b 0\r\n' > "$PROJ/stub.cmd"
+    chmod +x "$PROJ/stub.cmd"
+    set_profile claude-stream-json
+    set_template "\"$(py_path "$PROJ/stub.cmd")\" \"{prompt}\""
+    run_script dispatch-run.sh T1 1
+    local marker log
+    marker="$(done_exit)"
+    case "$marker" in
+        EXIT:crashed:*) _record ok ;;
+        *) _record ng "done marker starts with EXIT:crashed: (got '$marker')" ;;
+    esac
+    log="$(cat "$PROJ/.agents/workflow/runs/T1-1/output.log")"
+    assert_contains "$log" "batch file" "output.log"
 }
 
 t_run_guard_records_child_profiles() {
@@ -968,6 +1014,46 @@ t_check_cli_log_provider_error() {
     assert_not_contains "$OUT" "level=INFO" "info line not shown"
 }
 
+# T11: CLI ログの ProviderHeaderTimeoutError をプロバイダー起因とする
+t_check_cli_log_provider_header_timeout() {
+    set_cli_log "$(py_path "$PROJ/cli.log")"
+    printf 'timestamp=2026-10-17T03:07:50.429Z level=ERROR message="stream error" error.error="ProviderHeaderTimeoutError: provider response headers timed out"\n' > "$PROJ/cli.log"
+    make_run 0 "$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "ProviderHeaderTimeoutError" "error line shown"
+    assert_contains "$OUT" "Provider error: yes" "provider flag"
+}
+
+# T11: CLI ログの Insufficient account funds をプロバイダー起因とする
+t_check_cli_log_insufficient_account_funds() {
+    set_cli_log "$(py_path "$PROJ/cli.log")"
+    printf 'timestamp=2026-10-17T03:07:50.429Z level=ERROR message="stream error" error.error="Insufficient account funds"\n' > "$PROJ/cli.log"
+    make_run 0 "$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Insufficient account funds" "error line shown"
+    assert_contains "$OUT" "Provider error: yes" "provider flag"
+}
+
+# T11: run の起動より前の ERROR 行は出さない(起動後の行は出す)
+t_check_cli_log_before_started_hidden() {
+    set_cli_log "$(py_path "$PROJ/cli.log")"
+    printf 'timestamp=2026-10-17T10:49:49.493Z level=ERROR message="early" error.error="Go usage limit exceeded"\n' > "$PROJ/cli.log"
+    printf 'timestamp=2026-10-17T10:55:34.828Z level=ERROR message="tool failed"\n' >> "$PROJ/cli.log"
+    make_run 0 "$REPORT"
+    printf '2026-10-17T10:50:00Z\n' > "$PROJ/.agents/workflow/runs/T1-1/started"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_not_contains "$OUT" "10:49:49.493Z" "pre-start line hidden"
+    assert_not_contains "$OUT" "Go usage limit exceeded" "pre-start provider line hidden"
+    assert_contains "$OUT" "10:55:34.828Z" "post-start line shown"
+    assert_contains "$OUT" "Provider error: no" "provider flag"
+}
+
 # T47(#74): 利用上限エラーのログで子が異常終了(非0)すれば provider-error で exit 4
 t_check_cli_log_provider_error_exit4() {
     set_cli_log "$(py_path "$PROJ/cli.log")"
@@ -1026,6 +1112,8 @@ test_case "run: プレースホルダが無いテンプレートは stdin でプ
 test_case "run: profile claude-stream-json は command_template に stream-json が無くても output.jsonl を書く" t_run_profile_stream_json_writes_jsonl_without_template_keyword
 test_case "run: stream-json で stdin に大きいプロンプトを渡しても、子が先に stderr に大量に書くと止まらない" t_run_stream_json_large_stdin_does_not_deadlock
 test_case "run: stream-json の [tool_use] 行は Edit・Write の本文を載せず、ほかのツールの入力は載せる" t_run_stream_json_tool_use_omits_file_edit_body
+test_case "run: 起動できないコマンドは crashed を記録する" t_run_missing_command_records_crashed
+test_case "run: .cmd のコマンドは起動せず crashed で案内する" t_run_cmd_command_refused
 test_case "run: 利用先の child-profiles.json を guard.sha256 に記録する" t_run_guard_records_child_profiles
 test_case "check: 正常" t_check_ok
 test_case "check: signalはexit 4" t_check_signal
@@ -1079,6 +1167,9 @@ test_case "check: tool_use 行のホームディレクトリ参照は exit 6" t_
 test_case "check: 色付きツール実行行の USERPROFILE・AppData の Temp 参照は exit 6" t_check_outside_access_userprofile_temp
 test_case "check: HOMEBREW_PREFIX や env:TEMP は検出しない" t_check_outside_access_home_not_detected
 test_case "check: CLI ログの利用上限エラーを Provider error: yes にする" t_check_cli_log_provider_error
+test_case "check: CLI ログの ProviderHeaderTimeoutError をプロバイダー起因とする" t_check_cli_log_provider_header_timeout
+test_case "check: CLI ログの Insufficient account funds をプロバイダー起因とする" t_check_cli_log_insufficient_account_funds
+test_case "check: CLI ログの run の起動より前の ERROR 行を出さない" t_check_cli_log_before_started_hidden
 test_case "check: CLI ログの利用上限エラーで異常終了なら provider-error" t_check_cli_log_provider_error_exit4
 test_case "check: CLI ログの ERROR がプロバイダー由来でなければ Provider error: no" t_check_cli_log_error_not_provider
 test_case "check: cli_log が未設定なら CLI log: (not configured)" t_check_cli_log_not_configured

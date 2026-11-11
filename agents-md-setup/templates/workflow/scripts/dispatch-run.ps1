@@ -106,6 +106,9 @@ if ($wtPath) {
     $gitState = & pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1"
 }
 [System.IO.File]::WriteAllText((Join-Path (Get-Location) "$runDir/git-state.txt"), (($gitState -join "`n") + "`n"), [System.Text.UTF8Encoding]::new($false))
+# 起動時刻を UTC の1行で記録する(dispatch-check が CLI ログをこの時刻より後の行に絞るため)
+$startedAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture)
+[System.IO.File]::WriteAllText((Join-Path (Get-Location) "$runDir/started"), "$startedAt`n", [System.Text.UTF8Encoding]::new($false))
 # worktree の run では、子の実行中に本体(メインの作業ツリー)で起きた変更も dispatch-check が
 # 検知できるよう、起動時のパスごとのハッシュを main-tree.txt に記録する(失敗しても起動は止めない)
 if ($wtPath) {
@@ -194,7 +197,8 @@ function ConvertTo-HumanLine {
             return ($lines -join "`n")
         }
         'result' {
-            return "[result] exit_subtype=$($obj.subtype) result=$($obj.result)"
+            # 本文(result)は output.jsonl に残るため、output.log には結果の種別だけを書く
+            return "[result] exit_subtype=$($obj.subtype)"
         }
         default {
             $compact = ($obj | ConvertTo-Json -Compress -Depth 5)
@@ -274,6 +278,15 @@ try {
     if ($isStreamJson) {
         Remove-Item -Force -ErrorAction SilentlyContinue $jsonlPath, $logPath
 
+        # .cmd / .bat は Popen 相当(ProcessStartInfo)から直接起動できないため、
+        # 起動せずに .exe を指定するよう案内する(例外は外側の catch が EXIT:crashed にする)
+        $resolvedCmd = Get-Command -Name $exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($resolvedCmd -and ($resolvedCmd.Source -match '(?i)\.(cmd|bat)$')) {
+            $reason = "'$($resolvedCmd.Source)' is a batch file (.cmd/.bat); write the path of the real executable (.exe) in child_agent.command_template"
+            [System.IO.File]::WriteAllText((Join-Path (Get-Location) $logPath), "failed to start: $reason`n", [System.Text.UTF8Encoding]::new($false))
+            throw $reason
+        }
+
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = $exe
         foreach ($a in $rest) { $psi.ArgumentList.Add($a) }
@@ -299,7 +312,13 @@ try {
 
         $stdinJob = $null
         try {
-            $proc.Start() | Out-Null
+            # 子を起動できなかった(存在しないコマンド等)ことを output.log に残し、外側の catch で done に書く
+            try {
+                $proc.Start() | Out-Null
+            } catch {
+                [System.IO.File]::WriteAllText((Join-Path (Get-Location) $logPath), "failed to start: $($_.Exception.Message)`n", [System.Text.UTF8Encoding]::new($false))
+                throw
+            }
             $proc.BeginErrorReadLine()
             if ($useStdin) {
                 # 子が stdin を読み切る前に stderr / stdout へ大量に書いても止まらないよう、別スレッドで書き込む

@@ -404,9 +404,11 @@ OUTSIDE_LINES="$(printf '%s\n' "$RAW_LOG" | TOOL_CALL_RE="$TOOL_CALL_RE" LC_ALL=
 # --- 子CLI自身のログのエラー検出(利用上限・エンドポイント障害などの切り分け用) ---
 # config.json の child_agent.cli_log(子CLI自身のログファイルのパス。先頭の ~/ はホームディレクトリ)
 # を読む(python3 が無い・config.json が読めない場合は空 = 未設定扱い)。末尾 200 行のうち ERROR を
-# 含む行の最後の 5 行と、プロバイダー起因かどうか(利用上限・レート制限・エンドポイント障害・429。
-# 429 の前後に英数字を許さないのは .429Z のようなタイムスタンプや16進の ID に一致させないため)を
-# 出力に表示するだけなので、判定(Verdict・exit code)には影響しない
+# 含む行を取り、runs/<ID>-<N>/started(dispatch-run が記録した起動時刻)があれば各行の最初の
+# タイムスタンプを UTC の秒に直して起動時刻より前の行を除く(タイムスタンプが無い行・タイムゾーンが
+# 無い行は残す)。その最後の 5 行と、プロバイダー起因かどうか(利用上限・レート制限・エンドポイント
+# 障害・429 など。429 の前後に英数字を許さないのは .429Z のようなタイムスタンプや16進の ID に
+# 一致させないため)を出力に表示するだけなので、判定(Verdict・exit code)には影響しない
 CLI_LOG="$(python3 -c "import json; print(json.load(open('.agents/workflow/config.json', encoding='utf-8'))['child_agent'].get('cli_log', ''))" 2>/dev/null | tr -d '\r')"
 PROVIDER_ERROR=unknown
 CLI_LOG_LINES=""
@@ -421,7 +423,48 @@ if [ -n "$CLI_LOG" ]; then
     else
         PROVIDER_ERROR=no
         # NUL を含むと grep がバイナリ扱いするため、output.log と同じく NUL・CR を除いてから読む
-        CLI_LOG_LINES="$(LC_ALL=C tr -d '\000\r' < "$CLI_LOG_PATH" | tail -n 200 | grep ERROR | tail -n 5)"
+        CLI_LOG_TAIL="$(LC_ALL=C tr -d '\000\r' < "$CLI_LOG_PATH" | tail -n 200 | grep ERROR)"
+        # 起動時刻より前の ERROR 行を除く(dispatch-run の started が無ければ絞り込まない)。
+        # タイムスタンプを取れない行(タイムゾーンが無い行を含む)は残す。python3 が無ければ絞り込まない
+        if [ -f "$RUN_DIR/started" ] && command -v python3 > /dev/null 2>&1; then
+            CLI_LOG_TAIL="$(printf '%s\n' "$CLI_LOG_TAIL" | python3 -c '
+import re, sys
+from datetime import datetime, timezone, timedelta
+
+TS_RE = re.compile(rb"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.[0-9]+)?(Z|[+-][0-9]{2}:?[0-9]{2})")
+
+def to_utc_second(data):
+    m = TS_RE.search(data)
+    if not m:
+        return None
+    g = m.groups()
+    tz = g[6].decode("ascii")
+    if tz == "Z":
+        offset = timedelta(0)
+    else:
+        digits = tz[1:].replace(":", "")
+        offset = timedelta(hours=int(digits[0:2]), minutes=int(digits[2:4]))
+        if tz[0] == "-":
+            offset = -offset
+    # 日付として成り立たない値(13月・24時間以上のオフセット等)は、ps1 版と同じく比較できない行として残す
+    try:
+        dt = datetime(int(g[0]), int(g[1]), int(g[2]), int(g[3]), int(g[4]), int(g[5]), tzinfo=timezone(offset))
+    except (ValueError, OverflowError):
+        return None
+    return int(dt.timestamp())
+
+with open(sys.argv[1], "rb") as f:
+    started = to_utc_second(f.read())
+if started is None:
+    sys.stdout.buffer.write(sys.stdin.buffer.read())
+else:
+    for line in sys.stdin.buffer:
+        ts = to_utc_second(line)
+        if ts is None or ts >= started:
+            sys.stdout.buffer.write(line)
+' "$RUN_DIR/started")"
+        fi
+        CLI_LOG_LINES="$(printf '%s\n' "$CLI_LOG_TAIL" | tail -n 5)"
         if [ -n "$PROVIDER_RE" ] && [ -n "$CLI_LOG_LINES" ] && printf '%s\n' "$CLI_LOG_LINES" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C grep -Eq -e "$PROVIDER_RE"; then
             PROVIDER_ERROR=yes
         fi
