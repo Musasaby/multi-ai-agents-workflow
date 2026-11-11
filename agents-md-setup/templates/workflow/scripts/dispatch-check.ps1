@@ -378,10 +378,29 @@ for ($i = 0; $i -lt $rawLines.Count; $i++) {
 # --- 子CLI自身のログのエラー検出(利用上限・エンドポイント障害などの切り分け用) ---
 # config.json の child_agent.cli_log(子CLI自身のログファイルのパス。先頭の ~/ はホームディレクトリ)
 # を読む(ConvertFrom-Json が読めない・cli_log が無い場合は未設定扱い)。末尾 200 行のうち ERROR を
-# 含む行の最後の 5 行と、プロバイダー起因かどうか(プロファイルの provider_error_pattern を小文字にした
-# 行に当てる。auto / opencode では利用上限・レート制限・エンドポイント障害・429。
+# 含む行を取り、runs/<ID>-<N>/started(dispatch-run が記録した起動時刻)があれば各行の最初の
+# タイムスタンプを UTC の秒に直して起動時刻より前の行を除く(タイムスタンプが無い行・タイムゾーンが
+# 無い行は残す)。その最後の 5 行と、プロバイダー起因かどうか(プロファイルの provider_error_pattern
+# を小文字にした行に当てる。auto / opencode では利用上限・レート制限・エンドポイント障害・429 など。
 # 429 の前後に英数字を許さないのは .429Z のようなタイムスタンプや16進の ID に一致させないため。
 # パターンが空のプロファイルでは判定しない)を出力に表示するだけなので、判定(Verdict・exit code)には影響しない
+# 行中の最初のタイムスタンプを UTC の秒に直す。タイムスタンプが無い行・タイムゾーンが無い行は $null
+function ConvertTo-UtcSecond {
+    param([string]$Text)
+    $m = [regex]::Match($Text, '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:?[0-9]{2})')
+    if (-not $m.Success) { return $null }
+    $stamp = $m.Value
+    if ($stamp.EndsWith('Z')) {
+        $stamp = $stamp.Substring(0, $stamp.Length - 1) + '+00:00'
+    } elseif ($stamp -match '([+-][0-9]{2})([0-9]{2})$') {
+        $stamp = $stamp.Substring(0, $stamp.Length - 5) + $Matches[1] + ':' + $Matches[2]
+    }
+    $parsed = [DateTimeOffset]::MinValue
+    if ([DateTimeOffset]::TryParse($stamp, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AssumeUniversal, [ref]$parsed)) {
+        return $parsed.ToUnixTimeSeconds()
+    }
+    return $null
+}
 $cliLog = ''
 try {
     $cfg = Get-Content '.agents/workflow/config.json' -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json
@@ -397,7 +416,21 @@ if ($cliLog -ne '') {
         $cliLog = "$cliLog (not found)"
     } else {
         $providerError = 'no'
-        $cliLogLines = @(Get-Content -LiteralPath $cliLogPath -Tail 200 -Encoding utf8 | Where-Object { $_ -cmatch 'ERROR' } | Select-Object -Last 5)
+        $errorLines = @(Get-Content -LiteralPath $cliLogPath -Tail 200 -Encoding utf8 | Where-Object { $_ -cmatch 'ERROR' })
+        # 起動時刻より前の ERROR 行を除く(dispatch-run の started が無ければ絞り込まない)。
+        # タイムスタンプを取れない行(タイムゾーンが無い行を含む)は残す
+        $startedPath = "$runDir/started"
+        if ((Test-Path -LiteralPath $startedPath -PathType Leaf) -and $errorLines.Count -gt 0) {
+            $startedText = Get-Content -LiteralPath $startedPath -Raw -Encoding utf8
+            $startedSecond = ConvertTo-UtcSecond $startedText
+            if ($null -ne $startedSecond) {
+                $errorLines = @($errorLines | Where-Object {
+                    $lineSecond = ConvertTo-UtcSecond $_
+                    ($null -eq $lineSecond) -or ($lineSecond -ge $startedSecond)
+                })
+            }
+        }
+        $cliLogLines = @($errorLines | Select-Object -Last 5)
         if ($childProfile.ProviderErrorPattern) {
             foreach ($line in $cliLogLines) {
                 if ($line.ToLowerInvariant() -cmatch $childProfile.ProviderErrorPattern) {
