@@ -58,6 +58,7 @@ $stTasks = @($state.tasks)
 # --- PR の状態(finish / group-advance のときだけ) ---
 $prState = ''
 $prUrl = ''
+$unpushedSuffix = ''
 if ($nextLine -ceq 'Next: finish' -or $nextLine -ceq 'Next: group-advance') {
     $prState = 'unknown'
     $branch = ''
@@ -89,6 +90,33 @@ if ($nextLine -ceq 'Next: finish' -or $nextLine -ceq 'Next: group-advance') {
             }
         } finally {
             Remove-Item $errFile -ErrorAction SilentlyContinue
+        }
+    }
+    # OPEN のときは未 push のコミットを数える(fetch はせず、リモート追跡ブランチと比べる)
+    if ($prState -ceq 'OPEN' -and $branch) {
+        $remoteRef = "refs/remotes/origin/$branch"
+        $hasRemote = $false
+        try {
+            & git rev-parse --verify -q $remoteRef *> $null
+            $hasRemote = ($LASTEXITCODE -eq 0)
+        } catch {
+            $hasRemote = $false
+        }
+        if (-not $hasRemote) {
+            $unpushedSuffix = ' unpushed=no-remote'
+        } else {
+            $countOut = $null
+            $revCode = 1
+            try {
+                $countOut = (& git rev-list --count "$remoteRef..refs/heads/$branch" 2> $null)
+                $revCode = $LASTEXITCODE
+            } catch {
+                $revCode = 1
+            }
+            if ($revCode -eq 0) {
+                $n = "$countOut".Trim()
+                if ($n -match '^\d+$' -and [int]$n -gt 0) { $unpushedSuffix = " unpushed=$n" }
+            }
         }
     }
 }
@@ -178,7 +206,7 @@ if ($prState) {
     if ($prState -eq 'none' -or $prState -eq 'unknown') {
         $out.Add("PR: $prState")
     } else {
-        $out.Add("PR: $prState" + $(if ($prUrl) { " $prUrl" } else { '' }))
+        $out.Add("PR: $prState" + $(if ($prUrl) { " $prUrl" } else { '' }) + $unpushedSuffix)
     }
 }
 
@@ -216,7 +244,7 @@ if ($runShown) {
 } elseif ($prState -eq 'none') {
     $out.Add('Next: create-pr')
 } elseif ($prState -ceq 'OPEN') {
-    $out.Add('Next: wait-merge')
+    $out.Add($(if ($unpushedSuffix) { 'Next: update-pr' } else { 'Next: wait-merge' }))
 } elseif ($prState -ceq 'CLOSED') {
     $out.Add('Next: escalate reason=pr-closed')
 } else {
