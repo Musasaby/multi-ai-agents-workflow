@@ -409,6 +409,42 @@ t_run_check_parent_activity() {
     assert_eq "Next: collect T1" "$(last_line)" "最後の行は Next: collect T1"
 }
 
+t_run_check_main_tree_tracked() {
+    setup_wt_child "echo extra >> \"$PROJ/.gitignore\"; echo hello > a.txt; $WT_REPORT"
+    run_script dispatch-run.sh T1 1
+    run_script dispatch-check.sh T1 1
+    assert_eq 8 "$CODE" "本体の追跡ファイルを書き換えると exit 8"
+    assert_contains "$OUT" "changed: main worktree: .gitignore" "追跡ファイルの changed"
+}
+
+t_run_check_main_tree_untracked() {
+    setup_wt_child "echo new > \"$PROJ/newfile.txt\"; echo hello > a.txt; $WT_REPORT"
+    run_script dispatch-run.sh T1 1
+    run_script dispatch-check.sh T1 1
+    assert_eq 8 "$CODE" "本体に新しいファイルを作ると exit 8"
+    assert_contains "$OUT" "changed: main worktree: newfile.txt" "新規ファイルの changed"
+}
+
+t_run_check_other_run_collect() {
+    setup_wt_child "echo hello > a.txt; $WT_REPORT"
+    run_script dispatch-run.sh T1 1
+    local run="$PROJ/.agents/workflow/runs/T1-1" other="$PROJ/.agents/workflow/runs/T2-1"
+    mkdir -p "$other"
+    printf 'diff --git a/.gitignore b/.gitignore\n--- a/.gitignore\n+++ b/.gitignore\n@@ -1 +1,2 @@\n .agents/\n+extra\n' > "$other/changes.patch"
+    printf 'collected\n' > "$other/collected"
+    printf '.agents/\nextra\n' > "$PROJ/.gitignore"
+    # collected を自分の main-tree.txt より新しくする
+    python3 - "$(py_path "$other/collected")" "$(py_path "$run/main-tree.txt")" <<'PY'
+import os, sys
+base = os.path.getmtime(sys.argv[2])
+os.utime(sys.argv[1], (base + 10, base + 10))
+PY
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "ほかの run の collect で本体が変わっても tampered にならない: $OUT"
+    assert_not_contains "$OUT" "changed: main worktree" "changed: main worktree は出ない"
+    assert_eq "Next: collect T1" "$(last_line)" "最後の行は Next: collect T1"
+}
+
 # 子の worktree に、本体の state.json の 1 タスクの欄を書き換えるスクリプトを置く
 # 使い方: python3 setstate.py <state.json> <ID> <status> [<commit>] [<retries>]
 write_setstate_py() {
@@ -552,6 +588,9 @@ test_case "dispatch-worktree: 子が worktree で tag を作ると tampered(exit
 test_case "dispatch-worktree: 子が本体の state.json の自分のタスクの欄を書き換えると tampered(exit 8)" t_run_check_state_entry
 test_case "dispatch-worktree: 子が本体の tasks.md を書き換えると tampered(exit 8)" t_run_check_tasks_md
 test_case "dispatch-worktree: 実行中の親の commit・ほかのタスクの欄・ほかの run のブランチでは tampered にならない" t_run_check_parent_activity
+test_case "dispatch-worktree: 子が本体の追跡ファイルを書き換えると tampered(exit 8)" t_run_check_main_tree_tracked
+test_case "dispatch-worktree: 子が本体に新しいファイルを作ると tampered(exit 8)" t_run_check_main_tree_untracked
+test_case "dispatch-worktree: ほかの run の collect で本体が変わっても tampered にならない" t_run_check_other_run_collect
 test_case "dispatch-worktree: 子が本体の state.json でほかのタスクを commit 無しで done にすると tampered(exit 8)" t_run_check_other_task_done
 test_case "dispatch-worktree: 子が起動時に done だったタスクを pending に戻すと tampered(exit 8)" t_run_check_done_reverted
 test_case "dispatch-worktree: 実行中に親がほかのタスクを正規に done にしても tampered にならない" t_run_check_parent_done

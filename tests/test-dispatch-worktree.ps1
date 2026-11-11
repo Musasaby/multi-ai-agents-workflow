@@ -412,6 +412,39 @@ Invoke-TestCase "dispatch-worktree: 実行中の親の commit・ほかのタス�
     Assert-Eq "Next: collect T1" (Get-LastLine) "最後の行は Next: collect T1"
 }
 
+Invoke-TestCase "dispatch-worktree: 子が本体の追跡ファイルを書き換えると tampered(exit 8)" {
+    Initialize-WtChild "Add-Content -LiteralPath '$script:Proj/.gitignore' extra; Set-Content a.txt hello; $WtReport"
+    Invoke-Script dispatch-run.ps1 T1 1
+    Invoke-Script dispatch-check.ps1 T1 1
+    Assert-Eq 8 $script:Code "本体の追跡ファイルを書き換えると exit 8"
+    Assert-Contains $script:Out "changed: main worktree: .gitignore" "追跡ファイルの changed"
+}
+
+Invoke-TestCase "dispatch-worktree: 子が本体に新しいファイルを作ると tampered(exit 8)" {
+    Initialize-WtChild "Set-Content -LiteralPath '$script:Proj/newfile.txt' -Value new; Set-Content a.txt hello; $WtReport"
+    Invoke-Script dispatch-run.ps1 T1 1
+    Invoke-Script dispatch-check.ps1 T1 1
+    Assert-Eq 8 $script:Code "本体に新しいファイルを作ると exit 8"
+    Assert-Contains $script:Out "changed: main worktree: newfile.txt" "新規ファイルの changed"
+}
+
+Invoke-TestCase "dispatch-worktree: ほかの run の collect で本体が変わっても tampered にならない" {
+    Initialize-WtChild "Set-Content a.txt hello; $WtReport"
+    Invoke-Script dispatch-run.ps1 T1 1
+    $run = "$script:Proj/.agents/workflow/runs/T1-1"
+    $other = "$script:Proj/.agents/workflow/runs/T2-1"
+    $null = New-Item -ItemType Directory -Force $other
+    Write-Plain "$other/changes.patch" "diff --git a/.gitignore b/.gitignore`n--- a/.gitignore`n+++ b/.gitignore`n@@ -1 +1,2 @@`n .agents/`n+extra`n"
+    Write-Plain "$other/collected" "collected`n"
+    # collected を自分の main-tree.txt より新しくする
+    [System.IO.File]::SetLastWriteTimeUtc("$other/collected", [System.IO.File]::GetLastWriteTimeUtc("$run/main-tree.txt").AddSeconds(10))
+    Write-Plain "$script:Proj/.gitignore" ".agents/`nextra`n"
+    Invoke-Script dispatch-check.ps1 T1 1
+    Assert-Eq 0 $script:Code "ほかの run の collect で本体が変わっても tampered にならない: $($script:Out)"
+    Assert-NotContains $script:Out "changed: main worktree" "changed: main worktree は出ない"
+    Assert-Eq "Next: collect T1" (Get-LastLine) "最後の行は Next: collect T1"
+}
+
 # 子の worktree に、本体の state.json の 1 タスクの欄を書き換えるスクリプト setstate.ps1 を置く
 # 使い方: pwsh -NoProfile -File setstate.ps1 <state.json> <ID> <status> [<commit>] [<retries>]
 function Write-SetStateScript {
