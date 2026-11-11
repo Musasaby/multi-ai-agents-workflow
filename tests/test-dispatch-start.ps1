@@ -390,18 +390,30 @@ Invoke-TestCase "start: -Pr -SubagentCapable は pr の prompt.md にサブエ�
     Assert-FileAbsent "$runDir/done" "child not started"
 }
 
-Invoke-TestCase "start: -Review は review-<ID> の run を起動し、状態を変えない" {
+Invoke-TestCase "start: review の run を起動する" {
     Initialize-ReviewProject
+    Write-Utf8File "$script:Proj/x.txt" "x`n"
     Invoke-Script dispatch-start.ps1 -Review -TaskId T1
     Assert-Eq 0 $script:Code "exit code: $($script:Err)"
     Assert-Contains $script:Out "Run: review-T1-1" "Run line"
     Assert-Eq "Next: wait" ((Get-LastLine $script:Out).Trim()) "last line"
+    Assert-FileExists "$script:Proj/.agents/workflow/runs/review-T1-1/guard.sha256" "guard.sha256 on return"
     Assert-Eq in_review (Get-StateTask T1).status "T1 status"
     Wait-Done review-T1-1
     Assert-FileExists "$script:Proj/.agents/workflow/runs/review-T1-1/done" "done within 120s"
 }
 
-Invoke-TestCase "start: -Review で review.mode が無ければ exit 23" {
+Invoke-TestCase "start: review.mode が dispatch でなければ起動しない" {
+    Initialize-StartProject 'T1:in_review', 'T2:pending'
+    Set-ReviewCfg -Mode manual -CommandTemplate 'bash ./.agents/review-child.sh "{prompt}"'
+    Invoke-Script dispatch-start.ps1 -Review -TaskId T1
+    Assert-Eq 23 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Err "review.mode" "stderr"
+    Assert-Eq "Next: escalate reason=review-mode" (Get-LastLine $script:Out) "last line"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/runs/review-T1-1/prompt.md" "no prompt"
+}
+
+Invoke-TestCase "start: review.mode が無ければ exit 23" {
     Initialize-StartProject 'T1:in_review', 'T2:pending'
     Invoke-Script dispatch-start.ps1 -Review -TaskId T1
     Assert-Eq 23 $script:Code "exit code: $($script:Err)"
@@ -418,7 +430,7 @@ Invoke-TestCase "start: -Review でタスクが in_review でなければ exit 2
     Assert-Eq "Next: escalate reason=task-status" (Get-LastLine $script:Out) "last line"
 }
 
-Invoke-TestCase "start: -Review で review.command_template が空なら exit 24" {
+Invoke-TestCase "start: review.command_template が空なら起動しない" {
     Initialize-StartProject 'T1:in_review', 'T2:pending'
     Set-ReviewCfg -Mode dispatch -CommandTemplate ''
     Write-Report -Id T1 -Attempt 1
@@ -438,14 +450,14 @@ Invoke-TestCase "start: -Review の Attempt 省略時は retries + 1" {
     Wait-Done review-T1-3
 }
 
-Invoke-TestCase "start: -Review -SubagentCapable は review.subagent_model を使う" {
+Invoke-TestCase "start: review の run をサブエージェントで起動する" {
     Initialize-StartProject 'T1:in_review', 'T2:pending'
-    Set-ReviewCfg -Mode dispatch -CommandTemplate '' -Subagent always -SubagentModel sonnet
+    Set-ReviewCfg -Mode dispatch -CommandTemplate '' -Subagent always -SubagentModel opus
     Write-Report -Id T1 -Attempt 1
     Invoke-Script dispatch-start.ps1 -Review -TaskId T1 -SubagentCapable
     Assert-Eq 0 $script:Code "exit code: $($script:Err)"
     Assert-Contains $script:Out "Launcher: subagent" "Launcher line"
-    Assert-Contains $script:Out "Model: sonnet" "Model line"
+    Assert-Contains $script:Out "Model: opus" "Model line"
     Assert-Eq "Next: subagent review-T1 1" ((Get-LastLine $script:Out).Trim()) "last line"
     Assert-FileAbsent "$script:Proj/.agents/workflow/runs/review-T1-1/done" "child not started"
 }

@@ -197,10 +197,12 @@ setup_review() {
 
 t_review_ok() {
     setup_review
+    printf 'x\n' > "$PROJ/x.txt"
     run_script dispatch-start.sh --review T1
     assert_eq 0 "$CODE" "exit code: $ERR"
     assert_contains "$OUT" "Run: review-T1-1" "Run line"
     assert_eq "Next: wait" "$(printf '%s\n' "$OUT" | tail -1)" "last line"
+    assert_file_exists "$PROJ/.agents/workflow/runs/review-T1-1/guard.sha256" "guard.sha256 on return"
     assert_eq in_review "$(state_get T1 status)" "T1 status"
     wait_done review-T1-1
     assert_file_exists "$PROJ/.agents/workflow/runs/review-T1-1/done" "done within 120s"
@@ -208,6 +210,16 @@ t_review_ok() {
 
 t_review_mode_absent() {
     setup "T1:in_review" "T2:pending"
+    run_script dispatch-start.sh --review T1
+    assert_eq 23 "$CODE" "exit code: $ERR"
+    assert_contains "$ERR" "review.mode" "stderr"
+    assert_eq "Next: escalate reason=review-mode" "$(printf '%s\n' "$OUT" | tail -1)" "last line"
+    assert_file_absent "$PROJ/.agents/workflow/runs/review-T1-1/prompt.md" "no prompt"
+}
+
+t_review_mode_not_dispatch() {
+    setup "T1:in_review" "T2:pending"
+    set_review_cfg manual 'bash ./.agents/review-child.sh "{prompt}"'
     run_script dispatch-start.sh --review T1
     assert_eq 23 "$CODE" "exit code: $ERR"
     assert_contains "$ERR" "review.mode" "stderr"
@@ -245,12 +257,12 @@ t_review_attempt_from_retries() {
 
 t_review_subagent_model() {
     setup "T1:in_review" "T2:pending"
-    set_review_cfg dispatch '' always sonnet
+    set_review_cfg dispatch '' always opus
     write_report T1 1
     run_script dispatch-start.sh --review T1 --subagent-capable
     assert_eq 0 "$CODE" "exit code: $ERR"
     assert_contains "$OUT" "Launcher: subagent" "Launcher line"
-    assert_contains "$OUT" "Model: sonnet" "Model line"
+    assert_contains "$OUT" "Model: opus" "Model line"
     assert_eq "Next: subagent review-T1 1" "$(printf '%s\n' "$OUT" | tail -1 | tr -d '\r')" "last line"
     assert_file_absent "$PROJ/.agents/workflow/runs/review-T1-1/done" "child not started"
 }
@@ -496,10 +508,11 @@ test_case "start: subagent always + --subagent-capable は子を起動せず sub
 test_case "start: subagent auto + opencode プロファイルは --subagent-capable があっても cli" t_subagent_auto_opencode_cli
 test_case "start: subagent never + claude-stream-json プロファイルは --subagent-capable があっても cli" t_subagent_never_stream_json_cli
 test_case "start: --pr --subagent-capable は pr の prompt.md にサブエージェント用の節を足す" t_pr_subagent_section
-test_case "start: --review は review-<ID> の run を起動し、状態を変えない" t_review_ok
-test_case "start: --review で review.mode が無ければ exit 23" t_review_mode_absent
+test_case "start: review の run を起動する" t_review_ok
+test_case "start: review.mode が dispatch でなければ起動しない" t_review_mode_not_dispatch
+test_case "start: review.mode が無ければ exit 23" t_review_mode_absent
 test_case "start: --review でタスクが in_review でなければ exit 21" t_review_not_in_review
-test_case "start: --review で review.command_template が空なら exit 24" t_review_config_missing_template
+test_case "start: review.command_template が空なら起動しない" t_review_config_missing_template
 test_case "start: --review の Attempt 省略時は retries + 1" t_review_attempt_from_retries
-test_case "start: --review --subagent-capable は review.subagent_model を使う" t_review_subagent_model
+test_case "start: review の run をサブエージェントで起動する" t_review_subagent_model
 summary
