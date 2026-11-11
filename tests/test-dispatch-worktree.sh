@@ -353,6 +353,42 @@ t_run_check_ok() {
     assert_eq "Next: collect T1" "$(last_line)" "最後の行は Next: collect T1"
 }
 
+t_prompt_worktree() {
+    write_tasks <<'TASKS'
+## T1: 一番目
+- **目的**: a
+- **依存**: なし
+TASKS
+    write_state "T1:pending"
+    run_script dispatch-worktree.sh create T1 1
+    assert_eq 0 "$CODE" "create exit: $ERR"
+    run_script dispatch-prompt-gen.sh T1 1
+    assert_eq 0 "$CODE" "prompt-gen exit: $ERR"
+    local run="$PROJ/.agents/workflow/runs/T1-1" prompt wt main
+    prompt="$(cat "$run/prompt.md")"
+    wt="$(sed -n 's/^path //p' "$run/worktree.txt" | head -n 1 | tr -d '\r')"
+    main="$(py_path "$PROJ")"
+    assert_contains "$prompt" "## worktree で実行する場合の追加の指示" "worktree の節がある"
+    assert_contains "$prompt" "$wt" "worktree の絶対パスがある"
+    assert_contains "$prompt" "$main" "本体の絶対パスがある"
+    assert_not_contains "$prompt" "{workdir}" "{workdir} が残っていない"
+    assert_not_contains "$prompt" "{main_root}" "{main_root} が残っていない"
+}
+
+t_prompt_no_worktree() {
+    write_tasks <<'TASKS'
+## T1: 一番目
+- **目的**: a
+- **依存**: なし
+TASKS
+    write_state "T1:pending"
+    run_script dispatch-prompt-gen.sh T1 1
+    assert_eq 0 "$CODE" "prompt-gen exit: $ERR"
+    local prompt
+    prompt="$(cat "$PROJ/.agents/workflow/runs/T1-1/prompt.md")"
+    assert_not_contains "$prompt" "## worktree で実行する場合の追加の指示" "worktree の節が無い"
+}
+
 t_run_check_main_git() {
     write_state "T1:in_progress" "T2:in_progress"
     setup_wt_child "git -C \"$PROJ\" branch agents-run/T2-1; git -C \"$PROJ\" commit -q --allow-empty -m other; echo hello > a.txt; $WT_REPORT"
@@ -582,6 +618,8 @@ test_case "dispatch-worktree: collect で git add が失敗すると exit 30 で
 test_case "dispatch-worktree: 子が worktree でコミットした変更が collect のパッチに入る" t_collect_committed
 test_case "dispatch-worktree: worktree.txt に base 行が無いと HEAD との差分で collect する" t_collect_no_base
 test_case "dispatch-worktree: worktree の run を dispatch-run で動かし dispatch-check が collect を返す" t_run_check_ok
+test_case "dispatch-worktree: worktree の run の prompt.md に作業ディレクトリと本体の指示が入る" t_prompt_worktree
+test_case "dispatch-worktree: worktree の無い run の prompt.md には worktree の節が入らない" t_prompt_no_worktree
 test_case "dispatch-worktree: 子の実行中に本体で実行中のタスクの branch・commit をしても tampered にならない" t_run_check_main_git
 test_case "dispatch-worktree: 子が worktree で commit すると tampered(exit 8)" t_run_check_commit
 test_case "dispatch-worktree: 子が worktree で tag を作ると tampered(exit 8)" t_run_check_tag

@@ -354,6 +354,42 @@ Invoke-TestCase "dispatch-worktree: worktree の run を dispatch-run で動か�
     Assert-Eq "Next: collect T1" (Get-LastLine) "最後の行は Next: collect T1"
 }
 
+Invoke-TestCase "dispatch-worktree: worktree の run の prompt.md に作業ディレクトリと本体の指示が入る" {
+    Set-Tasks @'
+## T1: 一番目
+- **目的**: a
+- **依存**: なし
+'@
+    Set-State 'T1:pending'
+    Invoke-Script dispatch-worktree.ps1 create T1 1
+    Assert-Eq 0 $script:Code "create exit: $($script:Err)"
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "prompt-gen exit: $($script:Err)"
+    $run = "$script:Proj/.agents/workflow/runs/T1-1"
+    $prompt = [System.IO.File]::ReadAllText("$run/prompt.md", [System.Text.Encoding]::UTF8)
+    $wt = ((Get-Content -LiteralPath "$run/worktree.txt" -Encoding UTF8) |
+        Where-Object { $_ -match '^path (.+)$' } | Select-Object -First 1) -replace '^path ', ''
+    $main = $script:Proj.Replace('\', '/')
+    Assert-Contains $prompt "## worktree で実行する場合の追加の指示" "worktree の節がある"
+    Assert-Contains $prompt $wt "worktree の絶対パスがある"
+    Assert-Contains $prompt $main "本体の絶対パスがある"
+    Assert-NotContains $prompt "{workdir}" "{workdir} が残っていない"
+    Assert-NotContains $prompt "{main_root}" "{main_root} が残っていない"
+}
+
+Invoke-TestCase "dispatch-worktree: worktree の無い run の prompt.md には worktree の節が入らない" {
+    Set-Tasks @'
+## T1: 一番目
+- **目的**: a
+- **依存**: なし
+'@
+    Set-State 'T1:pending'
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1
+    Assert-Eq 0 $script:Code "prompt-gen exit: $($script:Err)"
+    $prompt = [System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/prompt.md", [System.Text.Encoding]::UTF8)
+    Assert-NotContains $prompt "## worktree で実行する場合の追加の指示" "worktree の節が無い"
+}
+
 Invoke-TestCase "dispatch-worktree: 子の実行中に本体で実行中のタスクの branch・commit をしても tampered にならない" {
     Set-State 'T1:in_progress' 'T2:in_progress'
     Initialize-WtChild "git -C '$script:Proj' branch agents-run/T2-1; git -C '$script:Proj' commit -q --allow-empty -m other; Set-Content a.txt hello; $WtReport"
