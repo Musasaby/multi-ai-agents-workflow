@@ -195,6 +195,80 @@ print(' '.join(bad))
 "
         done
     fi
+    # 本体(メインの作業ツリー)の変更を、起動時に dispatch-run が main-tree.txt に記録した
+    # パスごとのハッシュと比べる。ほかの run が collect した changes.patch のパスは、
+    # その collected が自分の main-tree.txt より新しければ除外する(親の正当な collect を許す)
+    MAIN_TREE_PATH="$RUN_DIR/main-tree.txt"
+    if [ ! -f "$MAIN_TREE_PATH" ]; then
+        GUARD_ISSUES="${GUARD_ISSUES}main-tree.txt not found
+"
+    else
+        CURRENT_MAIN_TREE="$(bash "$SCRIPT_DIR/git-state.sh" --main-tree 2> /dev/null | LC_ALL=C tr -d '\r')"
+        CHANGED_MAIN="$(printf '%s\n' "$CURRENT_MAIN_TREE" | python3 -c "
+import os, re, sys
+
+run_dir, recorded_path = sys.argv[1], sys.argv[2]
+recorded = {}
+try:
+    with open(recorded_path, encoding='utf-8') as f:
+        for line in f.read().split('\n'):
+            if not line:
+                continue
+            h, sep, p = line.partition('  ')
+            if sep:
+                recorded[p] = h
+except OSError:
+    recorded = {}
+try:
+    recorded_mtime = os.path.getmtime(recorded_path)
+except OSError:
+    recorded_mtime = 0
+
+excluded = set()
+runs_dir = os.path.dirname(run_dir)
+try:
+    entries = os.listdir(runs_dir)
+except OSError:
+    entries = []
+own = os.path.abspath(run_dir)
+for name in entries:
+    other = os.path.join(runs_dir, name)
+    if os.path.abspath(other) == own:
+        continue
+    collected = os.path.join(other, 'collected')
+    patch = os.path.join(other, 'changes.patch')
+    if not os.path.isfile(collected):
+        continue
+    try:
+        if os.path.getmtime(collected) <= recorded_mtime:
+            continue
+    except OSError:
+        continue
+    try:
+        with open(patch, encoding='utf-8', errors='replace') as f:
+            for line in f:
+                m = re.match(r'^diff --git a/(.+) b/(.+)\$', line.rstrip('\n').rstrip('\r'))
+                if m:
+                    excluded.add(m.group(1))
+                    excluded.add(m.group(2))
+    except OSError:
+        pass
+
+for line in sys.stdin.read().split('\n'):
+    if not line:
+        continue
+    h, sep, p = line.partition('  ')
+    if not sep or p in excluded:
+        continue
+    if p not in recorded or recorded[p] != h:
+        print(p)
+" "$RUN_DIR" "$MAIN_TREE_PATH" 2> /dev/null | tr -d '\r')"
+        while IFS= read -r CHANGED_PATH; do
+            [ -n "$CHANGED_PATH" ] || continue
+            GUARD_ISSUES="${GUARD_ISSUES}changed: main worktree: $CHANGED_PATH
+"
+        done <<< "$CHANGED_MAIN"
+    fi
 fi
 
 # --- 本物のリポジトリの git 状態の検証(dispatch-run が起動時に git-state.txt に記録した値と比べる) ---

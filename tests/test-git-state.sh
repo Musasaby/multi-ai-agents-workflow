@@ -92,7 +92,7 @@ t_ref_follows_own_branch() {
 t_ref_usage_error() {
     run_script git-state.sh --ref
     assert_eq 1 "$CODE" "--ref の値が無いと exit 1"
-    assert_eq "Usage: git-state.sh [--ref <refname> | --run <refname> --parent <refname> [--other-runs <ID,ID,...>]]" "$ERR" "使い方を stderr に出す"
+    assert_eq "Usage: git-state.sh [--main-tree | --ref <refname> | --run <refname> --parent <refname> [--other-runs <ID,ID,...>]]" "$ERR" "使い方を stderr に出す"
     run_script git-state.sh --bogus
     assert_eq 1 "$CODE" "未知の引数は exit 1"
     run_script git-state.sh --run refs/heads/agents-run/r1

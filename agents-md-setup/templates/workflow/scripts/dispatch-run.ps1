@@ -106,6 +106,13 @@ if ($wtPath) {
     $gitState = & pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1"
 }
 [System.IO.File]::WriteAllText((Join-Path (Get-Location) "$runDir/git-state.txt"), (($gitState -join "`n") + "`n"), [System.Text.UTF8Encoding]::new($false))
+# worktree の run では、子の実行中に本体(メインの作業ツリー)で起きた変更も dispatch-check が
+# 検知できるよう、起動時のパスごとのハッシュを main-tree.txt に記録する(失敗しても起動は止めない)
+if ($wtPath) {
+    $mainTree = @(& pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1" -MainTree 2> $null)
+    $mainText = if ($mainTree.Count -gt 0) { ($mainTree -join "`n") + "`n" } else { '' }
+    [System.IO.File]::WriteAllText((Join-Path (Get-Location) "$runDir/main-tree.txt"), $mainText, [System.Text.UTF8Encoding]::new($false))
+}
 # -PrepareOnly: guard・git-state・tmp を用意したところで終える(子は起動せず、done も書かない)
 if ($PrepareOnly) {
     $prepBase = if ($wtPath) { Join-Path $wtPath $runDir } else { Join-Path (Get-Location).Path $runDir }

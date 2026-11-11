@@ -184,6 +184,58 @@ if (Test-Path -LiteralPath "$runDir/worktree.txt") {
             foreach ($tid in $badTasks) { $guardIssues += "changed: .agents/workflow/state.json ($tid)" }
         }
     }
+    # 本体(メインの作業ツリー)の変更を、起動時に dispatch-run が main-tree.txt に記録した
+    # パスごとのハッシュと比べる。ほかの run が collect した changes.patch のパスは、
+    # その collected が自分の main-tree.txt より新しければ除外する(親の正当な collect を許す)
+    $mainTreePath = "$runDir/main-tree.txt"
+    if (-not (Test-Path -LiteralPath $mainTreePath -PathType Leaf)) {
+        $guardIssues += 'main-tree.txt not found'
+    } else {
+        $recordedMain = [System.Collections.Generic.Dictionary[string,string]]::new([System.StringComparer]::Ordinal)
+        foreach ($line in ([System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $mainTreePath), [System.Text.Encoding]::UTF8) -split "`r?`n")) {
+            if (-not $line) { continue }
+            $idx = $line.IndexOf('  ')
+            if ($idx -lt 0) { continue }
+            $recordedMain[$line.Substring($idx + 2)] = $line.Substring(0, $idx)
+        }
+        $recordedMtime = [System.IO.File]::GetLastWriteTimeUtc((Resolve-Path -LiteralPath $mainTreePath).Path)
+        $excludedMain = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        $runsDir = [System.IO.Path]::GetDirectoryName($runDir)
+        $ownRunDir = [System.IO.Path]::GetFullPath($runDir)
+        $otherDirs = @()
+        try { $otherDirs = [System.IO.Directory]::GetDirectories($runsDir) } catch {}
+        foreach ($other in $otherDirs) {
+            if ([System.IO.Path]::GetFullPath($other) -ceq $ownRunDir) { continue }
+            $collected = Join-Path $other 'collected'
+            if (-not [System.IO.File]::Exists($collected)) { continue }
+            if ([System.IO.File]::GetLastWriteTimeUtc($collected) -le $recordedMtime) { continue }
+            $patch = Join-Path $other 'changes.patch'
+            if (-not [System.IO.File]::Exists($patch)) { continue }
+            try {
+                foreach ($pl in ([System.IO.File]::ReadAllText($patch, [System.Text.Encoding]::UTF8) -split "`r?`n")) {
+                    $pl = $pl -replace "`r$", ''
+                    if ($pl -cmatch '^diff --git a/(.+) b/(.+)$') {
+                        $null = $excludedMain.Add($Matches[1])
+                        $null = $excludedMain.Add($Matches[2])
+                    }
+                }
+            } catch {}
+        }
+        $currentMain = @(& pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1" -MainTree 2> $null)
+        foreach ($raw in $currentMain) {
+            foreach ($l in ("$raw" -split "`r?`n")) {
+                if (-not $l) { continue }
+                $idx = $l.IndexOf('  ')
+                if ($idx -lt 0) { continue }
+                $h = $l.Substring(0, $idx)
+                $p = $l.Substring($idx + 2)
+                if ($excludedMain.Contains($p)) { continue }
+                if (-not $recordedMain.ContainsKey($p) -or $recordedMain[$p] -cne $h) {
+                    $guardIssues += "changed: main worktree: $p"
+                }
+            }
+        }
+    }
 }
 
 # --- 本物のリポジトリの git 状態の検証(dispatch-run が起動時に git-state.txt に記録した値と比べる) ---

@@ -24,6 +24,27 @@ $ConfigPath = "$Root/.agents/workflow/config.json"
 $RunsBase = "$Root/.agents/workflow/runs"
 . "$PSScriptRoot/tasklib.ps1"
 
+# runs/<ID>-<N>/worktree.txt がある run は、prompt.md の末尾に worktree 用の節を足す
+function Add-WorktreeSection {
+    param([string]$RunDirPath)
+    $wtFile = Join-Path $RunDirPath 'worktree.txt'
+    if (-not (Test-Path -LiteralPath $wtFile -PathType Leaf)) { return }
+    $workdir = ''
+    foreach ($l in (Get-Content -LiteralPath $wtFile -Encoding UTF8)) {
+        if ($l -match '^path (.+)$') { $workdir = $Matches[1].Trim(); break }
+    }
+    if (-not $workdir) { return }
+    $workdir = $workdir.Replace('\', '/').TrimEnd('/')
+    $mainRoot = "$Root".Replace('\', '/').TrimEnd('/')
+    $section = Get-Content "$PSScriptRoot/dispatch-worktree-template.md" -Raw -Encoding UTF8
+    $section = $section.Replace('{workdir}', $workdir)
+    $section = $section.Replace('{main_root}', $mainRoot)
+    $promptFile = Join-Path $RunDirPath 'prompt.md'
+    $text = [System.IO.File]::ReadAllText($promptFile, [System.Text.Encoding]::UTF8)
+    $text = $text.TrimEnd("`n", "`r") + "`n`n" + $section.Replace("`r`n", "`n")
+    [System.IO.File]::WriteAllText($promptFile, $text, [System.Text.UTF8Encoding]::new($false))
+}
+
 # runs/<ID>-<N>/launcher が subagent の run は、prompt.md の末尾にサブエージェント用の節を足す
 function Add-SubagentSection {
     param([string]$RunDirPath)
@@ -429,6 +450,7 @@ $generated = $generated.Replace('{handoff_reports}', $handoffReports)
 $generated = $generated.Replace('{verify_instruction}', $verifyInstruction)
 
 [System.IO.File]::WriteAllText($PromptPath, $generated, [System.Text.UTF8Encoding]::new($false))
+Add-WorktreeSection $RunDir
 Add-SubagentSection $RunDir
 Write-Output "Generated: $PromptPath"
 exit 0

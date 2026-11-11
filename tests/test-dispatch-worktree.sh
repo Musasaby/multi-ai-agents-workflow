@@ -353,6 +353,42 @@ t_run_check_ok() {
     assert_eq "Next: collect T1" "$(last_line)" "最後の行は Next: collect T1"
 }
 
+t_prompt_worktree() {
+    write_tasks <<'TASKS'
+## T1: 一番目
+- **目的**: a
+- **依存**: なし
+TASKS
+    write_state "T1:pending"
+    run_script dispatch-worktree.sh create T1 1
+    assert_eq 0 "$CODE" "create exit: $ERR"
+    run_script dispatch-prompt-gen.sh T1 1
+    assert_eq 0 "$CODE" "prompt-gen exit: $ERR"
+    local run="$PROJ/.agents/workflow/runs/T1-1" prompt wt main
+    prompt="$(cat "$run/prompt.md")"
+    wt="$(sed -n 's/^path //p' "$run/worktree.txt" | head -n 1 | tr -d '\r')"
+    main="$(py_path "$PROJ")"
+    assert_contains "$prompt" "## worktree で実行する場合の追加の指示" "worktree の節がある"
+    assert_contains "$prompt" "$wt" "worktree の絶対パスがある"
+    assert_contains "$prompt" "$main" "本体の絶対パスがある"
+    assert_not_contains "$prompt" "{workdir}" "{workdir} が残っていない"
+    assert_not_contains "$prompt" "{main_root}" "{main_root} が残っていない"
+}
+
+t_prompt_no_worktree() {
+    write_tasks <<'TASKS'
+## T1: 一番目
+- **目的**: a
+- **依存**: なし
+TASKS
+    write_state "T1:pending"
+    run_script dispatch-prompt-gen.sh T1 1
+    assert_eq 0 "$CODE" "prompt-gen exit: $ERR"
+    local prompt
+    prompt="$(cat "$PROJ/.agents/workflow/runs/T1-1/prompt.md")"
+    assert_not_contains "$prompt" "## worktree で実行する場合の追加の指示" "worktree の節が無い"
+}
+
 t_run_check_main_git() {
     write_state "T1:in_progress" "T2:in_progress"
     setup_wt_child "git -C \"$PROJ\" branch agents-run/T2-1; git -C \"$PROJ\" commit -q --allow-empty -m other; echo hello > a.txt; $WT_REPORT"
@@ -406,6 +442,42 @@ t_run_check_parent_activity() {
     run_script dispatch-check.sh T1 1
     assert_eq 0 "$CODE" "親の作業・ほかのタスクの欄・ほかの run のブランチでは tampered にならない: $OUT"
     assert_not_contains "$OUT" "changed" "changed は出ない"
+    assert_eq "Next: collect T1" "$(last_line)" "最後の行は Next: collect T1"
+}
+
+t_run_check_main_tree_tracked() {
+    setup_wt_child "echo extra >> \"$PROJ/.gitignore\"; echo hello > a.txt; $WT_REPORT"
+    run_script dispatch-run.sh T1 1
+    run_script dispatch-check.sh T1 1
+    assert_eq 8 "$CODE" "本体の追跡ファイルを書き換えると exit 8"
+    assert_contains "$OUT" "changed: main worktree: .gitignore" "追跡ファイルの changed"
+}
+
+t_run_check_main_tree_untracked() {
+    setup_wt_child "echo new > \"$PROJ/newfile.txt\"; echo hello > a.txt; $WT_REPORT"
+    run_script dispatch-run.sh T1 1
+    run_script dispatch-check.sh T1 1
+    assert_eq 8 "$CODE" "本体に新しいファイルを作ると exit 8"
+    assert_contains "$OUT" "changed: main worktree: newfile.txt" "新規ファイルの changed"
+}
+
+t_run_check_other_run_collect() {
+    setup_wt_child "echo hello > a.txt; $WT_REPORT"
+    run_script dispatch-run.sh T1 1
+    local run="$PROJ/.agents/workflow/runs/T1-1" other="$PROJ/.agents/workflow/runs/T2-1"
+    mkdir -p "$other"
+    printf 'diff --git a/.gitignore b/.gitignore\n--- a/.gitignore\n+++ b/.gitignore\n@@ -1 +1,2 @@\n .agents/\n+extra\n' > "$other/changes.patch"
+    printf 'collected\n' > "$other/collected"
+    printf '.agents/\nextra\n' > "$PROJ/.gitignore"
+    # collected を自分の main-tree.txt より新しくする
+    python3 - "$(py_path "$other/collected")" "$(py_path "$run/main-tree.txt")" <<'PY'
+import os, sys
+base = os.path.getmtime(sys.argv[2])
+os.utime(sys.argv[1], (base + 10, base + 10))
+PY
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "ほかの run の collect で本体が変わっても tampered にならない: $OUT"
+    assert_not_contains "$OUT" "changed: main worktree" "changed: main worktree は出ない"
     assert_eq "Next: collect T1" "$(last_line)" "最後の行は Next: collect T1"
 }
 
@@ -546,12 +618,17 @@ test_case "dispatch-worktree: collect で git add が失敗すると exit 30 で
 test_case "dispatch-worktree: 子が worktree でコミットした変更が collect のパッチに入る" t_collect_committed
 test_case "dispatch-worktree: worktree.txt に base 行が無いと HEAD との差分で collect する" t_collect_no_base
 test_case "dispatch-worktree: worktree の run を dispatch-run で動かし dispatch-check が collect を返す" t_run_check_ok
+test_case "dispatch-worktree: worktree の run の prompt.md に作業ディレクトリと本体の指示が入る" t_prompt_worktree
+test_case "dispatch-worktree: worktree の無い run の prompt.md には worktree の節が入らない" t_prompt_no_worktree
 test_case "dispatch-worktree: 子の実行中に本体で実行中のタスクの branch・commit をしても tampered にならない" t_run_check_main_git
 test_case "dispatch-worktree: 子が worktree で commit すると tampered(exit 8)" t_run_check_commit
 test_case "dispatch-worktree: 子が worktree で tag を作ると tampered(exit 8)" t_run_check_tag
 test_case "dispatch-worktree: 子が本体の state.json の自分のタスクの欄を書き換えると tampered(exit 8)" t_run_check_state_entry
 test_case "dispatch-worktree: 子が本体の tasks.md を書き換えると tampered(exit 8)" t_run_check_tasks_md
 test_case "dispatch-worktree: 実行中の親の commit・ほかのタスクの欄・ほかの run のブランチでは tampered にならない" t_run_check_parent_activity
+test_case "dispatch-worktree: 子が本体の追跡ファイルを書き換えると tampered(exit 8)" t_run_check_main_tree_tracked
+test_case "dispatch-worktree: 子が本体に新しいファイルを作ると tampered(exit 8)" t_run_check_main_tree_untracked
+test_case "dispatch-worktree: ほかの run の collect で本体が変わっても tampered にならない" t_run_check_other_run_collect
 test_case "dispatch-worktree: 子が本体の state.json でほかのタスクを commit 無しで done にすると tampered(exit 8)" t_run_check_other_task_done
 test_case "dispatch-worktree: 子が起動時に done だったタスクを pending に戻すと tampered(exit 8)" t_run_check_done_reverted
 test_case "dispatch-worktree: 実行中に親がほかのタスクを正規に done にしても tampered にならない" t_run_check_parent_done
