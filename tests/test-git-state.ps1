@@ -91,7 +91,7 @@ Invoke-TestCase "git-state: -Ref は自分のブランチの変化に追従す�
 Invoke-TestCase "git-state: 不正な引数は exit 1" {
     Invoke-Script git-state.ps1 -Ref
     Assert-Eq 1 $script:Code "-Ref の値が無いと exit 1"
-    Assert-Eq 'Usage: git-state.sh [--ref <refname> | --run <refname> --parent <refname> [--other-runs <ID,ID,...>]]' $script:Err.Trim() "使い方を stderr に出す"
+    Assert-Eq 'Usage: git-state.sh [--main-tree | --ref <refname> | --run <refname> --parent <refname> [--other-runs <ID,ID,...>]]' $script:Err.Trim() "使い方を stderr に出す"
     Invoke-Script git-state.ps1 --bogus
     Assert-Eq 1 $script:Code "未知の引数は exit 1"
     Invoke-Script git-state.ps1 -Run refs/heads/agents-run/r1
