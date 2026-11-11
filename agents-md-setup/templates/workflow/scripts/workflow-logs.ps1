@@ -27,6 +27,8 @@
 #   2 行目は `updated HH:MM:SS (<N>s ago)` と running / finished (<EXIT の値)。列の幅に入らないときは
 #   `(<N>s ago)` を外し、それでも入らなければ先頭の `updated ` も外し、最後は列の幅で切る。
 #   3 行目は区切りの線、4 行目から下はその run のログの末尾を列の幅で折り返して出す。
+#   列に入れる行は制御文字を整える: \r は最後の \r より後ろだけ残し、SGR(色)以外の ANSI・C0 制御文字・DEL は消し、
+#   タブは空白 4 個にする。行を切ったときは色を戻す \x1b[0m を足す。
 #   全角は 2 桁(.NET に east_asian_width が無いので、Unicode の East Asian Width が W / F の
 #   主な範囲を表で判定する)、ANSI エスケープは除いて数える。
 #   再描画は -Interval ごとに画面全体。端末では代替画面(ESC[?1049h)に切り替え、終了時(Ctrl+C を含む)に戻す。
@@ -117,6 +119,10 @@ $maxLines = 2000
 $noOutputEvery = 60
 # ANSI エスケープ(sh 版の regex と同じ)。桁数の計算から除き、折り返し・切り詰めではそのまま残す
 $script:ansiRegex = [regex]::new("\G(?:\u001b\[[0-9;?]*[@-~]|\u001b\][^\u0007]*(?:\u0007|\u001b\\))")
+# SGR(色)だけの ANSI エスケープ。これ以外は消す
+$script:sgrRegex = [regex]::new('^\u001b\[[0-9;]*m$')
+# ESC と全角を含まない文字列(速い経路の判定に使う)
+$script:asciiRegex = [regex]::new('^[\x20-\x7E]*$')
 
 $tracked = @{}
 $order = New-Object System.Collections.Generic.List[string]
@@ -171,6 +177,40 @@ function Get-UpdateEpoch {
 function Test-WideCodePoint {
     param([int]$CodePoint)
     return (
+        ($CodePoint -ge 0x231A -and $CodePoint -le 0x231B) -or
+        ($CodePoint -ge 0x2329 -and $CodePoint -le 0x232A) -or
+        ($CodePoint -ge 0x23E9 -and $CodePoint -le 0x23EC) -or
+        ($CodePoint -eq 0x23F0) -or
+        ($CodePoint -eq 0x23F3) -or
+        ($CodePoint -ge 0x25FD -and $CodePoint -le 0x25FE) -or
+        ($CodePoint -ge 0x2614 -and $CodePoint -le 0x2615) -or
+        ($CodePoint -ge 0x2648 -and $CodePoint -le 0x2653) -or
+        ($CodePoint -eq 0x267F) -or
+        ($CodePoint -eq 0x2693) -or
+        ($CodePoint -eq 0x26A1) -or
+        ($CodePoint -ge 0x26AA -and $CodePoint -le 0x26AB) -or
+        ($CodePoint -ge 0x26BD -and $CodePoint -le 0x26BE) -or
+        ($CodePoint -ge 0x26C4 -and $CodePoint -le 0x26C5) -or
+        ($CodePoint -eq 0x26CE) -or
+        ($CodePoint -eq 0x26D4) -or
+        ($CodePoint -eq 0x26EA) -or
+        ($CodePoint -ge 0x26F2 -and $CodePoint -le 0x26F3) -or
+        ($CodePoint -eq 0x26F5) -or
+        ($CodePoint -eq 0x26FA) -or
+        ($CodePoint -eq 0x26FD) -or
+        ($CodePoint -eq 0x2705) -or
+        ($CodePoint -ge 0x270A -and $CodePoint -le 0x270B) -or
+        ($CodePoint -eq 0x2728) -or
+        ($CodePoint -eq 0x274C) -or
+        ($CodePoint -eq 0x274E) -or
+        ($CodePoint -ge 0x2753 -and $CodePoint -le 0x2755) -or
+        ($CodePoint -eq 0x2757) -or
+        ($CodePoint -ge 0x2795 -and $CodePoint -le 0x2797) -or
+        ($CodePoint -eq 0x27B0) -or
+        ($CodePoint -eq 0x27BF) -or
+        ($CodePoint -ge 0x2B1B -and $CodePoint -le 0x2B1C) -or
+        ($CodePoint -eq 0x2B50) -or
+        ($CodePoint -eq 0x2B55) -or
         ($CodePoint -ge 0x1100 -and $CodePoint -le 0x115F) -or
         ($CodePoint -ge 0x2E80 -and $CodePoint -le 0x303E) -or
         ($CodePoint -ge 0x3041 -and $CodePoint -le 0x33FF) -or
@@ -221,8 +261,35 @@ function Get-NextUnit {
     return @{ Text = $Text.Substring($Index, $len); Width = (Get-CharWidth $cp); Next = $Index + $len }
 }
 
+# 列に出す行の制御文字を整える(sh 版の sanitize と同じ)。\r は最後の \r より後ろだけ残し、
+# SGR(色)以外の ANSI・C0 制御文字・DEL は消し、タブは空白 4 個にする
+function Format-Sanitize {
+    param([string]$Text)
+    if ($Text.Contains("`r")) { $Text = $Text.Substring($Text.LastIndexOf("`r") + 1) }
+    $sb = New-Object System.Text.StringBuilder
+    $i = 0
+    while ($i -lt $Text.Length) {
+        $m = $script:ansiRegex.Match($Text, $i)
+        if ($m.Success) {
+            if ($script:sgrRegex.IsMatch($m.Value)) { [void]$sb.Append($m.Value) }
+            $i += $m.Length
+            continue
+        }
+        $ch = $Text[$i]
+        $code = [int]$ch
+        if ($ch -eq "`t") {
+            [void]$sb.Append('    ')
+        } elseif ($code -ge 0x20 -and $code -ne 0x7F) {
+            [void]$sb.Append($ch)
+        }
+        $i++
+    }
+    return $sb.ToString()
+}
+
 function Get-DisplayWidth {
     param([string]$Text)
+    if ($script:asciiRegex.IsMatch($Text)) { return $Text.Length }
     $w = 0
     $i = 0
     while ($i -lt $Text.Length) {
@@ -236,6 +303,10 @@ function Get-DisplayWidth {
 function Format-TruncateVisible {
     param([string]$Text, [int]$Width)
     if ($Width -lt 1) { return '' }
+    if ($script:asciiRegex.IsMatch($Text)) {
+        if ($Text.Length -le $Width) { return $Text }
+        return $Text.Substring(0, $Width)
+    }
     $sb = New-Object System.Text.StringBuilder
     $w = 0
     $i = 0
@@ -254,6 +325,7 @@ function Format-Fit {
     if ($Width -lt 1) { return '' }
     $t = Format-TruncateVisible $Text $Width
     $pad = $Width - (Get-DisplayWidth $t)
+    if ($t.Contains("$esc[")) { $t += "$esc[0m" }
     if ($pad -gt 0) { $t += (' ' * $pad) }
     return $t
 }
@@ -262,6 +334,14 @@ function Format-Wrap {
     param([string]$Text, [int]$Width)
     if ($Width -lt 1) { $Width = 1 }
     $lines = New-Object System.Collections.Generic.List[string]
+    if ($script:asciiRegex.IsMatch($Text)) {
+        if ($Text.Length -eq 0) { $lines.Add(''); return , $lines }
+        for ($j = 0; $j -lt $Text.Length; $j += $Width) {
+            $len = [Math]::Min($Width, $Text.Length - $j)
+            $lines.Add($Text.Substring($j, $len))
+        }
+        return , $lines
+    }
     $cur = New-Object System.Text.StringBuilder
     $curW = 0
     $i = 0
@@ -519,7 +599,7 @@ function Invoke-Poll {
             $st = $tracked[$n]
             if ($st.status -ne 'running') { continue }
             if ($now - $st.lastNew -ge $noOutputEvery) {
-                $old = [int]($now - $st.lastNew)
+                $old = [int][Math]::Floor($now - $st.lastNew)
                 Write-Line $n "--- no output for ${old}s (updated $(Get-UpdateClock $n))"
                 $st.lastNew = $now
             }
@@ -535,7 +615,7 @@ function Format-Header2 {
     if ($null -eq $epoch) {
         $ago = 0
     } else {
-        $ago = [Math]::Max(0, [int]((Get-Now) - $epoch))
+        $ago = [Math]::Max(0, [int][Math]::Floor((Get-Now) - $epoch))
     }
     $clock = Get-UpdateClock $RunName
     if ($st.status -eq 'finished') {
@@ -568,15 +648,16 @@ function Format-Column {
     $col.Add((Format-Fit $name $Width))
     $col.Add((Format-Header2 $RunName $Width))
     $col.Add(('-' * $Width))
-    $wrapped = New-Object System.Collections.Generic.List[string]
-    foreach ($ln in $st.lines) {
-        foreach ($wl in (Format-Wrap $ln $Width)) { $wrapped.Add($wl) }
+    $tail = New-Object System.Collections.Generic.List[string]
+    if ($Avail -gt 0) {
+        for ($i = $st.lines.Count - 1; $i -ge 0; $i--) {
+            $wrapped = Format-Wrap (Format-Sanitize $st.lines[$i]) $Width
+            $tail.InsertRange(0, $wrapped)
+            if ($tail.Count -ge $Avail) { break }
+        }
+        if ($tail.Count -gt $Avail) { $tail.RemoveRange(0, $tail.Count - $Avail) }
     }
-    $tailCount = [Math]::Min($Avail, $wrapped.Count)
-    if ($tailCount -lt 0) { $tailCount = 0 }
-    for ($i = $wrapped.Count - $tailCount; $i -lt $wrapped.Count; $i++) {
-        $col.Add((Format-Fit $wrapped[$i] $Width))
-    }
+    foreach ($ln in $tail) { $col.Add((Format-Fit $ln $Width)) }
     return , $col
 }
 
@@ -672,8 +753,12 @@ function Build-Frame {
 function Render-Columns {
     param([bool]$AltScreen)
     $frame = Build-Frame
-    if ($AltScreen) { $stdout.Write("$esc[H$esc[2J") }
-    $stdout.Write((($frame -join "`n") + "`n"))
+    if ($AltScreen) {
+        $stdout.Write("$esc[H$esc[2J")
+        $stdout.Write(($frame -join "`n"))
+    } else {
+        $stdout.Write((($frame -join "`n") + "`n"))
+    }
     $stdout.Flush()
 }
 
