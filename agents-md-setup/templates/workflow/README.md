@@ -70,7 +70,7 @@
 | `child_agent.timeout_seconds` | 子エージェント実行のタイムアウト(秒)。`dispatch-wait` が判定する | `1800` |
 | `child_agent.isolate_xdg` | `true` なら `dispatch-run` が子CLIの `XDG_CONFIG_HOME` / `XDG_DATA_HOME` を `.agents/workflow/.config` に切り替える(sandbox で `~/.config` 等に書けない環境向け)。切り替えると `~/.local/share/<CLI>/auth.json` 等の認証情報が見えなくなる。未指定は `false` | `false` |
 | `child_agent.healthcheck_command` | `dispatch-start` が起動前に実行する疎通確認のコマンド。空なら省略 | `""` |
-| `child_agent.warmup_command` | サイクルの最初の dispatch の前に1回だけ実行するコマンド(例: ビルドツールのデーモン起動・依存の取得など)。空なら省略 | `""` |
+| `child_agent.warmup_command` | サイクルの最初の dispatch(サブエージェントの run は数えない)の前に1回だけ実行するコマンド(例: ビルドツールのデーモン起動・依存の取得など)。空なら省略 | `""` |
 | `child_agent.idle_timeout_seconds` | 子のログ(`output.log`)が更新されない時間の上限(秒)。超えると `dispatch-run` が子を止め、`done` に `EXIT:idle-timeout` を記録する(`dispatch-check` は exit 4)。未指定・0 以下は無効。POSIX 版は python3 経路のみ対応 | `600` |
 | `child_agent.cli_log` | 子CLI自身のログファイルのパス(先頭の `~/` はホームディレクトリ。例: opencode は `~/.local/share/opencode/log/opencode.log`)。`dispatch-check` がエラー行を出す | 未指定 |
 | `test_command` | 子エージェントに実行させるテストコマンド。空ならタスクごとに親が指定。`quality_gate.steps` の test ステップと同じコマンドに揃える | `""` |
@@ -418,12 +418,16 @@ PR が既にある場合は、子が未 push のコミットを push し、PR �
 プロンプトには要件の一覧も入る。tasks.md の要件のうち、この PR のタスクを含むものだけを
 `- R1: <本文>(この PR: T1 / 他の PR: T3)` の形で並べる。対応する要件が無い場合(要件の節が無い場合を含む)は
 `- なし(...)` の1行になる。子はこの一覧を PR 本文に「要件と対応タスク」として載せる。
+`--launcher <cli|subagent>`(ps1 は `-Launcher`)を付けると、prompt.md を書いた後に
+`runs/pr-<N>-1/launcher` へその値を1行で書き、`subagent` なら prompt.md にサブエージェント用の節を足す
+(`dispatch-start --pr` が起動方法を渡すのに使う)。値が `cli`・`subagent` 以外(空を含む)なら
+使い方を stderr に出して exit 1(run ディレクトリは作らない)。ps1 では `-Pr` なしで `-Launcher` を付けても exit 1。
 
 ```powershell
-.agents/workflow/scripts/dispatch-prompt-gen.ps1 -Pr
+.agents/workflow/scripts/dispatch-prompt-gen.ps1 -Pr [-Launcher cli|subagent]
 ```
 ```bash
-.agents/workflow/scripts/dispatch-prompt-gen.sh --pr
+.agents/workflow/scripts/dispatch-prompt-gen.sh --pr [--launcher cli|subagent]
 ```
 exit 0 の場合も生成されたプロンプト全文は会話に読み込まない
 (読み込むと機械生成によるトークン節約が無意味になる)。
@@ -438,7 +442,7 @@ exit 0 の場合も生成されたプロンプト全文は会話に読み込ま�
    確認しない。前の試行の変更を引き継ぐため)
 3. タスクの状態が `pending` / `in_progress` か
 4. 疎通確認(`child_agent.healthcheck_command`。空なら省略)
-5. ウォームアップ(`child_agent.warmup_command`。空なら省略。`guard.sha256` が1つも無い = サイクルの最初の dispatch のときだけ)
+5. ウォームアップ(`child_agent.warmup_command`。空なら省略。CLI の run(launcher が `subagent` でない run)の `guard.sha256` が1つも無い = サイクルの最初の dispatch のときだけ)
 6. `dispatch-prompt-gen`
 7. `task-state <ID> start`(状態を `in_progress` にする)
 8. `dispatch-run` のデタッチ起動(`guard.sha256` が現れるまで最大30秒待つ。環境変数
@@ -490,7 +494,7 @@ exit 60 のときは、`dispatch-run` のプロセスが動いていないこと
 
 **サブエージェントでの起動(`--subagent-capable`)**: 親がサブエージェントを起動できるとき `--subagent-capable`
 (ps1 は `-SubagentCapable`)を付ける。起動方法(launcher)は次で決め、手順6(`dispatch-prompt-gen`)の前に
-`runs/<ID>-<N>/launcher` へ `cli` か `subagent` を1行で書く(`--pr` は RunId が決まった直後)。
+`runs/<ID>-<N>/launcher` へ `cli` か `subagent` を1行で書く(`--pr` は `dispatch-prompt-gen --pr --launcher <値>` が書く)。
 
 - オプションが無い、または `child_agent.subagent` が `never` → `cli`
 - `always` → `subagent`
