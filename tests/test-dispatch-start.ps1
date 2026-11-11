@@ -325,7 +325,7 @@ Invoke-TestCase "start: subagent never + claude-stream-json プロファイル�
     Wait-Done T1-1
 }
 
-Invoke-TestCase "start: -Pr + subagent は PR の prompt.md にサブエージェント用の節を足す" {
+Invoke-TestCase "start: -Pr -SubagentCapable は pr の prompt.md にサブエージェント用の節を足す" {
     Initialize-PrProject
     Set-ChildCfg subagent always
     Invoke-Script dispatch-start.ps1 '-Pr' '-SubagentCapable'
@@ -335,6 +335,7 @@ Invoke-TestCase "start: -Pr + subagent は PR の prompt.md にサブエージ�
     $runDir = "$script:Proj/.agents/workflow/runs/pr-1-1"
     Assert-Eq "subagent`n" ([System.IO.File]::ReadAllText("$runDir/launcher")) "launcher"
     Assert-Contains ([System.IO.File]::ReadAllText("$runDir/prompt.md")) "## サブエージェントとして実行する場合の追加の指示" "subagent section in PR prompt"
+    Assert-FileAbsent "$runDir/done" "child not started"
 }
 
 Show-Summary
