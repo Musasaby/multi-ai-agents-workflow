@@ -319,6 +319,31 @@ Invoke-TestCase "run: stream-json の [tool_use] 行は Edit・Write の本文�
     Assert-Contains $jsonl "/tmp/x" "jsonl keeps content value"
 }
 
+# T12: 子を起動できないテンプレートは done に crashed を記録する
+Invoke-TestCase "run: 起動できないコマンドは crashed を記録する" {
+    Set-Child ''
+    Set-Profile claude-stream-json
+    Set-Template 'no-such-command-for-dispatch-test "{prompt}"'
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    $marker = Get-DoneExit
+    Add-Result ("$marker".StartsWith('EXIT:crashed:')) "done marker starts with EXIT:crashed: (got '$marker')"
+    $log = [System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.log")
+    Add-Result ($log.StartsWith('failed to start: ')) "output.log starts with 'failed to start: ' (got '$($log.Split([char]10)[0])')"
+}
+
+# T12: .cmd は起動せず、.exe を指定するよう案内して crashed にする
+Invoke-TestCase "run: .cmd のコマンドは起動せず crashed で案内する" {
+    Set-Child ''
+    Write-Utf8File "$script:Proj/stub.cmd" "@echo off`r`nexit /b 0`r`n"
+    Set-Profile claude-stream-json
+    Set-Template "`"$script:Proj/stub.cmd`" `"{prompt}`""
+    Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
+    $marker = Get-DoneExit
+    Add-Result ("$marker".StartsWith('EXIT:crashed:')) "done marker starts with EXIT:crashed: (got '$marker')"
+    $log = [System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.log")
+    Assert-Contains $log "batch file" "output.log"
+}
+
 Invoke-TestCase "run: 利用先の child-profiles.json を guard.sha256 に記録する" {
     Set-Child 'Write-Output hello'
     Write-Utf8File "$script:Proj/.agents/workflow/child-profiles.json" "{}`n"

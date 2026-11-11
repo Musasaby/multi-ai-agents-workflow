@@ -408,6 +408,43 @@ print(json.dumps({'type': 'assistant', 'message': {'content': [{'type': 'tool_us
     assert_contains "$jsonl" "/tmp/x" "jsonl keeps content value"
 }
 
+# T12: 子を起動できないテンプレートは done に crashed を記録する
+t_run_missing_command_records_crashed() {
+    set_child ''
+    set_profile claude-stream-json
+    set_template 'no-such-command-for-dispatch-test "{prompt}"'
+    run_script dispatch-run.sh T1 1
+    local marker log
+    marker="$(done_exit)"
+    case "$marker" in
+        EXIT:crashed:*) _record ok ;;
+        *) _record ng "done marker starts with EXIT:crashed: (got '$marker')" ;;
+    esac
+    log="$(cat "$PROJ/.agents/workflow/runs/T1-1/output.log")"
+    case "$log" in
+        "failed to start: "*) _record ok ;;
+        *) _record ng "output.log starts with 'failed to start: ' (got '${log%%$'\n'*}')" ;;
+    esac
+}
+
+# T12: .cmd は起動せず、.exe を指定するよう案内して crashed にする
+t_run_cmd_command_refused() {
+    set_child ''
+    printf '@echo off\r\nexit /b 0\r\n' > "$PROJ/stub.cmd"
+    chmod +x "$PROJ/stub.cmd"
+    set_profile claude-stream-json
+    set_template "\"$(py_path "$PROJ/stub.cmd")\" \"{prompt}\""
+    run_script dispatch-run.sh T1 1
+    local marker log
+    marker="$(done_exit)"
+    case "$marker" in
+        EXIT:crashed:*) _record ok ;;
+        *) _record ng "done marker starts with EXIT:crashed: (got '$marker')" ;;
+    esac
+    log="$(cat "$PROJ/.agents/workflow/runs/T1-1/output.log")"
+    assert_contains "$log" "batch file" "output.log"
+}
+
 t_run_guard_records_child_profiles() {
     set_child 'echo hello'
     printf '{}\n' > "$PROJ/.agents/workflow/child-profiles.json"
@@ -1075,6 +1112,8 @@ test_case "run: プレースホルダが無いテンプレートは stdin でプ
 test_case "run: profile claude-stream-json は command_template に stream-json が無くても output.jsonl を書く" t_run_profile_stream_json_writes_jsonl_without_template_keyword
 test_case "run: stream-json で stdin に大きいプロンプトを渡しても、子が先に stderr に大量に書くと止まらない" t_run_stream_json_large_stdin_does_not_deadlock
 test_case "run: stream-json の [tool_use] 行は Edit・Write の本文を載せず、ほかのツールの入力は載せる" t_run_stream_json_tool_use_omits_file_edit_body
+test_case "run: 起動できないコマンドは crashed を記録する" t_run_missing_command_records_crashed
+test_case "run: .cmd のコマンドは起動せず crashed で案内する" t_run_cmd_command_refused
 test_case "run: 利用先の child-profiles.json を guard.sha256 に記録する" t_run_guard_records_child_profiles
 test_case "check: 正常" t_check_ok
 test_case "check: signalはexit 4" t_check_signal

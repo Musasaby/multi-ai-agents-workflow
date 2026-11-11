@@ -66,7 +66,7 @@ DONE_PATH="$RUN_DIR/done"
 SIGNAL_PATH="$RUN_DIR/exit-signal"
 # ログが idle_timeout_seconds 更新されず子を止めたときに記録するファイル(#53)
 IDLE_PATH="$RUN_DIR/idle-timeout"
-rm -f "$DONE_PATH" "$SIGNAL_PATH" "$IDLE_PATH"
+rm -f "$DONE_PATH" "$SIGNAL_PATH" "$IDLE_PATH" "$RUN_DIR/start-error"
 PROMPT_PATH="$RUN_DIR/prompt.md"
 
 # 子が管理ファイルを変更・削除していないかを dispatch-check が確かめられるよう、起動時の
@@ -170,7 +170,7 @@ fi
 
 if command -v python3 > /dev/null 2>&1; then
   WT_PATH="$WT_PATH" python3 -c "
-import json, subprocess, sys, shlex, os, threading, time, signal
+import json, subprocess, sys, shlex, os, shutil, threading, time, signal
 sys.dont_write_bytecode = True
 sys.path.insert(0, '$SCRIPT_DIR_PY')
 import childprofile
@@ -190,6 +190,17 @@ use_stdin = '{prompt_file}' not in tmpl and '{prompt}' not in tmpl
 
 log_path = '$LOG_PATH'
 signal_path = '$SIGNAL_PATH'
+start_error_path = '$RUN_DIR/start-error'
+
+def fail_start(reason):
+    # 子を起動できなかったことを output.log に残し、理由を start-error に書いて
+    # 呼び出し元の bash が done マーカーを EXIT:crashed:<理由> にできるようにする
+    reason = str(reason)
+    with open(log_path, 'w', encoding='utf-8') as lf:
+        lf.write('failed to start: ' + reason + '\n')
+    with open(start_error_path, 'w', encoding='utf-8') as sf:
+        sf.write(' '.join(reason.splitlines()) + '\n')
+    sys.exit(1)
 
 def finish(returncode):
     # シグナルで終了した子は負の returncode になる。sys.exit(-15) は 8bit に切り詰められ
@@ -253,6 +264,13 @@ stdin_mode = subprocess.PIPE if use_stdin else subprocess.DEVNULL
 # worktree の run では子の作業ディレクトリを worktree にする(未指定なら今の cwd のまま)
 child_cwd = os.environ.get('WT_PATH') or None
 
+# .cmd / .bat は Popen から直接起動できない(Windows の CreateProcess が解釈しない)ため、
+# 起動せずに .exe を指定するよう案内する
+resolved = shutil.which(tokens[0])
+if resolved and resolved.lower().endswith(('.cmd', '.bat')):
+    q = chr(39)
+    fail_start(q + resolved + q + ' is a batch file (.cmd/.bat); write the path of the real executable (.exe) in child_agent.command_template')
+
 if is_stream:
     jsonl_path = '$JSONL_PATH'
 
@@ -302,7 +320,11 @@ if is_stream:
         return '[' + str(t) + '] ' + compact
 
     with open(jsonl_path, 'w', encoding='utf-8') as jf, open(log_path, 'w', encoding='utf-8') as lf:
-        proc = subprocess.Popen(tokens, stdin=stdin_mode, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', bufsize=1, cwd=child_cwd, start_new_session=(os.name != 'nt'))
+        try:
+            proc = subprocess.Popen(tokens, stdin=stdin_mode, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', bufsize=1, cwd=child_cwd, start_new_session=(os.name != 'nt'))
+        except OSError as e:
+            lf.close()
+            fail_start(str(e))
         if use_stdin:
             feed_stdin(proc)
         start_watchdog(proc)
@@ -322,7 +344,11 @@ if is_stream:
         finish(proc.returncode)
 else:
     with open(log_path, 'w', encoding='utf-8') as lf:
-        proc = subprocess.Popen(tokens, stdin=stdin_mode, stdout=lf, stderr=subprocess.STDOUT, cwd=child_cwd, start_new_session=(os.name != 'nt'))
+        try:
+            proc = subprocess.Popen(tokens, stdin=stdin_mode, stdout=lf, stderr=subprocess.STDOUT, cwd=child_cwd, start_new_session=(os.name != 'nt'))
+        except OSError as e:
+            lf.close()
+            fail_start(str(e))
         if use_stdin:
             feed_stdin(proc)
         start_watchdog(proc)
@@ -330,6 +356,11 @@ else:
         finish(proc.returncode)
   "
   EXIT_CODE=$?
+  # 子を起動できなかった場合は、python ラッパーが残した理由を done マーカーに反映する
+  if [ -f "$RUN_DIR/start-error" ]; then
+    EXIT_CODE="crashed:$(head -n 1 "$RUN_DIR/start-error")"
+    rm -f "$RUN_DIR/start-error"
+  fi
 elif [[ "$CMD_TEMPLATE" == *'"{prompt}"'* ]]; then
   PROMPT=$(cat "$PROMPT_PATH")
   PREFIX="${CMD_TEMPLATE%%'"{prompt}"'*}"
