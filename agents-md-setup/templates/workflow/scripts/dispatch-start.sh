@@ -3,7 +3,7 @@ set -uo pipefail
 
 # 子エージェントの起動までの事前チェックを順に行い、デタッチ起動する。失敗した段階で止める
 # (止めたときは state.json を変えず、子も起動しない)。
-# Usage: dispatch-start.sh <TaskId> [Attempt] [--subagent-capable] | dispatch-start.sh --pr [--subagent-capable]
+# Usage: dispatch-start.sh <TaskId> [Attempt] [--subagent-capable] | dispatch-start.sh --pr [--subagent-capable] | dispatch-start.sh --review <TaskId> [<Attempt>] [--subagent-capable]
 #   --subagent-capable: 親がサブエージェントを起動できるとき付ける。起動方法(launcher)を次で決め、
 #     プロンプト生成の前に runs/<ID>-<N>/launcher へ cli か subagent を1行で書く
 #     (--pr は値を dispatch-prompt-gen --pr --launcher に渡し、prompt-gen が runs/pr-<N>-1/launcher を書く)。
@@ -15,12 +15,18 @@ set -uo pipefail
 #     (child_agent.subagent_model。無い・空なら default)を出して `Next: subagent <ID> <N>` で exit 0 する
 #     (疎通確認・ウォームアップは行わない)。cli のときは出力に `Launcher: cli` 行が加わるだけ
 #   --pr: PR 作成の run(pr-<N>-1)を起動する(タスクの状態確認・task-state は行わず、ウォームアップもしない)
+#   --review <TaskId>: レビューの run(review-<ID>-<N>)を起動する。Attempt の省略時は
+#     state.json のそのタスクの retries + 1。review.mode が dispatch でなければ exit 23、
+#     タスクの状態が in_review でなければ exit 21、launcher が cli で review.command_template が
+#     空なら exit 24。作業ツリーの確認・worktree の作成・疎通確認・ウォームアップ・task-state は行わない。
+#     起動方法は review.subagent(always / never / それ以外は auto)と review-<ID> のプロファイルで決める
 # config.json の max_parallel が 2 以上で --pr でないときは、作業ツリーの確認を飛ばし、
 # タスクの状態の確認の後に dispatch-worktree create で worktree の run にする(Carried: 行と Worktree: 行を出す)
 # exit:
 #   0=起動した / 1=使い方不備
 #   11〜15=branch-check --state の 1〜5(stdout の Next: 行はそのまま流す)
 #   20=作業ツリーが汚れている(試行回数 2 以上で fix-notes.md がある場合は確認しない) / 21=タスクの状態が不正(pending / in_progress 以外、タスク無しを含む)
+#   23=review.mode が dispatch 以外 / 24=review.command_template が空
 #   30=疎通確認(healthcheck_command)の失敗 / 31=ウォームアップ(warmup_command)の失敗
 #   41〜43=dispatch-prompt-gen の 1〜3(依存未完了・report.md の欠落は 42)
 #   22=max_parallel が 2 以上で、worktree の作成が dirty-tree(dispatch-worktree の exit 20)
@@ -41,17 +47,27 @@ done
 set -- ${ARGS[@]+"${ARGS[@]}"}
 
 PR_MODE=false
+REVIEW_MODE=false
 if [ "${1:-}" = "--pr" ]; then
     PR_MODE=true
     TASK_ID="pr"
     ATTEMPT=1
+elif [ "${1:-}" = "--review" ]; then
+    REVIEW_MODE=true
+    TASK_ID="${2:?Usage: dispatch-start.sh <TaskId> [Attempt] | dispatch-start.sh --pr | dispatch-start.sh --review <TaskId> [<Attempt>]}"
+    # Attempt の省略時は state.json のタスクの retries + 1(下で決める)
+    ATTEMPT="${3:-}"
+    if ! [[ "$TASK_ID" =~ ^[A-Za-z0-9_-]+$ ]] || { [ -n "$ATTEMPT" ] && ! [[ "$ATTEMPT" =~ ^[1-9][0-9]*$ ]]; }; then
+        echo "Invalid TaskId/Attempt: '$TASK_ID' '$ATTEMPT'" >&2
+        exit 1
+    fi
 else
-    TASK_ID="${1:?Usage: dispatch-start.sh <TaskId> [Attempt] | dispatch-start.sh --pr}"
+    TASK_ID="${1:?Usage: dispatch-start.sh <TaskId> [Attempt] | dispatch-start.sh --pr | dispatch-start.sh --review <TaskId> [<Attempt>]}"
     ATTEMPT="${2:-1}"
-fi
-if ! [[ "$TASK_ID" =~ ^[A-Za-z0-9_-]+$ ]] || ! [[ "$ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then
-    echo "Invalid TaskId/Attempt: '$TASK_ID' '$ATTEMPT'" >&2
-    exit 1
+    if ! [[ "$TASK_ID" =~ ^[A-Za-z0-9_-]+$ ]] || ! [[ "$ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Invalid TaskId/Attempt: '$TASK_ID' '$ATTEMPT'" >&2
+        exit 1
+    fi
 fi
 
 # state.json・config.json の読み取りに python3 が要る(無いと状態が読めず、
@@ -64,7 +80,62 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/../../.."
 
-RUN_DIR=".agents/workflow/runs/${TASK_ID}-${ATTEMPT}"
+# レビューの run の試行回数(省略時は state.json のそのタスクの retries + 1)
+if [ "$REVIEW_MODE" = true ] && [ -z "$ATTEMPT" ]; then
+    ATTEMPT="$(python3 -c "
+import json, sys
+try:
+    with open('.agents/workflow/state.json', encoding='utf-8') as f:
+        s = json.load(f)
+    for t in s['tasks']:
+        if t.get('id') == sys.argv[1]:
+            print(int(t.get('retries') or 0) + 1)
+            break
+except Exception:
+    pass
+" "$TASK_ID" 2> /dev/null | tr -d '\r')"
+    if ! [[ "$ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Task $TASK_ID cannot be started (status: <absent>)" >&2
+        echo "Next: escalate reason=task-status"
+        exit 21
+    fi
+fi
+
+RUN_TASK_ID="$TASK_ID"
+if [ "$REVIEW_MODE" = true ]; then RUN_TASK_ID="review-$TASK_ID"; fi
+RUN_DIR=".agents/workflow/runs/${RUN_TASK_ID}-${ATTEMPT}"
+
+# config.json の child_agent.<キー> を読む(読めなければ空)。bool は true のとき true と出す
+cfg_get() {
+    python3 -c "
+import json, sys
+try:
+    with open('.agents/workflow/config.json', encoding='utf-8') as f:
+        v = json.load(f)['child_agent'].get(sys.argv[1])
+except Exception:
+    v = None
+if v is True:
+    print('true')
+elif isinstance(v, str):
+    print(v)
+" "$1" 2> /dev/null | tr -d '\r'
+}
+
+# config.json の review.<キー> を読む(読めなければ空)。bool は true のとき true と出す
+cfg_get_review() {
+    python3 -c "
+import json, sys
+try:
+    with open('.agents/workflow/config.json', encoding='utf-8') as f:
+        v = json.load(f).get('review', {}).get(sys.argv[1])
+except Exception:
+    v = None
+if v is True:
+    print('true')
+elif isinstance(v, str):
+    print(v)
+" "$1" 2> /dev/null | tr -d '\r'
+}
 
 # 1. ブランチ
 OUT="$(bash "$SCRIPT_DIR/branch-check.sh" --state)"
@@ -72,6 +143,16 @@ CODE=$?
 if [ "$CODE" -ne 0 ]; then
     printf '%s\n' "$OUT"
     exit $((10 + CODE))
+fi
+
+# 1'. レビューの run は review.mode が dispatch のときだけ起動する
+if [ "$REVIEW_MODE" = true ]; then
+    REVIEW_MODE_CFG="$(cfg_get_review mode)"
+    if [ "$REVIEW_MODE_CFG" != "dispatch" ]; then
+        echo "review.mode is not 'dispatch' (review.mode: ${REVIEW_MODE_CFG:-<absent>})" >&2
+        echo "Next: escalate reason=review-mode"
+        exit 23
+    fi
 fi
 
 # max_parallel(config.json。整数で 2 以上のときだけ並列。それ以外は 1)
@@ -85,10 +166,12 @@ except Exception:
 print(v if isinstance(v, int) and not isinstance(v, bool) and v >= 1 else 1)
 " 2> /dev/null | tr -d '\r')"
 PARALLEL=false
-if [ "$PR_MODE" = false ] && [ "${MAX_PARALLEL:-1}" -ge 2 ] 2> /dev/null; then PARALLEL=true; fi
+if [ "$PR_MODE" = false ] && [ "$REVIEW_MODE" = false ] && [ "${MAX_PARALLEL:-1}" -ge 2 ] 2> /dev/null; then PARALLEL=true; fi
 
-# 2. 作業ツリー(並列のときは本体に別タスクの変更があってよいので確認しない)
-if [ "$PARALLEL" = true ]; then
+# 2. 作業ツリー(並列のときは本体に別タスクの変更があってよいので確認しない。レビューの run でも確認しない)
+if [ "$REVIEW_MODE" = true ]; then
+    :
+elif [ "$PARALLEL" = true ]; then
     :
 elif [ "$PR_MODE" = false ] && [ "$ATTEMPT" -ge 2 ] && [ -f "$RUN_DIR/fix-notes.md" ]; then
     echo "Retry (attempt $ATTEMPT, fix-notes.md found): keeping the working tree changes from the previous attempt" >&2
@@ -116,14 +199,24 @@ for t in s['tasks']:
     if t['id'] == sys.argv[2]:
         print(t['status']); break
 " "$STATE_PATH" "$TASK_ID" 2> /dev/null)"
-case "$PR_MODE:$STATUS" in
-    true:*|*:pending|*:in_progress) ;;
-    *)
-        echo "Task $TASK_ID cannot be started (status: ${STATUS:-<absent>})" >&2
+if [ "$PR_MODE" = true ]; then
+    :
+elif [ "$REVIEW_MODE" = true ]; then
+    if [ "$STATUS" != "in_review" ]; then
+        echo "Task $TASK_ID cannot be reviewed (status: ${STATUS:-<absent>})" >&2
         echo "Next: escalate reason=task-status"
         exit 21
-        ;;
-esac
+    fi
+else
+    case "$STATUS" in
+        pending|in_progress) ;;
+        *)
+            echo "Task $TASK_ID cannot be started (status: ${STATUS:-<absent>})" >&2
+            echo "Next: escalate reason=task-status"
+            exit 21
+            ;;
+    esac
+fi
 
 # 3'. worktree の作成(並列のとき。task-state の前に置き、失敗しても state.json を変えない)
 if [ "$PARALLEL" = true ]; then
@@ -139,22 +232,6 @@ if [ "$PARALLEL" = true ]; then
         exit 61
     fi
 fi
-
-# config.json の child_agent.<キー> を読む(読めなければ空)。bool は true のとき true と出す
-cfg_get() {
-    python3 -c "
-import json, sys
-try:
-    with open('.agents/workflow/config.json', encoding='utf-8') as f:
-        v = json.load(f)['child_agent'].get(sys.argv[1])
-except Exception:
-    v = None
-if v is True:
-    print('true')
-elif isinstance(v, str):
-    print(v)
-" "$1" 2> /dev/null | tr -d '\r'
-}
 
 # 並列のとき、子の起動前の失敗で作った worktree を片付ける(出力は stderr へ)
 abort_worktree() {
@@ -186,24 +263,39 @@ to_py_path() {
 }
 LAUNCHER=cli
 if [ "$SUBAGENT_CAPABLE" = true ]; then
-    SUB_MODE="$(cfg_get subagent)"
+    if [ "$REVIEW_MODE" = true ]; then
+        SUB_MODE="$(cfg_get_review subagent)"
+    else
+        SUB_MODE="$(cfg_get subagent)"
+    fi
     case "$SUB_MODE" in
         always) LAUNCHER=subagent ;;
         never) LAUNCHER=cli ;;
         *)
-            FORMAT="$(python3 -I "$(to_py_path "$SCRIPT_DIR/childprofile.py")" . 2> /dev/null | tr -d '\r' | sed -n 2p)"
+            if [ "$REVIEW_MODE" = true ]; then
+                FORMAT="$(python3 -I "$(to_py_path "$SCRIPT_DIR/childprofile.py")" . --task "$RUN_TASK_ID" 2> /dev/null | tr -d '\r' | sed -n 2p)"
+            else
+                FORMAT="$(python3 -I "$(to_py_path "$SCRIPT_DIR/childprofile.py")" . 2> /dev/null | tr -d '\r' | sed -n 2p)"
+            fi
             if [ "$FORMAT" = "claude-stream-json" ]; then LAUNCHER=subagent; fi
             ;;
     esac
 fi
-if [ "$PR_MODE" = false ]; then
+if [ "$PR_MODE" = false ] && [ "$REVIEW_MODE" = false ]; then
     mkdir -p "$RUN_DIR"
     printf '%s\n' "$LAUNCHER" > "$RUN_DIR/launcher"
 fi
 
-# 3a. 疎通確認
+# レビューの run で cli のときは review.command_template が要る
+if [ "$REVIEW_MODE" = true ] && [ "$LAUNCHER" = cli ] && [ -z "$(cfg_get_review command_template)" ]; then
+    echo "review.command_template is empty (required when review.mode=dispatch and launcher=cli)" >&2
+    echo "Next: escalate reason=review-config"
+    exit 24
+fi
+
+# 3a. 疎通確認(レビューの run では行わない)
 HEALTHCHECK="$(cfg_get healthcheck_command)"
-if [ "$LAUNCHER" = subagent ]; then HEALTHCHECK=""; fi
+if [ "$LAUNCHER" = subagent ] || [ "$REVIEW_MODE" = true ]; then HEALTHCHECK=""; fi
 if [ -n "$HEALTHCHECK" ]; then
     if ! run_check_command "$HEALTHCHECK"; then
         abort_worktree
@@ -212,7 +304,7 @@ if [ -n "$HEALTHCHECK" ]; then
     fi
 fi
 
-# 3b. ウォームアップ(このサイクルの最初の CLI の dispatch のときだけ)
+# 3b. ウォームアップ(このサイクルの最初の CLI の dispatch のときだけ。レビューの run では行わない)
 # CLI の run = guard.sha256 があり、launcher が無いか subagent でない run
 has_cli_run() {
     local g d
@@ -225,7 +317,7 @@ has_cli_run() {
     return 1
 }
 WARMUP="$(cfg_get warmup_command)"
-if [ "$PR_MODE" = false ] && [ "$LAUNCHER" = cli ] && [ -n "$WARMUP" ] && ! has_cli_run; then
+if [ "$PR_MODE" = false ] && [ "$REVIEW_MODE" = false ] && [ "$LAUNCHER" = cli ] && [ -n "$WARMUP" ] && ! has_cli_run; then
     if ! run_check_command "$WARMUP"; then
         abort_worktree
         echo "Next: escalate reason=warmup"
@@ -236,6 +328,8 @@ fi
 # 4. プロンプト生成
 if [ "$PR_MODE" = true ]; then
     GEN_OUT="$(bash "$SCRIPT_DIR/dispatch-prompt-gen.sh" --pr --launcher "$LAUNCHER")"
+elif [ "$REVIEW_MODE" = true ]; then
+    GEN_OUT="$(bash "$SCRIPT_DIR/dispatch-prompt-gen.sh" --review "$TASK_ID" "$ATTEMPT" --launcher "$LAUNCHER")"
 else
     GEN_OUT="$(bash "$SCRIPT_DIR/dispatch-prompt-gen.sh" "$TASK_ID" "$ATTEMPT")"
 fi
@@ -254,9 +348,10 @@ if [ "$PR_MODE" = true ]; then
         echo "Next: escalate reason=prompt-gen"
         exit 41
     fi
+    RUN_TASK_ID="$TASK_ID"
     RUN_DIR=".agents/workflow/runs/${TASK_ID}-${ATTEMPT}"
-else
-    # 5. 状態を in_progress にする
+elif [ "$REVIEW_MODE" = false ]; then
+    # 5. 状態を in_progress にする(レビューの run では変えない)
     if ! bash "$SCRIPT_DIR/task-state.sh" "$TASK_ID" start; then
         abort_worktree
         echo "Next: escalate reason=task-state"
@@ -267,27 +362,31 @@ fi
 # 6'. サブエージェントでの起動(子は起動せず、guard と git-state の記録だけ同期で行う)
 if [ "$LAUNCHER" = subagent ]; then
     rm -f "$RUN_DIR/guard.sha256"
-    if ! bash "$SCRIPT_DIR/dispatch-run.sh" --prepare-only "$TASK_ID" "$ATTEMPT" > /dev/null 2>&1; then
+    if ! bash "$SCRIPT_DIR/dispatch-run.sh" --prepare-only "$RUN_TASK_ID" "$ATTEMPT" > /dev/null 2>&1; then
         echo "dispatch-run --prepare-only failed: $RUN_DIR" >&2
         echo "Next: escalate reason=launch"
         exit 60
     fi
     ROOT_ABS="$(to_py_path "$PWD")"
     if [ "$PARALLEL" = true ]; then WORKDIR="$ROOT_ABS/$RUN_DIR/worktree"; else WORKDIR="$ROOT_ABS"; fi
-    SUB_MODEL="$(cfg_get subagent_model)"
-    echo "Run: ${TASK_ID}-${ATTEMPT}"
+    if [ "$REVIEW_MODE" = true ]; then
+        SUB_MODEL="$(cfg_get_review subagent_model)"
+    else
+        SUB_MODEL="$(cfg_get subagent_model)"
+    fi
+    echo "Run: ${RUN_TASK_ID}-${ATTEMPT}"
     echo "Launcher: subagent"
     echo "Prompt: $ROOT_ABS/$RUN_DIR/prompt.md"
     echo "Workdir: $WORKDIR"
     echo "Output: $ROOT_ABS/$RUN_DIR/output.log"
     echo "Model: ${SUB_MODEL:-default}"
-    echo "Next: subagent ${TASK_ID} ${ATTEMPT}"
+    echo "Next: subagent ${RUN_TASK_ID} ${ATTEMPT}"
     exit 0
 fi
 
 # 6. デタッチ起動
 rm -f "$RUN_DIR/guard.sha256"
-nohup bash "$SCRIPT_DIR/dispatch-run.sh" "$TASK_ID" "$ATTEMPT" > /dev/null 2>&1 &
+nohup bash "$SCRIPT_DIR/dispatch-run.sh" "$RUN_TASK_ID" "$ATTEMPT" > /dev/null 2>&1 &
 
 # dispatch-run が guard.sha256 を作る(起動した)まで待つ
 LAUNCH_TIMEOUT="${DISPATCH_START_LAUNCH_TIMEOUT:-30}"
@@ -303,7 +402,7 @@ while [ ! -f "$RUN_DIR/guard.sha256" ]; do
     i=$((i + 1))
 done
 
-echo "Run: ${TASK_ID}-${ATTEMPT}"
+echo "Run: ${RUN_TASK_ID}-${ATTEMPT}"
 echo "Launcher: cli"
 echo "Log: $RUN_DIR/output.log"
 echo "Watch: tail -f $RUN_DIR/output.log"
