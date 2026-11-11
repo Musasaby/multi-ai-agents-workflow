@@ -17,6 +17,7 @@
 │   ├── dispatch-prompt-gen.ps1 / .sh
 │   ├── dispatch-prompt-template.md
 │   ├── dispatch-pr-prompt-template.md   PR作成の単発依頼用(dispatch-prompt-gen --pr)
+│   ├── dispatch-review-template.md  レビュー役の単発依頼用(dispatch-prompt-gen --review)
 │   ├── state-sync.ps1 / .sh
 │   ├── req-status.ps1 / .sh  要件ごとの充足状況の一覧(グループ・サイクル完了時の充足確認に使う)
 │   ├── next-task.ps1 / .sh
@@ -33,7 +34,7 @@
 │   ├── workflow-sync-scripts.ps1 / .sh
 │   ├── workflow-logs.ps1 / .sh  複数の run のログを1つの画面に流す
 │   └── workflow-archive.ps1 / .sh
-├── runs/<タスクID>-<試行回数>/   ← 実行単位の生成物(.gitignore対象。PR作成の単発依頼は pr-<N>-1/)
+├── runs/<タスクID>-<試行回数>/   ← 実行単位の生成物(.gitignore対象。PR作成の単発依頼は pr-<N>-1/、レビューの run は review-<ID>-<N>/)
 │   ├── prompt.md        生成プロンプト
 │   ├── launcher         起動方法の1行(`cli` か `subagent`。dispatch-start が書く。無ければ `cli` 扱い)
 │   ├── fix-notes.md     リトライ時のレビュー指摘(親が作成)
@@ -83,6 +84,11 @@
 | `parallel_exclusive_files` | 単独で実行するファイルの配列(ルート相対のパスで完全一致)。変更対象(参照ファイル欄で `(変更対象` が付いたパス)にこれらのファイルを1つでも含むタスクは、ほかのタスクが実行中のときは選ばれず、選ばれたときはほかのタスクと一緒に選ばれない。変更対象が1つも無いタスクも同じく単独になる。テンプレートの config.json には書かれていないので、変えたいときに足す | `["AGENTS.md", "README.md"]` |
 | `comprehension_check.enabled` | タスク合格時に理解確認質問を生成するか | `false` |
 | `comprehension_check.questions_per_task` | タスクあたりの質問数 | `3` |
+| `review.mode` | レビューの実行方法。`parent` は親エージェントが自分でレビューする。`dispatch` はレビュー役の子を `runs/review-<ID>-<N>/` の run として起動する(`dispatch-start --review`)。`dispatch` 以外は `parent` 扱い | `parent` |
+| `review.command_template` | `review.mode` が `dispatch` で、レビューの run の launcher が `cli` のときに使うコマンドテンプレート。`{prompt}` / `{prompt_file}` の扱いは `child_agent.command_template` と同じ。空なら `dispatch-start --review` は exit 24 | `""` |
+| `review.profile` | レビューの run の子CLIのプロファイル名。`child_agent.profile` と同じ形式で、`dispatch-start --review` の launcher 判定と `dispatch-check` の出力変換・検知に使う。未指定・空は `auto`。テンプレートの config.json には書かれていないので、変えたいときに足す | `auto` |
+| `review.subagent` | レビューの run を親のサブエージェント機能で実行するか。`always`: 使う。`never`: 使わない。それ以外は `auto` で、`review.profile` の出力形式が `claude-stream-json` のときだけ使う。テンプレートの config.json には書かれていないので、変えたいときに足す | `auto` |
+| `review.subagent_model` | レビューの run をサブエージェントで実行するときのモデル名。未指定・空なら親ツールの既定のモデル。テンプレートの config.json には書かれていないので、変えたいときに足す | 未指定 |
 | `task_sizing.max_acceptance_criteria` | 受け入れ基準のチェックボックス数のしきい値。`dispatch-prompt-gen` が、これを超えると WARN を出す。1以上の整数。値が無ければ既定値、不正値は WARN を出して既定値 | `5` |
 | `task_sizing.max_changed_files` | 参照ファイル欄で `(変更対象` と書いた項目数のしきい値。`dispatch-prompt-gen` が、これを超えると WARN を出す。1以上の整数。値が無ければ既定値、不正値は WARN を出して既定値 | `3` |
 | `task_sizing.max_reference_files` | 参照ファイル欄の項目数のしきい値。`dispatch-prompt-gen` が、これを超えると WARN を出す。1以上の整数。値が無ければ既定値、不正値は WARN を出して既定値 | `5` |
