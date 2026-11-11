@@ -30,6 +30,8 @@ set -uo pipefail
 #   `(<N>s ago)` を外し、それでも入らなければ先頭の `updated ` も外し、最後は列の幅で切る。
 #   3 行目は区切りの線、4 行目から下はその run のログの末尾を列の幅で折り返して出す。
 #   全角は 2 桁、ANSI エスケープは除いて数える。
+#   列に入れる行は制御文字を整える: \r は最後の \r より後ろだけ残し、SGR(色)以外の ANSI・C0 制御文字・DEL は消し、
+#   タブは空白 4 個にする。行を切ったときは色を戻す \x1b[0m を足す。
 #   再描画は --interval ごとに画面全体。端末では代替画面(ESC[?1049h)に切り替え、終了時(Ctrl+C を含む)に戻す。
 #   --once のときは ESC の制御を入れずに1画面だけ出す(テスト用)。
 # 文字コード: output.log の先頭が BOM FF FE なら UTF-16LE(Windows PowerShell 5.1 の `*>`)として、
@@ -67,6 +69,7 @@ RUNS_DIR = os.path.join(".agents", "workflow", "runs")
 RUN_RE = re.compile(r"^[A-Za-z0-9_-]+-[0-9]+$")
 NUM_RE = re.compile(r"^[0-9]+(\.[0-9]+)?$")
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)")
+SGR_RE = re.compile(r"\x1b\[[0-9;]*m")
 MAX_LINES = 2000
 NO_OUTPUT_EVERY = 60
 
@@ -365,6 +368,30 @@ def display_width(text):
     return sum(char_width(ch) for ch in text)
 
 
+def sanitize(text):
+    if "\r" in text:
+        text = text.rsplit("\r", 1)[1]
+    parts = []
+    i = 0
+    n = len(text)
+    while i < n:
+        m = ANSI_RE.match(text, i)
+        if m:
+            if SGR_RE.fullmatch(m.group(0)):
+                parts.append(m.group(0))
+            i = m.end()
+            continue
+        ch = text[i]
+        if ch == "\t":
+            parts.append(" " * 4)
+        elif ord(ch) < 0x20 or ord(ch) == 0x7f:
+            pass
+        else:
+            parts.append(ch)
+        i += 1
+    return "".join(parts)
+
+
 def wrap(text, width):
     if width < 1:
         width = 1
@@ -420,7 +447,10 @@ def fit(text, width):
     if width < 1:
         return ""
     text = truncate_visible(text, width)
-    return text + " " * (width - display_width(text))
+    w = display_width(text)
+    if "\x1b[" in text:
+        text += "\x1b[0m"
+    return text + " " * (width - w)
 
 
 def header2(run, width):
@@ -449,10 +479,13 @@ def build_column(run, width, avail):
     if use_color:
         name = "\033[%dm%s\033[0m" % (31 + order.index(run) % 6, name)
     col = [fit(name, width), header2(run, width), "-" * width]
-    wrapped = []
-    for ln in st["lines"]:
-        wrapped.extend(wrap(ln, width))
-    tail = wrapped[-avail:] if avail > 0 else []
+    tail = []
+    if avail > 0:
+        for ln in reversed(st["lines"]):
+            tail = wrap(sanitize(ln), width) + tail
+            if len(tail) >= avail:
+                break
+        tail = tail[-avail:]
     for ln in tail:
         col.append(fit(ln, width))
     return col
@@ -523,7 +556,9 @@ def render_columns(alt):
     frame = build_frame()
     if alt:
         out.write("\033[H\033[2J")
-    out.write("\n".join(frame) + "\n")
+        out.write("\n".join(frame))
+    else:
+        out.write("\n".join(frame) + "\n")
     out.flush()
 
 
