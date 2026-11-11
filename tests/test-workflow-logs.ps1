@@ -97,7 +97,9 @@ Invoke-TestCase "logs: リダイレクトで受けた日本語は BOM なしの 
     if (-not $exited) { $p.Kill() }
     $bytes = [System.IO.File]::ReadAllBytes($outFile)
     Remove-Item $outFile, $errFile -Force
-    $expected = [System.Text.Encoding]::UTF8.GetBytes("[T1-1] $jp`n")
+    # stream は最初に見つけたとき watching の行を出す(sh 版と同じ)。時刻は output.log の更新時刻
+    $clock = (Get-Item "$script:Proj/.agents/workflow/runs/T1-1/output.log").LastWriteTime.ToString('HH:mm:ss')
+    $expected = [System.Text.Encoding]::UTF8.GetBytes("[T1-1] --- watching (updated $clock)`n[T1-1] $jp`n")
     Assert-Eq 'True' "$exited" "自分で終わる"
     Assert-Eq ($expected -join ',') ($bytes -join ',') "BOM なしの UTF-8 のバイト列"
 }
