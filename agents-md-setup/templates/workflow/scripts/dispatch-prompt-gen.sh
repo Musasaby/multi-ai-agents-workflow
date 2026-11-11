@@ -8,9 +8,11 @@ export PYTHONIOENCODING=utf-8
 # tasklib を import しても scripts/__pycache__ を作らない(利用先の作業ツリーを汚さないため)
 export PYTHONDONTWRITEBYTECODE=1
 
-USAGE="Usage: dispatch-prompt-gen.sh <TaskId> [Attempt] | dispatch-prompt-gen.sh --pr [--launcher <cli|subagent>]"
+USAGE="Usage: dispatch-prompt-gen.sh <TaskId> [Attempt] | dispatch-prompt-gen.sh --pr [--launcher <cli|subagent>] | dispatch-prompt-gen.sh --review <TaskId> <Attempt> [--launcher <cli|subagent>]"
 PR_MODE=false
 PR_LAUNCHER=""
+REVIEW_MODE=false
+REVIEW_LAUNCHER=""
 if [ "${1:-}" = "--pr" ]; then
     PR_MODE=true
     TASK_ID="pr"
@@ -19,6 +21,23 @@ if [ "${1:-}" = "--pr" ]; then
     if [ "${2:-}" = "--launcher" ]; then
         PR_LAUNCHER="${3:-}"
         if [ "$PR_LAUNCHER" != "cli" ] && [ "$PR_LAUNCHER" != "subagent" ]; then
+            echo "$USAGE" >&2
+            exit 1
+        fi
+    fi
+elif [ "${1:-}" = "--review" ]; then
+    REVIEW_MODE=true
+    TASK_ID="${2:?$USAGE}"
+    ATTEMPT="${3:?$USAGE}"
+    # パスやコード片に埋め込むため、タスクIDと試行回数の形式を検証する(通常モードと同じ)
+    if ! [[ "$TASK_ID" =~ ^[A-Za-z0-9_-]+$ ]] || ! [[ "$ATTEMPT" =~ ^[0-9]+$ ]]; then
+        echo "Invalid TaskId/Attempt: '$TASK_ID' '$ATTEMPT' (TaskId: [A-Za-z0-9_-]+, Attempt: number)" >&2
+        exit 1
+    fi
+    # --launcher: prompt.md を書いた後、runs/review-<ID>-<N>/launcher へこの値を書く(サブエージェント用の節の判定に使う)
+    if [ "${4:-}" = "--launcher" ]; then
+        REVIEW_LAUNCHER="${5:-}"
+        if [ "$REVIEW_LAUNCHER" != "cli" ] && [ "$REVIEW_LAUNCHER" != "subagent" ]; then
             echo "$USAGE" >&2
             exit 1
         fi
@@ -221,6 +240,69 @@ extract_task_section() {
         in_section { print }
     ' "$TASKS_PATH"
 }
+
+# --- Review mode: 子の実装をレビューするプロンプトを生成する ---
+# 出力先は runs/review-<ID>-<N>/prompt.md。stdout に "RunId: review-<ID>" を出す。
+# report.md が無いとレビューできないため exit 2、tasks.md にタスクの節が無ければ exit 1。
+if [ "$REVIEW_MODE" = true ]; then
+    REPORT_REL=".agents/workflow/runs/${TASK_ID}-${ATTEMPT}/report.md"
+    REPORT_PATH="$ROOT/$REPORT_REL"
+    if [ ! -f "$TASKS_PATH" ] || ! grep -q "^## ${TASK_ID}:" "$TASKS_PATH" 2>/dev/null; then
+        echo "Task '${TASK_ID}' not found in ${TASKS_PATH}" >&2
+        exit 1
+    fi
+    if [ ! -f "$REPORT_PATH" ]; then
+        echo "Report not found: $REPORT_REL" >&2
+        exit 2
+    fi
+    TASK_SECTION="$(extract_task_section "$TASK_ID")"
+    # 理解確認の指示: config の comprehension_check.enabled で切り替える
+    COMPREHENSION_INSTRUCTION="$(python3 - "$CONFIG_PATH_PY" "$TASK_ID" <<'PY'
+import json, sys
+config_path, task_id = sys.argv[1:3]
+try:
+    with open(config_path, encoding='utf-8') as f:
+        cc = json.load(f).get('comprehension_check') or {}
+except Exception:
+    cc = {}
+if not isinstance(cc, dict):
+    cc = {}
+if cc.get('enabled') is True:
+    q = cc.get('questions_per_task', 3)
+    if isinstance(q, bool) or not isinstance(q, int) or q < 1:
+        q = 3
+    print('pass のときだけ、`.agents/skills/agent-review-commit/references/comprehension-questions.md` の手順4の観点で '
+          + str(q) + ' 問の質問を作り、`.agents/skills/agent-comprehension-check/SKILL.md` の「質問ファイルのフォーマット」に従って '
+          + '`.agents/workflow/comprehension/' + task_id + '.md` に書く。`## 解説` 見出しは含めない')
+else:
+    print('質問ファイルは作らない(完了報告の理解確認は なし)')
+PY
+)" || exit 1
+    REVIEW_RUN_DIR="$RUNS_BASE/review-${TASK_ID}-${ATTEMPT}"
+    REVIEW_PROMPT_PATH="$REVIEW_RUN_DIR/prompt.md"
+    mkdir -p "$REVIEW_RUN_DIR"
+    python3 - "$(to_py_path "$SCRIPT_DIR/dispatch-review-template.md")" "$(to_py_path "$REVIEW_PROMPT_PATH")" \
+        "$TASK_ID" "$ATTEMPT" "$TASK_SECTION" "$REPORT_REL" \
+        ".agents/workflow/runs/${TASK_ID}-$((ATTEMPT + 1))/fix-notes.md" "$COMPREHENSION_INSTRUCTION" <<'PY' || { rmdir "$REVIEW_RUN_DIR" 2>/dev/null; exit 1; }
+import sys
+template_path, prompt_path, task_id, attempt, task_section, report_path, fix_notes_path, comprehension = sys.argv[1:9]
+with open(template_path, encoding='utf-8') as f:
+    text = f.read()
+for key, value in (('{task_id}', task_id), ('{attempt}', attempt), ('{task_section}', task_section),
+                   ('{report_path}', report_path), ('{fix_notes_path}', fix_notes_path),
+                   ('{comprehension_instruction}', comprehension)):
+    text = text.replace(key, value)
+with open(prompt_path, 'w', encoding='utf-8', newline='\n') as f:
+    f.write(text)
+PY
+    if [ -n "$REVIEW_LAUNCHER" ]; then
+        printf '%s\n' "$REVIEW_LAUNCHER" > "$REVIEW_RUN_DIR/launcher"
+    fi
+    append_subagent_section "$REVIEW_RUN_DIR"
+    echo "Generated: $REVIEW_PROMPT_PATH"
+    echo "RunId: review-${TASK_ID}"
+    exit 0
+fi
 
 # --- Get task title from state.json ---
 get_task_title() {
