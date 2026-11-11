@@ -93,6 +93,31 @@ with open(prompt_path, 'w', encoding='utf-8', newline='\n') as f:
 PY
 }
 
+# runs/<ID>-<N>/worktree.txt がある run は、prompt.md の末尾に worktree 用の節を足す
+# 引数: run ディレクトリ(絶対パス)
+append_worktree_section() {
+    local run_dir="$1"
+    [ -f "$run_dir/worktree.txt" ] || return 0
+    local workdir
+    workdir="$(sed -n 's/^path //p' "$run_dir/worktree.txt" | head -n 1 | tr -d '\r')"
+    [ -n "$workdir" ] || return 0
+    python3 - "$(to_py_path "$workdir")" "$(to_py_path "$ROOT")" "$(to_py_path "$run_dir")" "$(to_py_path "$SCRIPT_DIR/dispatch-worktree-template.md")" <<'PY'
+import os, sys
+workdir, main_root, run_dir, template_path = sys.argv[1:5]
+workdir = workdir.replace('\\', '/').rstrip('/')
+main_root = main_root.replace('\\', '/').rstrip('/')
+with open(template_path, encoding='utf-8') as f:
+    section = f.read()
+for key, value in (('{workdir}', workdir), ('{main_root}', main_root)):
+    section = section.replace(key, value)
+prompt_path = os.path.join(run_dir, 'prompt.md')
+with open(prompt_path, encoding='utf-8', newline='') as f:
+    text = f.read()
+with open(prompt_path, 'w', encoding='utf-8', newline='\n') as f:
+    f.write(text.rstrip('\n') + '\n\n' + section)
+PY
+}
+
 # --- PR mode: PR作成を子に単発依頼するプロンプトを生成する ---
 # 対象タスク = state.json で done かつ commit が git log origin/<base>..HEAD に含まれるもの。
 # 出力先は runs/pr-<連番>-1/prompt.md。stdout に "RunId: pr-<連番>" を出す。
@@ -535,6 +560,7 @@ with open('$PROMPT_PATH_PY', 'w', encoding='utf-8', newline='\n') as f:
     f.write(result)
 " "$FIX_NOTES" "$TASK_SECTION" "$HANDOFF_REPORTS" "$VERIFY_LINES"
 
+append_worktree_section "$RUN_DIR"
 append_subagent_section "$RUN_DIR"
 
 echo "Generated: $PROMPT_PATH"
