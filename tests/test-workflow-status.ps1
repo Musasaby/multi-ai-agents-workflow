@@ -96,16 +96,50 @@ Invoke-TestCase "workflow-status: 全タスク完了時に PR の状態から次
 - **依存**: なし
 '@
     Set-State 'T1:done'
+    git -C $script:Proj update-ref refs/remotes/origin/main HEAD | Out-Null
     Set-GhStubResult -Code 0 -Stdout '{"state":"OPEN","url":"https://example.com/pr/1"}'
     Invoke-Script workflow-status.ps1
     Assert-Eq 0 $script:Code "exit(OPEN): $($script:Err)"
     Assert-Contains $script:Out "PR: OPEN https://example.com/pr/1" "PR の状態"
+    Assert-NotContains $script:Out "unpushed=" "未 push なしなら付かない"
     Assert-Eq "Next: wait-merge" (Get-LastLine $script:Out) "OPEN の Next"
     Set-GhStubResult -Code 1 -Stderr 'no pull requests found for branch "main"'
     Invoke-Script workflow-status.ps1
     Assert-Eq 0 $script:Code "exit(none): $($script:Err)"
     Assert-Contains $script:Out "PR: none" "PR なし"
     Assert-Eq "Next: create-pr" (Get-LastLine $script:Out) "PR なしの Next"
+}
+
+Invoke-TestCase "workflow-status: PR が OPEN で未 push のコミットがあると update-pr を出す" {
+    Set-Tasks @'
+## T1: T1 title
+- **目的**: a
+- **依存**: なし
+'@
+    Set-State 'T1:done'
+    Write-Utf8File "$script:Proj/change.txt" "x`n"
+    git -C $script:Proj add change.txt | Out-Null
+    git -C $script:Proj commit -q -m "change" | Out-Null
+    git -C $script:Proj update-ref refs/remotes/origin/main HEAD~1 | Out-Null
+    Set-GhStubResult -Code 0 -Stdout '{"state":"OPEN","url":"https://example.com/pr/1"}'
+    Invoke-Script workflow-status.ps1
+    Assert-Eq 0 $script:Code "exit: $($script:Err)"
+    Assert-Contains $script:Out "PR: OPEN https://example.com/pr/1 unpushed=1" "未 push のコミット数"
+    Assert-Eq "Next: update-pr" (Get-LastLine $script:Out) "未 push ありの Next"
+}
+
+Invoke-TestCase "workflow-status: PR が OPEN で追跡ブランチが無いと update-pr を出す" {
+    Set-Tasks @'
+## T1: T1 title
+- **目的**: a
+- **依存**: なし
+'@
+    Set-State 'T1:done'
+    Set-GhStubResult -Code 0 -Stdout '{"state":"OPEN","url":"https://example.com/pr/1"}'
+    Invoke-Script workflow-status.ps1
+    Assert-Eq 0 $script:Code "exit: $($script:Err)"
+    Assert-Contains $script:Out "PR: OPEN https://example.com/pr/1 unpushed=no-remote" "追跡ブランチなし"
+    Assert-Eq "Next: update-pr" (Get-LastLine $script:Out) "追跡ブランチなしの Next"
 }
 
 Invoke-TestCase "workflow-status: 未回答の理解確認ファイルを数える" {

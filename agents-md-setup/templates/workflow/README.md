@@ -325,8 +325,8 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 | `finish` | 全タスク完了。サマリー報告へ | next-task(exit 3)・workflow-status |
 | `group-advance` | グループ境界。group-advance を実行する | next-task(exit 6)・workflow-status |
 | `create-pr` | PR を作成する | group-advance(exit 7)・workflow-status(PR が無いとき) |
-| `wait-merge` | PR のマージを待つ(報告して停止) | group-advance(exit 8)・dispatch-check(exit 0、PR 作成の run `pr-*`。PR を検証してから報告する)・workflow-status(PR が `OPEN` のとき) |
-| `update-pr` | 既存の PR に未 push のコミットを push し、本文を作り直す(PR作成の単発依頼を再実行する) | group-advance(exit 10) |
+| `wait-merge` | PR のマージを待つ(報告して停止) | group-advance(exit 8)・dispatch-check(exit 0、PR 作成の run `pr-*`。PR を検証してから報告する)・workflow-status(PR が `OPEN` で未 push のコミットが無いとき) |
+| `update-pr` | 既存の PR に未 push のコミットを push し、本文を作り直す(PR作成の単発依頼を再実行する) | group-advance(exit 10)・workflow-status(PR が `OPEN` で未 push のコミットがある、または `origin/<branch>` が無いとき) |
 | `continue` | そのまま作業を続ける | branch-check(exit 0)・group-advance(exit 0)・task-commit(exit 0)・quality-gate(exit 0)・text-refine(推敲しないとき)・text-refine --check(exit 0) |
 | `refine` | `Request:` の依頼文で yomiyasu に推敲させ、`Output:` のファイルを使う | text-refine(推敲するとき) |
 | `decide-candidates` | 候補ごとの判断を `Decisions:` のファイルに書いてから `--check` を実行し直す | text-refine --check(exit 2) |
@@ -1056,7 +1056,7 @@ Group: <名前> <done>/<数>
 Current: <ID> <status> | <title>
 Run: <ID>-<N> running elapsed=<秒>s log_idle=<秒>s
 Failed: T3, T5
-PR: <state> <url>
+PR: <state> <url> [unpushed=<n>|unpushed=no-remote]
 Comprehension: unanswered=<n> <ファイル名> ...
 Next: <行動> [reason=<理由>]
 ```
@@ -1069,12 +1069,18 @@ Next: <行動> [reason=<理由>]
 - `Failed:` — `failed` のタスクがあるときだけ
 - `PR:` — `next-task` の判定が `finish` / `group-advance` のときだけ(下記)
 - `Comprehension:` — 常に出す。`comprehension/` の質問ファイルのうち、回答が未記入のものの件数とファイル名
-- `Next:` — 最後に1行。実行中の run があれば `wait`、PR が `none` なら `create-pr`、`OPEN` なら `wait-merge`、
+- `Next:` — 最後に1行。実行中の run があれば `wait`、PR が `none` なら `create-pr`、`OPEN` で未 push の
+  コミットがあれば `update-pr`、`OPEN` で未 push のコミットが無ければ `wait-merge`、
   `CLOSED` なら `escalate reason=pr-closed`、それ以外は `next-task` の `Next:` 行をそのまま出す
 
 PR の状態は、`next-task` の判定が `finish` / `group-advance` のときだけ `gh pr view <state.json の branch>` で調べる。
 PR が無ければ `PR: none`、gh が無い・`branch` が空・gh の失敗(PR 無し以外)・出力を読めないときは `PR: unknown`
 (`Next:` は `next-task` の行のまま)。
+
+PR が `OPEN` のときは、`origin/<branch>`(リモート追跡ブランチ)とローカルの `<branch>` を比べて
+未 push のコミットを数え、`PR:` 行に `unpushed=<n>` を足す(fetch はしない)。`origin/<branch>` が無ければ
+`unpushed=no-remote` を足す。どちらの場合も `Next:` は `update-pr` になる。未 push のコミットが無い
+(または比較に失敗した)ときは何も足さず、`Next:` は `wait-merge` になる。
 
 `--summary`(`-Summary`)では、完了時のサマリー報告用に行を足す:
 

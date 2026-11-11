@@ -59,16 +59,50 @@ t_all_done_pr() {
 - **依存**: なし
 EOT
     write_state "T1:done"
+    git -C "$PROJ" update-ref refs/remotes/origin/main HEAD
     gh_stub_set 0 '{"state":"OPEN","url":"https://example.com/pr/1"}' ''
     run_script workflow-status.sh
     assert_eq 0 "$CODE" "exit(OPEN): $ERR"
     assert_contains "$OUT" "PR: OPEN https://example.com/pr/1" "PR の状態"
+    assert_not_contains "$OUT" "unpushed=" "未 push なしなら付かない"
     assert_eq "Next: wait-merge" "$(last_line "$OUT")" "OPEN の Next"
     gh_stub_set 1 '' 'no pull requests found for branch "main"'
     run_script workflow-status.sh
     assert_eq 0 "$CODE" "exit(none): $ERR"
     assert_contains "$OUT" "PR: none" "PR なし"
     assert_eq "Next: create-pr" "$(last_line "$OUT")" "PR なしの Next"
+}
+
+t_open_unpushed_commit() {
+    write_tasks <<'EOT'
+## T1: T1 title
+- **目的**: a
+- **依存**: なし
+EOT
+    write_state "T1:done"
+    printf 'x\n' > "$PROJ/change.txt"
+    git -C "$PROJ" add change.txt
+    git -C "$PROJ" commit -q -m "change"
+    git -C "$PROJ" update-ref refs/remotes/origin/main HEAD~1
+    gh_stub_set 0 '{"state":"OPEN","url":"https://example.com/pr/1"}' ''
+    run_script workflow-status.sh
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_contains "$OUT" "PR: OPEN https://example.com/pr/1 unpushed=1" "未 push のコミット数"
+    assert_eq "Next: update-pr" "$(last_line "$OUT")" "未 push ありの Next"
+}
+
+t_open_no_remote() {
+    write_tasks <<'EOT'
+## T1: T1 title
+- **目的**: a
+- **依存**: なし
+EOT
+    write_state "T1:done"
+    gh_stub_set 0 '{"state":"OPEN","url":"https://example.com/pr/1"}' ''
+    run_script workflow-status.sh
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_contains "$OUT" "PR: OPEN https://example.com/pr/1 unpushed=no-remote" "追跡ブランチなし"
+    assert_eq "Next: update-pr" "$(last_line "$OUT")" "追跡ブランチなしの Next"
 }
 
 t_unanswered_comprehension() {
@@ -152,6 +186,8 @@ echo "test-workflow-status.sh"
 test_case "workflow-status: 進捗・作業グループ・次のタスクを出す" t_progress_group_next
 test_case "workflow-status: 実行中の子の経過を出し Next: wait にする" t_running_child
 test_case "workflow-status: 全タスク完了時に PR の状態から次の操作を出す" t_all_done_pr
+test_case "workflow-status: PR が OPEN で未 push のコミットがあると update-pr を出す" t_open_unpushed_commit
+test_case "workflow-status: PR が OPEN で追跡ブランチが無いと update-pr を出す" t_open_no_remote
 test_case "workflow-status: 未回答の理解確認ファイルを数える" t_unanswered_comprehension
 test_case "workflow-status: --summary でタスクごとの結果・要件・作業ツリーを出す" t_summary
 test_case "workflow-status: --summary を付けないと Task 行と Worktree 行を出さない" t_no_summary

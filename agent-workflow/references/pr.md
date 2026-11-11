@@ -68,6 +68,10 @@ PR 作成の前に、要件が満たされているかを親が確かめる。�
 .agents/workflow/scripts/workflow-status.sh --summary
 ```
 
+`Next: update-pr` のときは、下書きの前に、要件の充足確認のあとに「PR作成(子への単発依頼)」を
+実行して PR を更新する(子が push と PR 本文の作り直しを行う)。親は自分で `git push` や
+PR 本文の更新をしない。PR を更新してから、以下の出力をもとにサマリーを報告する。
+
 出力(Task 行・Requirement 行・Comprehension 行・Worktree 行・PR 行)をもとに、
 `report-template.md` の「完了時のサマリー」の形で `.agents/workflow/runs/refine/summary.md` に
 下書きする。テンプレートの「日本語の推敲」の手順(場面 `summary`)を通してから、ユーザーに示す。

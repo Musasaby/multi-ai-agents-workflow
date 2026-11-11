@@ -141,6 +141,8 @@ PR 作成の前に、要件が満たされているかを親が確かめる(`req
 先に `workflow-status --summary` を実行し、その出力をもとに
 `references/report-template.md` の「完了時のサマリー」の形で下書きし、推敲を通してから示す。
 項目と使う行は `references/pr.md` を読む。
+`Next: update-pr` のときは、要件の充足確認のあとに「PR作成(子への単発依頼)」を実行して
+PR を更新してから報告する。
 
 ## ユーザーへの報告
 
