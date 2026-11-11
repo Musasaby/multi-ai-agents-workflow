@@ -188,6 +188,41 @@ t_pr_no_requirements() {
     assert_not_contains "$prompt" "{requirement_list}" "placeholder replaced"
 }
 
+t_pr_launcher_subagent() {
+    setup_branch
+    run_script dispatch-prompt-gen.sh --pr --launcher subagent
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    local run_dir="$PROJ/.agents/workflow/runs/pr-1-1"
+    assert_eq "subagent" "$(cat "$run_dir/launcher")" "launcher content"
+    assert_eq "$(printf 'subagent\n' | od -An -c)" "$(od -An -c "$run_dir/launcher")" "launcher is one line with LF"
+    assert_contains "$(cat "$run_dir/prompt.md")" "## サブエージェントとして実行する場合の追加の指示" "subagent section appended"
+}
+
+t_pr_launcher_cli() {
+    setup_branch
+    run_script dispatch-prompt-gen.sh --pr --launcher cli
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    local run_dir="$PROJ/.agents/workflow/runs/pr-1-1"
+    assert_eq "cli" "$(cat "$run_dir/launcher")" "launcher content"
+    assert_not_contains "$(cat "$run_dir/prompt.md")" "## サブエージェントとして実行する場合の追加の指示" "no subagent section"
+}
+
+t_pr_no_launcher() {
+    setup_branch
+    run_script dispatch-prompt-gen.sh --pr
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_file_absent "$PROJ/.agents/workflow/runs/pr-1-1/launcher" "launcher not written"
+}
+
+t_pr_launcher_invalid() {
+    setup_branch
+    run_script dispatch-prompt-gen.sh --pr --launcher foo
+    assert_eq 1 "$CODE" "invalid value -> exit 1"
+    run_script dispatch-prompt-gen.sh --pr --launcher
+    assert_eq 1 "$CODE" "empty value -> exit 1"
+    assert_file_absent "$PROJ/.agents/workflow/runs/pr-1-1" "run dir not created"
+}
+
 echo "test-pr.sh"
 test_case "pr: プロンプト生成" t_pr_generates
 test_case "pr: 連番" t_pr_increments
@@ -200,4 +235,8 @@ test_case "TaskId省略はexit 1" t_task_id_omitted
 test_case "pr: origin が無ければexit 1" t_pr_no_origin_rejected
 test_case "pr: 要件の対応をプロンプトに載せる" t_pr_requirements
 test_case "pr: 要件の節が無ければなしと書く" t_pr_no_requirements
+test_case "pr: --launcher subagent で launcher を書き、サブエージェント用の節を足す" t_pr_launcher_subagent
+test_case "pr: --launcher cli は launcher を書き、節を足さない" t_pr_launcher_cli
+test_case "pr: --launcher が無ければ launcher を書かない" t_pr_no_launcher
+test_case "pr: --launcher の値が不正なら exit 1" t_pr_launcher_invalid
 summary

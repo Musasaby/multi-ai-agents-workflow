@@ -1,11 +1,21 @@
 ﻿param(
     [string]$TaskId,
     [int]$Attempt = 1,
-    [switch]$Pr
+    [switch]$Pr,
+    [string]$Launcher = ''
 )
 Set-Location $PSScriptRoot\..\..\..
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
+
+$PrUsage = "Usage: dispatch-prompt-gen.ps1 -TaskId <TaskId> [-Attempt <n>] | dispatch-prompt-gen.ps1 -Pr [-Launcher <cli|subagent>]"
+# -Launcher: -Pr のときだけ使える。prompt.md を書いた後、runs/pr-<N>-1/launcher へこの値を書く
+if ($PSBoundParameters.ContainsKey('Launcher')) {
+    if (-not $Pr -or ($Launcher -cne 'cli' -and $Launcher -cne 'subagent')) {
+        [Console]::Error.WriteLine($PrUsage)
+        exit 1
+    }
+}
 
 $Root = Get-Location
 $TasksPath = "$Root/.agents/workflow/tasks.md"
@@ -114,6 +124,9 @@ if ($Pr) {
     $text = $text.Replace('{base_ref}', $baseRef)
     $text = $text.Replace('{run_dir}', ".agents/workflow/runs/pr-$prN-1")
     [System.IO.File]::WriteAllText("$prRunDir/prompt.md", $text, [System.Text.UTF8Encoding]::new($false))
+    if ($Launcher) {
+        [System.IO.File]::WriteAllText("$prRunDir/launcher", "$Launcher`n", [System.Text.UTF8Encoding]::new($false))
+    }
     Add-SubagentSection $prRunDir
     Write-Output "Generated: $prRunDir/prompt.md"
     Write-Output "RunId: pr-$prN"
@@ -121,7 +134,7 @@ if ($Pr) {
 }
 
 if (-not $TaskId) {
-    [Console]::Error.WriteLine("Usage: dispatch-prompt-gen.ps1 -TaskId <TaskId> [-Attempt <n>] | dispatch-prompt-gen.ps1 -Pr")
+    [Console]::Error.WriteLine($PrUsage)
     exit 1
 }
 # パスや埋め込みに使うため、タスクIDと試行回数の形式を検証する

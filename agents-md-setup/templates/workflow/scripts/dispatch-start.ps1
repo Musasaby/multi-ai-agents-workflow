@@ -2,7 +2,8 @@
 # (止めたときは state.json を変えず、子も起動しない)。
 # Usage: dispatch-start.ps1 -TaskId <TaskId> [-Attempt <N>] [-SubagentCapable] | dispatch-start.ps1 -Pr [-SubagentCapable]
 #   -SubagentCapable: 親がサブエージェントを起動できるとき付ける。起動方法(launcher)を次で決め、
-#     プロンプト生成の前に runs/<ID>-<N>/launcher へ cli か subagent を1行で書く(-Pr は RunId が決まった後)。
+#     プロンプト生成の前に runs/<ID>-<N>/launcher へ cli か subagent を1行で書く
+#     (-Pr は値を dispatch-prompt-gen -Pr -Launcher に渡し、prompt-gen が runs/pr-<N>-1/launcher を書く)。
 #     config.json の child_agent.subagent(auto / always / never。無い・他の値は auto)が never か、
 #     このオプションが無ければ cli。always なら subagent。auto は childprofile の出力形式が
 #     claude-stream-json のとき subagent、それ以外は cli
@@ -209,7 +210,7 @@ if (-not $Pr -and $launcher -eq 'cli' -and $warmup -and -not (Test-Path '.agents
 
 # 4. プロンプト生成
 if ($Pr) {
-    $genOut = @(& pwsh -NoProfile -File "$PSScriptRoot/dispatch-prompt-gen.ps1" -Pr)
+    $genOut = @(& pwsh -NoProfile -File "$PSScriptRoot/dispatch-prompt-gen.ps1" -Pr -Launcher $launcher)
 } else {
     $genOut = @(& pwsh -NoProfile -File "$PSScriptRoot/dispatch-prompt-gen.ps1" -TaskId $TaskId -Attempt $Attempt)
 }
@@ -230,8 +231,6 @@ if ($Pr) {
         exit 41
     }
     $runDir = ".agents/workflow/runs/$TaskId-$Attempt"
-    New-Item -ItemType Directory -Force -Path $runDir | Out-Null
-    [System.IO.File]::WriteAllText((Join-Path (Get-Location).Path "$runDir/launcher"), "$launcher`n", (New-Object System.Text.UTF8Encoding($false)))
 } else {
     # 5. 状態を in_progress にする
     & pwsh -NoProfile -File "$PSScriptRoot/task-state.ps1" $TaskId start

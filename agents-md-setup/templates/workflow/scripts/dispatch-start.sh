@@ -5,7 +5,8 @@ set -uo pipefail
 # (止めたときは state.json を変えず、子も起動しない)。
 # Usage: dispatch-start.sh <TaskId> [Attempt] [--subagent-capable] | dispatch-start.sh --pr [--subagent-capable]
 #   --subagent-capable: 親がサブエージェントを起動できるとき付ける。起動方法(launcher)を次で決め、
-#     プロンプト生成の前に runs/<ID>-<N>/launcher へ cli か subagent を1行で書く(--pr は RunId が決まった後)。
+#     プロンプト生成の前に runs/<ID>-<N>/launcher へ cli か subagent を1行で書く
+#     (--pr は値を dispatch-prompt-gen --pr --launcher に渡し、prompt-gen が runs/pr-<N>-1/launcher を書く)。
 #     config.json の child_agent.subagent(auto / always / never。無い・他の値は auto)が never か、
 #     このオプションが無ければ cli。always なら subagent。auto は childprofile の出力形式が
 #     claude-stream-json のとき subagent、それ以外は cli
@@ -223,7 +224,7 @@ fi
 
 # 4. プロンプト生成
 if [ "$PR_MODE" = true ]; then
-    GEN_OUT="$(bash "$SCRIPT_DIR/dispatch-prompt-gen.sh" --pr)"
+    GEN_OUT="$(bash "$SCRIPT_DIR/dispatch-prompt-gen.sh" --pr --launcher "$LAUNCHER")"
 else
     GEN_OUT="$(bash "$SCRIPT_DIR/dispatch-prompt-gen.sh" "$TASK_ID" "$ATTEMPT")"
 fi
@@ -243,8 +244,6 @@ if [ "$PR_MODE" = true ]; then
         exit 41
     fi
     RUN_DIR=".agents/workflow/runs/${TASK_ID}-${ATTEMPT}"
-    mkdir -p "$RUN_DIR"
-    printf '%s\n' "$LAUNCHER" > "$RUN_DIR/launcher"
 else
     # 5. 状態を in_progress にする
     if ! bash "$SCRIPT_DIR/task-state.sh" "$TASK_ID" start; then

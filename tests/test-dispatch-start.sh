@@ -346,6 +346,17 @@ t_subagent_never_stream_json_cli() {
     wait_done T1-1
 }
 
+t_pr_subagent_section() {
+    setup_pr
+    set_child_cfg subagent always
+    run_script dispatch-start.sh --pr --subagent-capable
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "Launcher: subagent" "Launcher line"
+    assert_eq "Next: subagent pr-1 1" "$(printf '%s\n' "$OUT" | tail -1 | tr -d '\r')" "last line"
+    assert_eq subagent "$(cat "$PROJ/.agents/workflow/runs/pr-1-1/launcher")" "launcher"
+    assert_contains "$(cat "$PROJ/.agents/workflow/runs/pr-1-1/prompt.md")" "## サブエージェントとして実行する場合の追加の指示" "subagent section in PR prompt"
+}
+
 echo "test-dispatch-start.sh"
 test_case "start: 起動して prompt.md・in_progress・done ができる" t_start_ok
 test_case "start: 戻った時点で guard.sha256 がある" t_start_guard_ready
@@ -369,4 +380,5 @@ test_case "start: max_parallel 2 で healthcheck が失敗すると exit 30 で 
 test_case "start: subagent always + --subagent-capable は子を起動せず subagent で準備する" t_subagent_always
 test_case "start: subagent auto + opencode プロファイルは --subagent-capable があっても cli" t_subagent_auto_opencode_cli
 test_case "start: subagent never + claude-stream-json プロファイルは --subagent-capable があっても cli" t_subagent_never_stream_json_cli
+test_case "start: --pr + subagent は PR の prompt.md にサブエージェント用の節を足す" t_pr_subagent_section
 summary

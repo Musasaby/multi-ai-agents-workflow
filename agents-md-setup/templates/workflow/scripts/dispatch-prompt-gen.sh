@@ -8,12 +8,21 @@ export PYTHONIOENCODING=utf-8
 # tasklib を import しても scripts/__pycache__ を作らない(利用先の作業ツリーを汚さないため)
 export PYTHONDONTWRITEBYTECODE=1
 
-USAGE="Usage: dispatch-prompt-gen.sh <TaskId> [Attempt] | dispatch-prompt-gen.sh --pr"
+USAGE="Usage: dispatch-prompt-gen.sh <TaskId> [Attempt] | dispatch-prompt-gen.sh --pr [--launcher <cli|subagent>]"
 PR_MODE=false
+PR_LAUNCHER=""
 if [ "${1:-}" = "--pr" ]; then
     PR_MODE=true
     TASK_ID="pr"
     ATTEMPT=1
+    # --launcher: prompt.md を書いた後、runs/pr-<N>-1/launcher へこの値を書く(サブエージェント用の節の判定に使う)
+    if [ "${2:-}" = "--launcher" ]; then
+        PR_LAUNCHER="${3:-}"
+        if [ "$PR_LAUNCHER" != "cli" ] && [ "$PR_LAUNCHER" != "subagent" ]; then
+            echo "$USAGE" >&2
+            exit 1
+        fi
+    fi
 else
     TASK_ID="${1:?$USAGE}"
     ATTEMPT="${2:-1}"
@@ -167,6 +176,9 @@ for key, value in (('{task_list}', '\n'.join(selected)), ('{requirement_list}', 
 with open(prompt_path, 'w', encoding='utf-8', newline='\n') as f:
     f.write(text)
 PY
+    if [ -n "$PR_LAUNCHER" ]; then
+        printf '%s\n' "$PR_LAUNCHER" > "$PR_RUN_DIR/launcher"
+    fi
     append_subagent_section "$PR_RUN_DIR"
     echo "Generated: $PR_RUN_DIR/prompt.md"
     echo "RunId: pr-${PR_N}"
