@@ -280,7 +280,11 @@ Invoke-TestCase "run: profile claude-stream-json は command_template に stream
     Set-Profile claude-stream-json
     Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
     Assert-FileExists "$script:Proj/.agents/workflow/runs/T1-1/output.jsonl" "output.jsonl"
-    Assert-Contains ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.log")) "[result] exit_subtype=success" "result line"
+    $log = [System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/output.log")
+    Assert-Contains $log "[result] exit_subtype=success" "result line"
+    Assert-NotContains $log "result=" "result body omitted"
+    $started = ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-1/started")).Trim()
+    Add-Result ($started -cmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$') "started format (got '$started')"
 }
 
 Invoke-TestCase "run: stream-json で stdin に大きいプロンプトを渡しても、子が先に stderr に大量に書くと止まらない" {
@@ -807,6 +811,45 @@ Invoke-TestCase "check: CLI ログの利用上限エラーを Provider error: ye
     Assert-Contains $script:Out "Go usage limit exceeded" "error line shown"
     Assert-Contains $script:Out "Provider error: yes" "provider flag"
     Assert-NotContains $script:Out "level=INFO" "info line not shown"
+}
+
+# T11: CLI ログの ProviderHeaderTimeoutError をプロバイダー起因とする
+Invoke-TestCase "check: CLI ログの ProviderHeaderTimeoutError をプロバイダー起因とする" {
+    Set-CliLog "$script:Proj/cli.log"
+    Write-Utf8File "$script:Proj/cli.log" ('timestamp=2026-10-17T03:07:50.429Z level=ERROR message="stream error" error.error="ProviderHeaderTimeoutError: provider response headers timed out"' + "`n")
+    New-Run 0 $report
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "ProviderHeaderTimeoutError" "error line shown"
+    Assert-Contains $script:Out "Provider error: yes" "provider flag"
+}
+
+# T11: CLI ログの Insufficient account funds をプロバイダー起因とする
+Invoke-TestCase "check: CLI ログの Insufficient account funds をプロバイダー起因とする" {
+    Set-CliLog "$script:Proj/cli.log"
+    Write-Utf8File "$script:Proj/cli.log" ('timestamp=2026-10-17T03:07:50.429Z level=ERROR message="stream error" error.error="Insufficient account funds"' + "`n")
+    New-Run 0 $report
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Insufficient account funds" "error line shown"
+    Assert-Contains $script:Out "Provider error: yes" "provider flag"
+}
+
+# T11: run の起動より前の ERROR 行は出さない(起動後の行は出す)
+Invoke-TestCase "check: CLI ログの run の起動より前の ERROR 行を出さない" {
+    Set-CliLog "$script:Proj/cli.log"
+    Write-Utf8File "$script:Proj/cli.log" ('timestamp=2026-10-17T10:49:49.493Z level=ERROR message="early" error.error="Go usage limit exceeded"' + "`n" + 'timestamp=2026-10-17T10:55:34.828Z level=ERROR message="tool failed"' + "`n")
+    New-Run 0 $report
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/T1-1/started" "2026-10-17T10:50:00Z`n"
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-NotContains $script:Out "10:49:49.493Z" "pre-start line hidden"
+    Assert-NotContains $script:Out "Go usage limit exceeded" "pre-start provider line hidden"
+    Assert-Contains $script:Out "10:55:34.828Z" "post-start line shown"
+    Assert-Contains $script:Out "Provider error: no" "provider flag"
 }
 
 # T47(#74): 利用上限エラーのログで子が異常終了(非0)すれば provider-error で exit 4
