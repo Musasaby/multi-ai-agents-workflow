@@ -41,6 +41,7 @@
 │   ├── git-state.txt    起動時の git 状態の4行(git-state の出力。dispatch-run が作成、dispatch-check が改ざん検知に使う)
 │   ├── worktree/        max_parallel が 2 以上のとき、その run の子が作業する git worktree(collect で消える)
 │   ├── worktree.txt     worktree の path / branch / base の3行(dispatch-worktree create が作成、dispatch-run・dispatch-check が読む)
+│   ├── main-tree.txt    起動時の本体の未コミットの変更のパスとハッシュ(git-state --main-tree の出力。dispatch-run が worktree の run のとき作成、dispatch-check が本体の変更の検知に使う)
 │   ├── changes.patch    collect が worktree の変更から作る差分(本体へ git apply する)
 │   ├── tmp/             子エージェントの一時ディレクトリ(TMPDIR・TEMP・TMP がここを指す。GIT_CEILING_DIRECTORIES はその親の runs/<タスクID>-<試行回数>/ を指す)
 │   ├── output.log       子エージェントの出力
@@ -359,6 +360,12 @@ tasks.md・config.json・依存タスクの完了報告(直接依存のみ)か�
 定型文(実装ルール・テスト検証指示・完了報告フォーマット)は `dispatch-prompt-template.md`
 から展開する。
 
+worktree の run(`runs/<タスクID>-<試行回数>/worktree.txt` があるとき)は、prompt.md の末尾に
+作業ディレクトリの節も足す。節は `dispatch-worktree-template.md` から展開し、`{workdir}` に
+worktree の絶対パス、`{main_root}` に本体の絶対パスを入れる。子には、ファイルの読み書きと
+コマンドの実行をすべて worktree の中で行い、worktree の外にある本体のファイルは読み書きしない
+よう指示する。サブエージェントの run では、サブエージェント用の節の前に置く。
+
 「テスト・検証」節には、常に「タスクの受け入れ基準に書かれた確認手順・テストコマンド」を
 入れ、加えて config の検証コマンド(`quality_gate.child_dispatch_command`、または `command` が
 空でない blocking ステップ、および `test_command`)を列挙する。`command` が空のステップは載せない。
@@ -613,6 +620,18 @@ sh 版では位置引数の前でも後でも指定できる。
   `git changed: <名前>` を改ざん検知の問題に加える(例: 子が `git commit` や `git config` で
   リポジトリの git 状態を変えた場合)。PR 作成の run(`pr-*`)だけは `config` を比べない
   (子が `git push -u` で `.git/config` を正当に変えるため)
+- **本体の変更の検知(worktree の run)**: `dispatch-run` は worktree の run のとき、起動時の
+  本体(メインの作業ツリー)の未コミットの変更を `git-state --main-tree` で
+  `runs/<タスクID>-<試行回数>/main-tree.txt` に記録する。`dispatch-check` は今の
+  `git-state --main-tree` の出力と比べ、起動時に無かったパスとハッシュが変わったパスを
+  `changed: main worktree: <パス>` として改ざん検知の問題に加える(`.agents/workflow/` の下は
+  対象外)。起動時にあって今は無いパス(親がコミットした場合など)は問題にしない。
+  `main-tree.txt` が無い worktree の run は `main-tree.txt not found` を問題にする。
+  並列中に親がほかの run を collect して本体に未コミットの変更ができた場合は、自分の
+  `main-tree.txt` より新しい `collected` を持つほかの run の `changes.patch` の
+  `diff --git a/<p> b/<p>` 行にあるパス(a・b の両方)を除外するので、正当な collect では
+  tampered にしない。ただし子が collect で変わるのと同じパスのファイルを本体で編集した場合は
+  見逃す(collect 後のレビューで見つける)
 - **プロファイルのパターンによる判定**: 検知はプロファイル(`Profile:` に出る名前)のパターンで行う。
   プロジェクト外アクセスは `tool_call_pattern`、完了報告の無効判定(ツール実行の記録)は
   `tool_activity_pattern`、権限拒否は `permission_denied_pattern`、プロバイダーエラーは
@@ -902,9 +921,17 @@ worktree の run が、並列の他の run や親のコミットを改ざんと�
 一覧に、自分以外の `in_progress`・`in_review` のタスク(=実行中または回収待ちの run)の ID を渡す。
 実行中でないタスクの run のブランチを子が作ると、除かれずに `refs` の変化として検知される。
 一覧が無い・空なら、自分以外の `agents-run/*` を何も除かない。
+`--main-tree`(ps1 は `-MainTree`)を付けると、上の4行の代わりに、カレントディレクトリの
+作業ツリーの未コミットの変更をパスごとに出す。対象は
+`git diff --name-only HEAD -- . ':(exclude).agents/workflow'` と
+`git ls-files --others --exclude-standard -- . ':(exclude).agents/workflow'` のパスの和集合で、
+`LC_ALL=C sort -u` の順に `<sha256 の16進小文字>  <パス>`(区切りは空白2つ。ファイルが
+無ければ `-  <パス>`)を1行ずつ出す。git の失敗は、その部分を空として扱う。`--main-tree` は
+ほかのオプションと併用できない。`dispatch-run` が worktree の run の起動時にこの出力を
+`main-tree.txt` に記録し、`dispatch-check` が本体の変更の検知に使う。
 `--run` と `--parent` は両方そろって使い、`--ref` とは併用できない。
 未知の引数・値の無いオプション・上の組み合わせの誤りは stderr に
-`Usage: git-state.sh [--ref <refname> | --run <refname> --parent <refname> [--other-runs <ID,ID,...>]]` を出して exit 1。
+`Usage: git-state.sh [--main-tree | --ref <refname> | --run <refname> --parent <refname> [--other-runs <ID,ID,...>]]` を出して exit 1。
 `dispatch-run` が子の起動時にこの出力を `git-state.txt` に記録し、`dispatch-check` が実行後の
 出力と比べて、子がリポジトリのどこを変えたか(HEAD・ブランチ・参照・設定)を特定する。
 
