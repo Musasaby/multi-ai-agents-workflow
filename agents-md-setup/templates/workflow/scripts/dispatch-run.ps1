@@ -109,9 +109,10 @@ if ($wtPath) {
 # 起動時刻を UTC の1行で記録する(dispatch-check が CLI ログをこの時刻より後の行に絞るため)
 $startedAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture)
 [System.IO.File]::WriteAllText((Join-Path (Get-Location) "$runDir/started"), "$startedAt`n", [System.Text.UTF8Encoding]::new($false))
-# worktree の run では、子の実行中に本体(メインの作業ツリー)で起きた変更も dispatch-check が
-# 検知できるよう、起動時のパスごとのハッシュを main-tree.txt に記録する(失敗しても起動は止めない)
-if ($wtPath) {
+# worktree の run、またはレビューの run(review- 始まり)では、子の実行中に本体(メインの作業ツリー)で
+# 起きた変更も dispatch-check が検知できるよう、起動時のパスごとのハッシュを main-tree.txt に記録する
+# (失敗しても起動は止めない)
+if ($wtPath -or $TaskId.StartsWith('review-', [StringComparison]::Ordinal)) {
     $mainTree = @(& pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1" -MainTree 2> $null)
     $mainText = if ($mainTree.Count -gt 0) { ($mainTree -join "`n") + "`n" } else { '' }
     [System.IO.File]::WriteAllText((Join-Path (Get-Location) "$runDir/main-tree.txt"), $mainText, [System.Text.UTF8Encoding]::new($false))
@@ -123,11 +124,12 @@ if ($PrepareOnly) {
     exit 0
 }
 $prompt = Get-Content $promptPath -Raw
-$config = Get-Content ".agents/workflow/config.json" -Raw | ConvertFrom-Json
+$agentConfig = Get-AgentConfig -Root (Get-Location).Path -TaskId $TaskId
+$configSection = if ($TaskId.StartsWith('review-', [StringComparison]::Ordinal)) { 'review' } else { 'child_agent' }
 # child_agent.isolate_xdg が true のときだけ、子CLIの設定・データの置き場所をプロジェクト内に切り替える
 # (sandbox で ~/.config 等に書けない環境向け)。既定(未指定・false)は呼び出し元の XDG をそのまま使う。
 # 切り替えると ~/.local/share/<CLI>/auth.json 等の認証情報が見えなくなる点に注意。
-if ($config.child_agent.isolate_xdg -eq $true) {
+if ($agentConfig['isolate_xdg'] -eq $true) {
     # worktree の run では cwd が変わるので絶対パスにする
     $xdgDir = if ($wtPath) { Join-Path (Get-Location).Path ".agents/workflow/.config" } else { ".agents/workflow/.config" }
     $env:XDG_CONFIG_HOME = $xdgDir
@@ -229,7 +231,7 @@ $watchdog = $null
 try {
     # ログ(output.log)が idle_timeout_seconds 更新されなければ子を止め、idle-timeout ファイルに記録する(#53)。
     # thread ジョブ内で 1 秒ごとにログの更新時刻を見て、このプロセスの子(CLI)を孫プロセスごと止める(Kill($true))
-    $idleTimeout = [double]($config.child_agent.idle_timeout_seconds)
+    $idleTimeout = [double]($agentConfig['idle_timeout_seconds'])
     if ($idleTimeout -gt 0) {
         $watchdog = Start-ThreadJob -ArgumentList $PID, (Join-Path (Get-Location) $logPath), (Join-Path (Get-Location) $idlePath), $idleTimeout -ScriptBlock {
             param($ParentPid, $LogPath, $MarkerPath, $IdleSeconds)
@@ -250,14 +252,14 @@ try {
         }
     }
     try {
-        $childProfile = Get-ChildProfile -Root (Get-Location).Path
+        $childProfile = Get-ChildProfile -Root (Get-Location).Path -TaskId $TaskId
     } catch {
         [System.IO.File]::WriteAllText((Join-Path (Get-Location) $logPath), "Child profile error: $($_.Exception.Message)`n", [System.Text.UTF8Encoding]::new($false))
         $endTime = (Get-Date).ToString("o")
         "EXIT:1`nEND:$endTime" | Out-File -Encoding utf8 $donePath
         exit 0
     }
-    $template = [string]$config.child_agent.command_template
+    $template = [string]$agentConfig['command_template']
     $tokens = Split-CommandLine $template
     $isStreamJson = $childProfile.OutputFormat -eq 'claude-stream-json'
     $promptFile = [System.IO.Path]::GetFullPath((Join-Path (Get-Location).Path $promptPath)).Replace('\', '/')
@@ -282,7 +284,7 @@ try {
         # 起動せずに .exe を指定するよう案内する(例外は外側の catch が EXIT:crashed にする)
         $resolvedCmd = Get-Command -Name $exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($resolvedCmd -and ($resolvedCmd.Source -match '(?i)\.(cmd|bat)$')) {
-            $reason = "'$($resolvedCmd.Source)' is a batch file (.cmd/.bat); write the path of the real executable (.exe) in child_agent.command_template"
+            $reason = "'$($resolvedCmd.Source)' is a batch file (.cmd/.bat); write the path of the real executable (.exe) in $configSection.command_template"
             [System.IO.File]::WriteAllText((Join-Path (Get-Location) $logPath), "failed to start: $reason`n", [System.Text.UTF8Encoding]::new($false))
             throw $reason
         }

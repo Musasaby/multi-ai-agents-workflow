@@ -148,9 +148,10 @@ fi
 # 起動時刻を UTC の1行で記録する(dispatch-check が CLI ログをこの時刻より後の行に絞るため)
 date -u +%Y-%m-%dT%H:%M:%SZ > "$RUN_DIR/started"
 
-# worktree の run では、子の実行中に本体(メインの作業ツリー)で起きた変更も dispatch-check が
-# 検知できるよう、起動時のパスごとのハッシュを main-tree.txt に記録する(失敗しても起動は止めない)
-if [ -n "$WT_PATH" ]; then
+# worktree の run、またはレビューの run(review- 始まり)では、子の実行中に本体(メインの作業ツリー)で
+# 起きた変更も dispatch-check が検知できるよう、起動時のパスごとのハッシュを main-tree.txt に記録する
+# (失敗しても起動は止めない)
+if [ -n "$WT_PATH" ] || [[ "$TASK_ID" == review-* ]]; then
   bash "$SCRIPT_DIR/git-state.sh" --main-tree > "$RUN_DIR/main-tree.txt" || true
 fi
 
@@ -159,9 +160,19 @@ if [ "$PREPARE_ONLY" = true ]; then
   exit 0
 fi
 
-CMD_TEMPLATE=$(jq -r '.child_agent.command_template' .agents/workflow/config.json 2>/dev/null || \
-  python3 -c "import json; print(json.load(open('.agents/workflow/config.json'))['child_agent']['command_template'])" 2>/dev/null || \
-  sed -n 's/.*"command_template"[[:space:]]*:[[:space:]]*"\(.*\)"[[:space:]]*,\{0,1\}[[:space:]]*$/\1/p' .agents/workflow/config.json | sed 's/\\"/"/g')
+CMD_SECTION=child_agent
+if [[ "$TASK_ID" == review-* ]]; then
+  CMD_SECTION=review
+fi
+if [ "$CMD_SECTION" = review ]; then
+  CMD_TEMPLATE=$(jq -r '.review.command_template' .agents/workflow/config.json 2>/dev/null || \
+    python3 -c "import json; print(json.load(open('.agents/workflow/config.json'))['review']['command_template'])" 2>/dev/null || \
+    sed -n '/^[[:space:]]*"review"[[:space:]]*:/,/^[[:space:]]*}/s/.*"command_template"[[:space:]]*:[[:space:]]*"\(.*\)"[[:space:]]*,\{0,1\}[[:space:]]*$/\1/p' .agents/workflow/config.json | sed 's/\\"/"/g')
+else
+  CMD_TEMPLATE=$(jq -r '.child_agent.command_template' .agents/workflow/config.json 2>/dev/null || \
+    python3 -c "import json; print(json.load(open('.agents/workflow/config.json'))['child_agent']['command_template'])" 2>/dev/null || \
+    sed -n 's/.*"command_template"[[:space:]]*:[[:space:]]*"\(.*\)"[[:space:]]*,\{0,1\}[[:space:]]*$/\1/p' .agents/workflow/config.json | sed 's/\\"/"/g')
+fi
 
 SCRIPT_DIR_PY="$SCRIPT_DIR"
 if command -v cygpath > /dev/null 2>&1; then
@@ -169,14 +180,14 @@ if command -v cygpath > /dev/null 2>&1; then
 fi
 
 if command -v python3 > /dev/null 2>&1; then
-  WT_PATH="$WT_PATH" python3 -c "
+  WT_PATH="$WT_PATH" TASK_ID="$TASK_ID" python3 -c "
 import json, subprocess, sys, shlex, os, shutil, threading, time, signal
 sys.dont_write_bytecode = True
 sys.path.insert(0, '$SCRIPT_DIR_PY')
 import childprofile
 
-with open('.agents/workflow/config.json', encoding='utf-8') as f:
-    cfg = json.load(f)['child_agent']
+task_id = os.environ.get('TASK_ID', '')
+cfg = childprofile.agent_config('.', task_id)
 tmpl = cfg['command_template']
 # ログの無更新監視のしきい値。未指定・0 以下は無効(#53)
 idle_timeout = float(cfg.get('idle_timeout_seconds') or 0)
@@ -236,7 +247,7 @@ def start_watchdog(proc):
     threading.Thread(target=watch, daemon=True).start()
 
 try:
-    prof = childprofile.load_profile('.')
+    prof = childprofile.load_profile('.', task_id=task_id)
 except childprofile.ProfileError as e:
     with open(log_path, 'w', encoding='utf-8') as lf:
         lf.write('Child profile error: ' + str(e) + '\n')
@@ -269,7 +280,8 @@ child_cwd = os.environ.get('WT_PATH') or None
 resolved = shutil.which(tokens[0])
 if resolved and resolved.lower().endswith(('.cmd', '.bat')):
     q = chr(39)
-    fail_start(q + resolved + q + ' is a batch file (.cmd/.bat); write the path of the real executable (.exe) in child_agent.command_template')
+    cfg_section = 'review' if task_id.startswith('review-') else 'child_agent'
+    fail_start(q + resolved + q + ' is a batch file (.cmd/.bat); write the path of the real executable (.exe) in ' + cfg_section + '.command_template')
 
 if is_stream:
     jsonl_path = '$JSONL_PATH'

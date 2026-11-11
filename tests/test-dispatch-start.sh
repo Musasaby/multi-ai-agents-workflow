@@ -169,6 +169,104 @@ with open(p, 'w', encoding='utf-8') as f:
 PY
 }
 
+# review 節を設定する($1=mode $2=command_template $3=subagent $4=subagent_model)
+set_review_cfg() {
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" "$1" "$2" "${3:-}" "${4:-}" <<'PY'
+import json, sys
+p, mode, tmpl, sub, model = sys.argv[1:6]
+with open(p, encoding='utf-8') as f:
+    cfg = json.load(f)
+review = {'mode': mode, 'command_template': tmpl}
+if sub:
+    review['subagent'] = sub
+if model:
+    review['subagent_model'] = model
+cfg['review'] = review
+with open(p, 'w', encoding='utf-8') as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+PY
+}
+
+# レビューの run を起動できる状態にする(T1 を in_review にし、review 節と report.md を用意する)
+setup_review() {
+    setup "T1:in_review" "T2:pending"
+    printf '#!/bin/bash\necho review\n' > "$PROJ/.agents/review-child.sh"
+    set_review_cfg dispatch 'bash ./.agents/review-child.sh "{prompt}"'
+    write_report T1 1
+}
+
+t_review_ok() {
+    setup_review
+    printf 'x\n' > "$PROJ/x.txt"
+    run_script dispatch-start.sh --review T1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "Run: review-T1-1" "Run line"
+    assert_eq "Next: wait" "$(printf '%s\n' "$OUT" | tail -1)" "last line"
+    assert_file_exists "$PROJ/.agents/workflow/runs/review-T1-1/guard.sha256" "guard.sha256 on return"
+    assert_eq in_review "$(state_get T1 status)" "T1 status"
+    wait_done review-T1-1
+    assert_file_exists "$PROJ/.agents/workflow/runs/review-T1-1/done" "done within 120s"
+}
+
+t_review_mode_absent() {
+    setup "T1:in_review" "T2:pending"
+    run_script dispatch-start.sh --review T1
+    assert_eq 23 "$CODE" "exit code: $ERR"
+    assert_contains "$ERR" "review.mode" "stderr"
+    assert_eq "Next: escalate reason=review-mode" "$(printf '%s\n' "$OUT" | tail -1)" "last line"
+    assert_file_absent "$PROJ/.agents/workflow/runs/review-T1-1/prompt.md" "no prompt"
+}
+
+t_review_mode_not_dispatch() {
+    setup "T1:in_review" "T2:pending"
+    set_review_cfg manual 'bash ./.agents/review-child.sh "{prompt}"'
+    run_script dispatch-start.sh --review T1
+    assert_eq 23 "$CODE" "exit code: $ERR"
+    assert_contains "$ERR" "review.mode" "stderr"
+    assert_eq "Next: escalate reason=review-mode" "$(printf '%s\n' "$OUT" | tail -1)" "last line"
+    assert_file_absent "$PROJ/.agents/workflow/runs/review-T1-1/prompt.md" "no prompt"
+}
+
+t_review_not_in_review() {
+    setup "T1:pending" "T2:pending"
+    set_review_cfg dispatch 'bash ./.agents/child.sh "{prompt}"'
+    run_script dispatch-start.sh --review T1
+    assert_eq 21 "$CODE" "exit code: $ERR"
+    assert_eq "Next: escalate reason=task-status" "$(printf '%s\n' "$OUT" | tail -1)" "last line"
+}
+
+t_review_config_missing_template() {
+    setup "T1:in_review" "T2:pending"
+    set_review_cfg dispatch ''
+    write_report T1 1
+    run_script dispatch-start.sh --review T1
+    assert_eq 24 "$CODE" "exit code: $ERR"
+    assert_eq "Next: escalate reason=review-config" "$(printf '%s\n' "$OUT" | tail -1)" "last line"
+    assert_file_absent "$PROJ/.agents/workflow/runs/review-T1-1/prompt.md" "no prompt"
+}
+
+t_review_attempt_from_retries() {
+    setup "T1:in_review:2" "T2:pending"
+    set_review_cfg dispatch 'bash ./.agents/child.sh "{prompt}"'
+    write_report T1 3
+    run_script dispatch-start.sh --review T1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "Run: review-T1-3" "Run line"
+    wait_done review-T1-3
+}
+
+t_review_subagent_model() {
+    setup "T1:in_review" "T2:pending"
+    set_review_cfg dispatch '' always opus
+    write_report T1 1
+    run_script dispatch-start.sh --review T1 --subagent-capable
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "Launcher: subagent" "Launcher line"
+    assert_contains "$OUT" "Model: opus" "Model line"
+    assert_eq "Next: subagent review-T1 1" "$(printf '%s\n' "$OUT" | tail -1 | tr -d '\r')" "last line"
+    assert_file_absent "$PROJ/.agents/workflow/runs/review-T1-1/done" "child not started"
+}
+
 t_healthcheck_fail() {
     setup "T1:pending" "T2:pending"
     set_child_cfg healthcheck_command 'exit 3'
@@ -410,4 +508,11 @@ test_case "start: subagent always + --subagent-capable は子を起動せず sub
 test_case "start: subagent auto + opencode プロファイルは --subagent-capable があっても cli" t_subagent_auto_opencode_cli
 test_case "start: subagent never + claude-stream-json プロファイルは --subagent-capable があっても cli" t_subagent_never_stream_json_cli
 test_case "start: --pr --subagent-capable は pr の prompt.md にサブエージェント用の節を足す" t_pr_subagent_section
+test_case "start: review の run を起動する" t_review_ok
+test_case "start: review.mode が dispatch でなければ起動しない" t_review_mode_not_dispatch
+test_case "start: review.mode が無ければ exit 23" t_review_mode_absent
+test_case "start: --review でタスクが in_review でなければ exit 21" t_review_not_in_review
+test_case "start: review.command_template が空なら起動しない" t_review_config_missing_template
+test_case "start: --review の Attempt 省略時は retries + 1" t_review_attempt_from_retries
+test_case "start: review の run をサブエージェントで起動する" t_review_subagent_model
 summary

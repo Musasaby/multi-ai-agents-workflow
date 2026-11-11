@@ -11,11 +11,16 @@ set -uo pipefail
 #   6=権限拒否で中断(output.log にプロファイルの権限拒否の記録がある)、または、ツール実行の記録に
 #     プロジェクト外(/tmp・ホームディレクトリ等)へのアクセスがある
 #   5=完了報告が無い・無効(最後の `## 完了報告` の後にツール実行の記録が続く、必須項目が無い・テンプレートのまま)。
+#     レビューの run(review-*)では、Verdict が pass/fail でない、fail で fix-notes.md が無い、
+#     pass で comprehension_check.enabled が true なのに理解確認ファイルが無い場合も含む。
 #     最後のツール実行の後に出力が無い場合は、その旨を理由に書く
-#   7=変更0件(完了報告はあるが作業ツリーに変更が無い。PR 作成の run(pr-*)では判定しない)
+#   7=変更0件(完了報告はあるが作業ツリーに変更が無い。PR 作成の run(pr-*)と
+#     レビューの run(review-*)では判定しない)
 #   0=正常終了かつ完了報告あり / 2=done マーカーが無い(まだ実行中) / 1=使い方不備
 # stdout の最後の行には次のアクションを示す `Next:` 行を出す(wait / review <TaskId> /
 # collect <TaskId>(worktree の run で正常のとき)/
+# commit <ベースのタスクID>(レビューの run で Verdict が pass のとき)/
+# retry <ベースのタスクID>(レビューの run で Verdict が fail のとき)/
 # escalate reason=<理由>。使い方不備の exit 1 では出さない)
 
 TASK_ID="${1:?Usage: dispatch-check.sh <TaskId> [Attempt]}"
@@ -50,11 +55,13 @@ to_py_path() {
         echo "$1"
     fi
 }
-# runs/<ID>-<N>/launcher が subagent の run は subagent プロファイルで判定する(無い・cli は config.json のまま)
+# runs/<ID>-<N>/launcher が subagent の run は subagent プロファイルで判定する(無い・cli は config.json のまま)。
+# レビューの run(review-*)は --task で渡し、config.json の review 節の設定を使う
 PROFILE_ARGS=""
 if [ -f "$RUN_DIR/launcher" ] && [ "$(tr -d '[:space:]' < "$RUN_DIR/launcher")" = "subagent" ]; then
     PROFILE_ARGS="--profile subagent"
 fi
+PROFILE_ARGS="${PROFILE_ARGS:+$PROFILE_ARGS }--task $TASK_ID"
 # shellcheck disable=SC2086
 if ! PROFILE_OUT="$(python3 "$(to_py_path "$SCRIPT_DIR")/childprofile.py" . $PROFILE_ARGS | tr -d '\r')"; then
     exit 1
@@ -195,16 +202,22 @@ print(' '.join(bad))
 "
         done
     fi
-    # 本体(メインの作業ツリー)の変更を、起動時に dispatch-run が main-tree.txt に記録した
-    # パスごとのハッシュと比べる。ほかの run が collect した changes.patch のパスは、
-    # その collected が自分の main-tree.txt より新しければ除外する(親の正当な collect を許す)
-    MAIN_TREE_PATH="$RUN_DIR/main-tree.txt"
-    if [ ! -f "$MAIN_TREE_PATH" ]; then
+fi
+
+# 本体(メインの作業ツリー)の変更を、起動時に dispatch-run が main-tree.txt に記録した
+# パスごとのハッシュと比べる(worktree の run とレビューの run で使う)。ほかの run が
+# collect した changes.patch のパスは、その collected が自分の main-tree.txt より新しければ
+# 除外する(親の正当な collect を許す)
+check_main_tree() {
+    local main_tree_path="$RUN_DIR/main-tree.txt"
+    if [ ! -f "$main_tree_path" ]; then
         GUARD_ISSUES="${GUARD_ISSUES}main-tree.txt not found
 "
-    else
-        CURRENT_MAIN_TREE="$(bash "$SCRIPT_DIR/git-state.sh" --main-tree 2> /dev/null | LC_ALL=C tr -d '\r')"
-        CHANGED_MAIN="$(printf '%s\n' "$CURRENT_MAIN_TREE" | python3 -c "
+        return
+    fi
+    local current_main_tree changed_main changed_path
+    current_main_tree="$(bash "$SCRIPT_DIR/git-state.sh" --main-tree 2> /dev/null | LC_ALL=C tr -d '\r')"
+    changed_main="$(printf '%s\n' "$current_main_tree" | python3 -c "
 import os, re, sys
 
 run_dir, recorded_path = sys.argv[1], sys.argv[2]
@@ -262,23 +275,32 @@ for line in sys.stdin.read().split('\n'):
         continue
     if p not in recorded or recorded[p] != h:
         print(p)
-" "$RUN_DIR" "$MAIN_TREE_PATH" 2> /dev/null | tr -d '\r')"
-        while IFS= read -r CHANGED_PATH; do
-            [ -n "$CHANGED_PATH" ] || continue
-            GUARD_ISSUES="${GUARD_ISSUES}changed: main worktree: $CHANGED_PATH
+" "$RUN_DIR" "$main_tree_path" 2> /dev/null | tr -d '\r')"
+    while IFS= read -r changed_path; do
+        [ -n "$changed_path" ] || continue
+        GUARD_ISSUES="${GUARD_ISSUES}changed: main worktree: $changed_path
 "
-        done <<< "$CHANGED_MAIN"
-    fi
-fi
+    done <<< "$changed_main"
+}
 
 # --- 本物のリポジトリの git 状態の検証(dispatch-run が起動時に git-state.txt に記録した値と比べる) ---
 # タスク種別の判定(完了報告の必須項目と変更0件の判定で使う case)は、ここでも IS_PR を使うため
 # この位置に置いている。PR 作成の run(IS_PR=true。タスクIDが pr- で始まる)は config を比べない
-# (子が git push -u で .git/config を正当に変えるため)
+# (子が git push -u で .git/config を正当に変えるため)。レビューの run(review-*)は
+# BASE_ID(元のタスクID)とレビュー用の必須項目を持つ
 case "$TASK_ID" in
-    pr-*) IS_PR=true; REQUIRED='PR URL' ;;
-    *) IS_PR=false; REQUIRED='変更ファイル|テスト結果' ;;
+    review-*)
+        IS_REVIEW=true; IS_PR=false
+        BASE_ID="${TASK_ID#review-}"
+        REQUIRED='Verdict|指摘|要約|fix-notes|理解確認'
+        ;;
+    pr-*) IS_REVIEW=false; IS_PR=true; BASE_ID=""; REQUIRED='PR URL' ;;
+    *) IS_REVIEW=false; IS_PR=false; BASE_ID=""; REQUIRED='変更ファイル|テスト結果' ;;
 esac
+# 本体の変更の検知は、worktree の run とレビューの run の両方で行う
+if [ -f "$RUN_DIR/worktree.txt" ] || [ "$IS_REVIEW" = true ]; then
+    check_main_tree
+fi
 # worktree.txt がある run(dispatch-worktree create 済み)は、worktree の中で git-state --run <branch> --parent <親の作業ブランチ> を
 # 実行した値で比べ、変更の取得も worktree の中で行う(WT_DIR が空でなければ worktree の run)
 WT_DIR=""
@@ -477,7 +499,8 @@ fi
 # プロファイルの tool_activity_pattern に一致する行に限る(auto / opencode では色付きのマーカー行
 # (`ESC[0m$ ESC[0m...` 等)と stream-json の `[tool_use]` / `[tool_result]` 行。報告本文の
 # `→ 要確認` や `$ npm test` は対象外。パターンが空なら記録は無いものとして扱う)。必須項目は
-# 通常のタスクが「変更ファイル」「テスト結果」、PR 作成の run(pr-*)が「PR URL」。
+# 通常のタスクが「変更ファイル」「テスト結果」、PR 作成の run(pr-*)が「PR URL」、
+# レビューの run(review-*)が「Verdict」「指摘」「要約」「fix-notes」「理解確認」。
 # 区切りは半角 `:` と全角 `：` のどちらでもよい。
 # 値が同じ行に無い場合は、次の行からのインデントされた箇条書きを値とみなす。
 REPORT_RESULT="$(printf '%s\n' "$RAW_LOG" | TOOL_ACTIVITY_RE="$TOOL_ACTIVITY_RE" LC_ALL=C awk -v esc="$ESC" -v required="$REQUIRED" '
@@ -524,6 +547,69 @@ REPORT_RESULT="$(printf '%s\n' "$RAW_LOG" | TOOL_ACTIVITY_RE="$TOOL_ACTIVITY_RE"
         print "found"
     }')"
 
+# --- レビューの run(review-*)の完了報告の追加検証 ---
+# 完了報告が有効なとき、Verdict が pass/fail か、fail なら次の試行の fix-notes.md があるか、
+# pass なら理解確認が有効なときに comprehension/<ベースID>.md があるかを確かめる
+REVIEW_VERDICT=""
+REVIEW_FINDINGS=""
+REVIEW_SUMMARY=""
+FIX_NOTES_PATH=""
+if [ "$IS_REVIEW" = true ]; then
+    FIX_NOTES_PATH=".agents/workflow/runs/${BASE_ID}-$((ATTEMPT + 1))/fix-notes.md"
+    REVIEW_FIELDS="$(printf '%s\n' "$RAW_LOG" | LC_ALL=C awk -v esc="$ESC" '
+        {
+            line = $0
+            gsub(esc "\\[[0-9;]*[A-Za-z]", "", line)
+            lines[NR] = line
+        }
+        lines[NR] ~ /^## 完了報告[ \t]*$/ { last = NR }
+        END {
+            if (!last) exit
+            end = NR
+            for (i = last + 1; i <= NR; i++) if (lines[i] ~ /^## /) { end = i - 1; break }
+            target[1] = "Verdict"; target[2] = "指摘"; target[3] = "要約"
+            for (k = 1; k <= 3; k++) {
+                value = ""
+                for (i = last + 1; i <= end; i++) {
+                    plen = 0
+                    if (index(lines[i], "- " target[k] ":") == 1) plen = length("- " target[k] ":")
+                    else if (index(lines[i], "- " target[k] "：") == 1) plen = length("- " target[k] "：")
+                    if (!plen) continue
+                    value = substr(lines[i], plen + 1)
+                    gsub(/^[ \t]+|[ \t]+$/, "", value)
+                    if (value == "" && i < end && lines[i + 1] ~ /^[ \t]+[^ \t]/) value = "(list)"
+                    break
+                }
+                print value
+            }
+        }')"
+    REVIEW_VERDICT="$(printf '%s\n' "$REVIEW_FIELDS" | sed -n '1p')"
+    REVIEW_FINDINGS="$(printf '%s\n' "$REVIEW_FIELDS" | sed -n '2p')"
+    REVIEW_SUMMARY="$(printf '%s\n' "$REVIEW_FIELDS" | sed -n '3p')"
+    if [ "$REPORT_RESULT" = found ]; then
+        if [ "$REVIEW_VERDICT" != pass ] && [ "$REVIEW_VERDICT" != fail ]; then
+            REPORT_RESULT="invalid (Verdict must be pass or fail)"
+        elif [ "$REVIEW_VERDICT" = fail ]; then
+            if [ ! -f "$FIX_NOTES_PATH" ]; then
+                REPORT_RESULT="invalid (fix-notes not found: $FIX_NOTES_PATH)"
+            fi
+        else
+            COMPREHENSION_ENABLED="$(python3 -c "
+import json
+try:
+    with open('.agents/workflow/config.json', encoding='utf-8') as f:
+        print(str(json.load(f).get('comprehension_check', {}).get('enabled', False)).lower())
+except Exception:
+    print('false')
+" 2> /dev/null | tr -d '\r')"
+            COMPREHENSION_PATH=".agents/workflow/comprehension/${BASE_ID}.md"
+            if [ "$COMPREHENSION_ENABLED" = true ] && [ ! -f "$COMPREHENSION_PATH" ]; then
+                REPORT_RESULT="invalid (comprehension file not found: $COMPREHENSION_PATH)"
+            fi
+        fi
+    fi
+fi
+
 # worktree の run は worktree の中で変更を取る(worktree が無いときは本体で取る)
 git_in_wt() {
     if [ -n "$WT_DIR" ] && [ "$WT_MISSING" = false ]; then
@@ -546,7 +632,7 @@ elif [ -n "$OUTSIDE_LINES" ]; then
     VERDICT="outside-access"; CODE=6
 elif [ "$REPORT_RESULT" != found ]; then
     VERDICT="no-report"; CODE=5
-elif [ "$IS_PR" = false ] && [ "$CHANGE_COUNT" -eq 0 ]; then
+elif [ "$IS_PR" = false ] && [ "$IS_REVIEW" = false ] && [ "$CHANGE_COUNT" -eq 0 ]; then
     VERDICT="no-changes"; CODE=7
 else
     VERDICT="ok"; CODE=0
@@ -624,6 +710,16 @@ if [ -n "$REPORT_SAVED" ]; then
 fi
 echo "Changes: ${CHANGE_COUNT}"
 echo "Verdict: ${VERDICT}"
+if [ "$IS_REVIEW" = true ]; then
+    echo "Review verdict: ${REVIEW_VERDICT}"
+    echo "Review findings: ${REVIEW_FINDINGS}"
+    echo "Review summary: ${REVIEW_SUMMARY}"
+    if [ -n "$FIX_NOTES_PATH" ] && [ -f "$FIX_NOTES_PATH" ]; then
+        echo "Fix notes: ${FIX_NOTES_PATH}"
+    else
+        echo "Fix notes: none"
+    fi
+fi
 echo "--- git status --porcelain"
 git_in_wt status --porcelain
 echo "--- git diff --stat"
@@ -640,7 +736,13 @@ fi
 # PR 作成の run(pr-*)はレビューしない。PR を検証して報告し、マージを待つ
 case "$CODE" in
     0)
-        if [ "$IS_PR" = true ]; then
+        if [ "$IS_REVIEW" = true ]; then
+            if [ "$REVIEW_VERDICT" = pass ]; then
+                NEXT="commit $BASE_ID"
+            else
+                NEXT="retry $BASE_ID"
+            fi
+        elif [ "$IS_PR" = true ]; then
             NEXT="wait-merge"
         elif [ -n "$WT_DIR" ]; then
             NEXT="collect $TASK_ID"

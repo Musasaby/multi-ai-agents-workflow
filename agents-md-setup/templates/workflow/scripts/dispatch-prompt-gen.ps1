@@ -2,16 +2,21 @@
     [string]$TaskId,
     [int]$Attempt = 1,
     [switch]$Pr,
+    [switch]$Review,
     [string]$Launcher = ''
 )
 Set-Location $PSScriptRoot\..\..\..
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
-$PrUsage = "Usage: dispatch-prompt-gen.ps1 -TaskId <TaskId> [-Attempt <n>] | dispatch-prompt-gen.ps1 -Pr [-Launcher <cli|subagent>]"
-# -Launcher: -Pr のときだけ使える。prompt.md を書いた後、runs/pr-<N>-1/launcher へこの値を書く
+$PrUsage = "Usage: dispatch-prompt-gen.ps1 -TaskId <TaskId> [-Attempt <n>] | dispatch-prompt-gen.ps1 -Pr [-Launcher <cli|subagent>] | dispatch-prompt-gen.ps1 -Review -TaskId <TaskId> -Attempt <n> [-Launcher <cli|subagent>]"
+if ($Pr -and $Review) {
+    [Console]::Error.WriteLine($PrUsage)
+    exit 1
+}
+# -Launcher: -Pr / -Review のときだけ使える。prompt.md を書いた後、runs/<run>/launcher へこの値を書く
 if ($PSBoundParameters.ContainsKey('Launcher')) {
-    if (-not $Pr -or ($Launcher -cne 'cli' -and $Launcher -cne 'subagent')) {
+    if ((-not $Pr -and -not $Review) -or ($Launcher -cne 'cli' -and $Launcher -cne 'subagent')) {
         [Console]::Error.WriteLine($PrUsage)
         exit 1
     }
@@ -69,6 +74,77 @@ function Add-SubagentSection {
     $text = [System.IO.File]::ReadAllText($promptFile, [System.Text.Encoding]::UTF8)
     $text = $text.TrimEnd("`n", "`r") + "`n`n" + $section.Replace("`r`n", "`n")
     [System.IO.File]::WriteAllText($promptFile, $text, [System.Text.UTF8Encoding]::new($false))
+}
+
+# --- Review mode: 子の実装をレビューするプロンプトを生成する ---
+# 出力先は runs/review-<ID>-<N>/prompt.md。stdout に "RunId: review-<ID>" を出す。
+# report.md が無いとレビューできないため exit 2、tasks.md にタスクの節が無ければ exit 1。
+if ($Review) {
+    if (-not $TaskId) {
+        [Console]::Error.WriteLine($PrUsage)
+        exit 1
+    }
+    if ($TaskId -cnotmatch '^[A-Za-z0-9_-]+$' -or $Attempt -lt 1) {
+        [Console]::Error.WriteLine("Invalid TaskId/Attempt: '$TaskId' '$Attempt'")
+        exit 1
+    }
+    $reportRel = ".agents/workflow/runs/$TaskId-$Attempt/report.md"
+    $reportPath = "$Root/$reportRel"
+    if (-not (Test-Path -LiteralPath $TasksPath -PathType Leaf) -or
+        -not (Select-String -LiteralPath $TasksPath -Pattern "^## ${TaskId}:" -Quiet)) {
+        [Console]::Error.WriteLine("Task '$TaskId' not found in $TasksPath")
+        exit 1
+    }
+    if (-not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
+        [Console]::Error.WriteLine("Report not found: $reportRel")
+        exit 2
+    }
+    # タスクの節をそのまま取り出す(通常モードと同じ規則)
+    $reviewSectionLines = @()
+    $reviewInSection = $false
+    foreach ($line in ((Get-Content $TasksPath -Raw -Encoding UTF8) -split "`n")) {
+        if ($line -match '^## ') {
+            if ($reviewInSection) { break }
+            if ($line -match "^## ${TaskId}:") { $reviewInSection = $true }
+        }
+        if ($reviewInSection) { $reviewSectionLines += $line }
+    }
+    $reviewTaskSection = ($reviewSectionLines -join "`n").TrimEnd("`r", "`n")
+    # 理解確認の指示: config の comprehension_check.enabled で切り替える
+    $ccEnabled = $false
+    $ccCount = 3
+    try {
+        $cc = (Get-Content $ConfigPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop).comprehension_check
+        if ($cc -is [pscustomobject] -and $cc.enabled -is [bool] -and $cc.enabled) {
+            $ccEnabled = $true
+            $qv = $cc.questions_per_task
+            if (($qv -is [int] -or $qv -is [long]) -and $qv -ge 1) { $ccCount = [int]$qv }
+        }
+    } catch {}
+    if ($ccEnabled) {
+        $comprehensionInstruction = 'pass のときだけ、`.agents/skills/agent-review-commit/references/comprehension-questions.md` の手順4の観点で ' + $ccCount + ' 問の質問を作り、`.agents/skills/agent-comprehension-check/SKILL.md` の「質問ファイルのフォーマット」に従って ' + '`.agents/workflow/comprehension/' + $TaskId + '.md` に書く。`## 解説` 見出しは含めない'
+    } else {
+        $comprehensionInstruction = '質問ファイルは作らない(完了報告の理解確認は なし)'
+    }
+    $reviewRunDir = "$RunsBase/review-$TaskId-$Attempt"
+    $reviewPromptPath = "$reviewRunDir/prompt.md"
+    $fixNotesRel = ".agents/workflow/runs/$TaskId-$($Attempt + 1)/fix-notes.md"
+    $null = New-Item -ItemType Directory -Force $reviewRunDir
+    $reviewTemplate = Get-Content "$PSScriptRoot/dispatch-review-template.md" -Raw -Encoding UTF8
+    $reviewText = $reviewTemplate.Replace('{task_id}', $TaskId)
+    $reviewText = $reviewText.Replace('{attempt}', "$Attempt")
+    $reviewText = $reviewText.Replace('{task_section}', $reviewTaskSection)
+    $reviewText = $reviewText.Replace('{report_path}', $reportRel)
+    $reviewText = $reviewText.Replace('{fix_notes_path}', $fixNotesRel)
+    $reviewText = $reviewText.Replace('{comprehension_instruction}', $comprehensionInstruction)
+    [System.IO.File]::WriteAllText($reviewPromptPath, $reviewText, [System.Text.UTF8Encoding]::new($false))
+    if ($Launcher) {
+        [System.IO.File]::WriteAllText("$reviewRunDir/launcher", "$Launcher`n", [System.Text.UTF8Encoding]::new($false))
+    }
+    Add-SubagentSection $reviewRunDir
+    Write-Output "Generated: $reviewPromptPath"
+    Write-Output "RunId: review-$TaskId"
+    exit 0
 }
 
 # --- PR mode: PR作成を子に単発依頼するプロンプトを生成する ---

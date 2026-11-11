@@ -5,6 +5,8 @@
 
 $script:ChildProfileScriptDir = $PSScriptRoot
 $script:ChildProfilePatternKeys = @('tool_activity_pattern', 'tool_call_pattern', 'permission_denied_pattern', 'provider_error_pattern')
+$script:ChildProfileReviewPrefix = 'review-'
+$script:ChildProfileReviewKeys = @('command_template', 'profile', 'subagent', 'subagent_model')
 
 function Read-ChildProfileDefinitions {
     param([string]$Path)
@@ -27,23 +29,37 @@ function Read-ChildProfileDefinitions {
     return $result
 }
 
-function Get-ChildProfile {
-    param([Parameter(Mandatory)][string]$Root, [string]$Name = '')
+function Get-AgentConfig {
+    param([Parameter(Mandatory)][string]$Root, [string]$TaskId = '')
 
-    $override = $Name
-    $name = ''
-    $commandTemplate = ''
+    $result = @{}
     try {
         $config = Get-Content -LiteralPath (Join-Path $Root '.agents/workflow/config.json') -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-        $child = if ($config -is [pscustomobject]) { $config.child_agent } else { $null }
-        if ($child -is [pscustomobject]) {
-            if ($child.profile -is [string]) { $name = $child.profile }
-            if ($child.command_template -is [string]) { $commandTemplate = $child.command_template }
-        }
     } catch {
-        $name = ''
-        $commandTemplate = ''
+        return $result
     }
+    if ($config -isnot [pscustomobject]) { return $result }
+    $child = $config.child_agent
+    if ($child -is [pscustomobject]) {
+        foreach ($prop in $child.PSObject.Properties) { $result[$prop.Name] = $prop.Value }
+    }
+    if ($TaskId -and $TaskId.StartsWith($script:ChildProfileReviewPrefix, [StringComparison]::Ordinal)) {
+        $review = $config.review
+        foreach ($key in $script:ChildProfileReviewKeys) {
+            $value = if (($review -is [pscustomobject]) -and $review.PSObject.Properties[$key]) { $review.$key } else { $null }
+            $result[$key] = if ($value -is [string]) { $value } else { '' }
+        }
+    }
+    return $result
+}
+
+function Get-ChildProfile {
+    param([Parameter(Mandatory)][string]$Root, [string]$Name = '', [string]$TaskId = '')
+
+    $override = $Name
+    $config = Get-AgentConfig -Root $Root -TaskId $TaskId
+    $name = if ($config['profile'] -is [string]) { $config['profile'] } else { '' }
+    $commandTemplate = if ($config['command_template'] -is [string]) { $config['command_template'] } else { '' }
     if ($override) { $name = $override }
     if (-not $name) { $name = 'auto' }
 

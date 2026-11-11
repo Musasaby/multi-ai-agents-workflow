@@ -7,10 +7,16 @@
 #   6=権限拒否で中断(output.log にプロファイルの権限拒否の記録がある)、または、ツール実行の記録に
 #     プロジェクト外(/tmp・ホームディレクトリ等)へのアクセスがある
 #   5=完了報告が無い・無効(最後の `## 完了報告` の後にツール実行の記録が続く、必須項目が無い・テンプレートのまま)。
+#     レビューの run(review-*)では、Verdict が pass/fail でない、fail で fix-notes.md が無い、
+#     pass で comprehension_check.enabled が true なのに理解確認ファイルが無い場合も含む。
 #     最後のツール実行の後に出力が無い場合は、その旨を理由に書く
-#   7=変更0件(完了報告はあるが作業ツリーに変更が無い。PR 作成の run(pr-*)では判定しない)
+#   7=変更0件(完了報告はあるが作業ツリーに変更が無い。PR 作成の run(pr-*)と
+#     レビューの run(review-*)では判定しない)
 #   0=正常終了かつ完了報告あり / 2=done マーカーが無い(まだ実行中) / 1=使い方不備
-# stdout の最後の行には次のアクションを示す `Next:` 行を出す(wait / review <TaskId> / collect <TaskId>(worktree の run で正常のとき)/
+# stdout の最後の行には次のアクションを示す `Next:` 行を出す(wait / review <TaskId> /
+# collect <TaskId>(worktree の run で正常のとき)/
+# commit <ベースのタスクID>(レビューの run で Verdict が pass のとき)/
+# retry <ベースのタスクID>(レビューの run で Verdict が fail のとき)/
 # escalate reason=<理由>。使い方不備の exit 1 では出さない)
 # Windows にはシグナルの仕組みが無いため、dispatch-run.ps1 は signal:* を書き出さない
 # (強制終了は通常の非0終了として記録される)。POSIX 版が書き出した done も同じ規則で判定する。
@@ -43,13 +49,14 @@ if (-not (Test-Path $donePath)) {
 # 解決できない(未定義の profile・定義ファイルが読めない)場合は、Next: 行を出さずに exit 1 で終わる
 . "$PSScriptRoot/childprofile.ps1"
 try {
-    # runs/<ID>-<N>/launcher が subagent の run は subagent プロファイルで判定する(無い・cli は config.json のまま)
+    # runs/<ID>-<N>/launcher が subagent の run は subagent プロファイルで判定する(無い・cli は config.json のまま)。
+    # レビューの run(review-*)は -TaskId で渡し、config.json の review 節の設定を使う
     $launcherPath = "$runDir/launcher"
     if ((Test-Path -LiteralPath $launcherPath) -and
         ([System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $launcherPath)).Trim() -eq 'subagent')) {
-        $childProfile = Get-ChildProfile -Root (Get-Location).Path -Name subagent
+        $childProfile = Get-ChildProfile -Root (Get-Location).Path -Name subagent -TaskId $TaskId
     } else {
-        $childProfile = Get-ChildProfile -Root (Get-Location).Path
+        $childProfile = Get-ChildProfile -Root (Get-Location).Path -TaskId $TaskId
     }
 } catch {
     [Console]::Error.WriteLine($_.Exception.Message)
@@ -184,55 +191,59 @@ if (Test-Path -LiteralPath "$runDir/worktree.txt") {
             foreach ($tid in $badTasks) { $guardIssues += "changed: .agents/workflow/state.json ($tid)" }
         }
     }
-    # 本体(メインの作業ツリー)の変更を、起動時に dispatch-run が main-tree.txt に記録した
-    # パスごとのハッシュと比べる。ほかの run が collect した changes.patch のパスは、
-    # その collected が自分の main-tree.txt より新しければ除外する(親の正当な collect を許す)
+}
+
+# 本体(メインの作業ツリー)の変更を、起動時に dispatch-run が main-tree.txt に記録した
+# パスごとのハッシュと比べる(worktree の run とレビューの run で使う)。ほかの run が
+# collect した changes.patch のパスは、その collected が自分の main-tree.txt より新しければ
+# 除外する(親の正当な collect を許す)
+function Test-MainTree {
     $mainTreePath = "$runDir/main-tree.txt"
     if (-not (Test-Path -LiteralPath $mainTreePath -PathType Leaf)) {
-        $guardIssues += 'main-tree.txt not found'
-    } else {
-        $recordedMain = [System.Collections.Generic.Dictionary[string,string]]::new([System.StringComparer]::Ordinal)
-        foreach ($line in ([System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $mainTreePath), [System.Text.Encoding]::UTF8) -split "`r?`n")) {
-            if (-not $line) { continue }
-            $idx = $line.IndexOf('  ')
+        $script:guardIssues += 'main-tree.txt not found'
+        return
+    }
+    $recordedMain = [System.Collections.Generic.Dictionary[string,string]]::new([System.StringComparer]::Ordinal)
+    foreach ($line in ([System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $mainTreePath), [System.Text.Encoding]::UTF8) -split "`r?`n")) {
+        if (-not $line) { continue }
+        $idx = $line.IndexOf('  ')
+        if ($idx -lt 0) { continue }
+        $recordedMain[$line.Substring($idx + 2)] = $line.Substring(0, $idx)
+    }
+    $recordedMtime = [System.IO.File]::GetLastWriteTimeUtc((Resolve-Path -LiteralPath $mainTreePath).Path)
+    $excludedMain = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $runsDir = [System.IO.Path]::GetDirectoryName($runDir)
+    $ownRunDir = [System.IO.Path]::GetFullPath($runDir)
+    $otherDirs = @()
+    try { $otherDirs = [System.IO.Directory]::GetDirectories($runsDir) } catch {}
+    foreach ($other in $otherDirs) {
+        if ([System.IO.Path]::GetFullPath($other) -ceq $ownRunDir) { continue }
+        $collected = Join-Path $other 'collected'
+        if (-not [System.IO.File]::Exists($collected)) { continue }
+        if ([System.IO.File]::GetLastWriteTimeUtc($collected) -le $recordedMtime) { continue }
+        $patch = Join-Path $other 'changes.patch'
+        if (-not [System.IO.File]::Exists($patch)) { continue }
+        try {
+            foreach ($pl in ([System.IO.File]::ReadAllText($patch, [System.Text.Encoding]::UTF8) -split "`r?`n")) {
+                $pl = $pl -replace "`r$", ''
+                if ($pl -cmatch '^diff --git a/(.+) b/(.+)$') {
+                    $null = $excludedMain.Add($Matches[1])
+                    $null = $excludedMain.Add($Matches[2])
+                }
+            }
+        } catch {}
+    }
+    $currentMain = @(& pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1" -MainTree 2> $null)
+    foreach ($raw in $currentMain) {
+        foreach ($l in ("$raw" -split "`r?`n")) {
+            if (-not $l) { continue }
+            $idx = $l.IndexOf('  ')
             if ($idx -lt 0) { continue }
-            $recordedMain[$line.Substring($idx + 2)] = $line.Substring(0, $idx)
-        }
-        $recordedMtime = [System.IO.File]::GetLastWriteTimeUtc((Resolve-Path -LiteralPath $mainTreePath).Path)
-        $excludedMain = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
-        $runsDir = [System.IO.Path]::GetDirectoryName($runDir)
-        $ownRunDir = [System.IO.Path]::GetFullPath($runDir)
-        $otherDirs = @()
-        try { $otherDirs = [System.IO.Directory]::GetDirectories($runsDir) } catch {}
-        foreach ($other in $otherDirs) {
-            if ([System.IO.Path]::GetFullPath($other) -ceq $ownRunDir) { continue }
-            $collected = Join-Path $other 'collected'
-            if (-not [System.IO.File]::Exists($collected)) { continue }
-            if ([System.IO.File]::GetLastWriteTimeUtc($collected) -le $recordedMtime) { continue }
-            $patch = Join-Path $other 'changes.patch'
-            if (-not [System.IO.File]::Exists($patch)) { continue }
-            try {
-                foreach ($pl in ([System.IO.File]::ReadAllText($patch, [System.Text.Encoding]::UTF8) -split "`r?`n")) {
-                    $pl = $pl -replace "`r$", ''
-                    if ($pl -cmatch '^diff --git a/(.+) b/(.+)$') {
-                        $null = $excludedMain.Add($Matches[1])
-                        $null = $excludedMain.Add($Matches[2])
-                    }
-                }
-            } catch {}
-        }
-        $currentMain = @(& pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1" -MainTree 2> $null)
-        foreach ($raw in $currentMain) {
-            foreach ($l in ("$raw" -split "`r?`n")) {
-                if (-not $l) { continue }
-                $idx = $l.IndexOf('  ')
-                if ($idx -lt 0) { continue }
-                $h = $l.Substring(0, $idx)
-                $p = $l.Substring($idx + 2)
-                if ($excludedMain.Contains($p)) { continue }
-                if (-not $recordedMain.ContainsKey($p) -or $recordedMain[$p] -cne $h) {
-                    $guardIssues += "changed: main worktree: $p"
-                }
+            $h = $l.Substring(0, $idx)
+            $p = $l.Substring($idx + 2)
+            if ($excludedMain.Contains($p)) { continue }
+            if (-not $recordedMain.ContainsKey($p) -or $recordedMain[$p] -cne $h) {
+                $script:guardIssues += "changed: main worktree: $p"
             }
         }
     }
@@ -241,9 +252,16 @@ if (Test-Path -LiteralPath "$runDir/worktree.txt") {
 # --- 本物のリポジトリの git 状態の検証(dispatch-run が起動時に git-state.txt に記録した値と比べる) ---
 # タスク種別の判定(完了報告の必須項目と変更0件の判定で使う)は、ここでも $isPr を使うため
 # この位置に置いている。PR 作成の run(タスクIDが pr- で始まる)は config を比べない
-# (子が git push -u で .git/config を正当に変えるため)
+# (子が git push -u で .git/config を正当に変えるため)。レビューの run(review-*)は
+# $baseId(元のタスクID)とレビュー用の必須項目を持つ
+$isReview = $TaskId.StartsWith('review-')
 $isPr = $TaskId.StartsWith('pr-')
-$required = if ($isPr) { @('PR URL') } else { @('変更ファイル', 'テスト結果') }
+$baseId = if ($isReview) { $TaskId.Substring(7) } else { '' }
+$required = if ($isReview) { @('Verdict', '指摘', '要約', 'fix-notes', '理解確認') } elseif ($isPr) { @('PR URL') } else { @('変更ファイル', 'テスト結果') }
+# 本体の変更の検知は、worktree の run とレビューの run の両方で行う
+if ((Test-Path -LiteralPath "$runDir/worktree.txt") -or $isReview) {
+    Test-MainTree
+}
 # 各行を `-split ' ', 2` で名前と値に分けてハッシュテーブルに入れてから項目ごとに比べる
 function ConvertTo-StateMap {
     param([string[]]$Lines)
@@ -444,7 +462,8 @@ if ($cliLog -ne '') {
 # --- 完了報告の判定 ---
 # 最後に出現する `## 完了報告` だけを対象にし、その後にツール実行の記録が続く場合は無効とする
 # (子がテンプレートやドキュメントを表示しただけの行に一致させないため)。必須項目は
-# 通常のタスクが「変更ファイル」「テスト結果」、PR 作成の run(pr-*)が「PR URL」。
+# 通常のタスクが「変更ファイル」「テスト結果」、PR 作成の run(pr-*)が「PR URL」、
+# レビューの run(review-*)が「Verdict」「指摘」「要約」「fix-notes」「理解確認」。
 # 必須項目行の区切りは半角 `:` と全角 `：` のどちらでもよい。
 # 値が同じ行に無い場合は、次の行からのインデントされた箇条書きを値とみなす。
 function Get-ReportResult {
@@ -483,6 +502,64 @@ function Get-ReportResult {
 }
 $reportResult = Get-ReportResult $cleanLines $toolFlags $required
 
+# --- レビューの run(review-*)の完了報告の追加検証 ---
+# 完了報告が有効なとき、Verdict が pass/fail か、fail なら次の試行の fix-notes.md があるか、
+# pass なら理解確認が有効なときに comprehension/<ベースID>.md があるかを確かめる
+function Get-ReviewFields {
+    param([string[]]$Lines)
+    $values = @('', '', '')
+    $last = -1
+    for ($i = 0; $i -lt $Lines.Count; $i++) { if ($Lines[$i] -match '^## 完了報告[ \t]*$') { $last = $i } }
+    if ($last -lt 0) { return $values }
+    $end = $Lines.Count - 1
+    for ($i = $last + 1; $i -lt $Lines.Count; $i++) { if ($Lines[$i] -match '^## ') { $end = $i - 1; break } }
+    $targets = @('Verdict', '指摘', '要約')
+    for ($k = 0; $k -lt $targets.Count; $k++) {
+        for ($i = $last + 1; $i -le $end; $i++) {
+            $prefix = $null
+            foreach ($p in @("- $($targets[$k]):", "- $($targets[$k])：")) {
+                if ($Lines[$i].StartsWith($p, [System.StringComparison]::Ordinal)) { $prefix = $p; break }
+            }
+            if ($null -eq $prefix) { continue }
+            $value = $Lines[$i].Substring($prefix.Length).Trim()
+            if ($value -eq '' -and $i -lt $end -and $Lines[$i + 1] -match '^[ \t]+[^ \t]') { $value = '(list)' }
+            $values[$k] = $value
+            break
+        }
+    }
+    return $values
+}
+$reviewVerdict = ''
+$reviewFindings = ''
+$reviewSummary = ''
+$fixNotesPath = ''
+if ($isReview) {
+    $fixNotesPath = ".agents/workflow/runs/$baseId-$($Attempt + 1)/fix-notes.md"
+    $reviewFields = @(Get-ReviewFields $cleanLines)
+    $reviewVerdict = "$($reviewFields[0])"
+    $reviewFindings = "$($reviewFields[1])"
+    $reviewSummary = "$($reviewFields[2])"
+    if ($reportResult -eq 'found') {
+        if ($reviewVerdict -ne 'pass' -and $reviewVerdict -ne 'fail') {
+            $reportResult = 'invalid (Verdict must be pass or fail)'
+        } elseif ($reviewVerdict -eq 'fail') {
+            if (-not (Test-Path -LiteralPath $fixNotesPath -PathType Leaf)) {
+                $reportResult = "invalid (fix-notes not found: $fixNotesPath)"
+            }
+        } else {
+            $comprehensionEnabled = $false
+            try {
+                $cfgReview = Get-Content '.agents/workflow/config.json' -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json
+                if ($null -ne $cfgReview.comprehension_check -and $cfgReview.comprehension_check.enabled -eq $true) { $comprehensionEnabled = $true }
+            } catch {}
+            $comprehensionPath = ".agents/workflow/comprehension/$baseId.md"
+            if ($comprehensionEnabled -and -not (Test-Path -LiteralPath $comprehensionPath -PathType Leaf)) {
+                $reportResult = "invalid (comprehension file not found: $comprehensionPath)"
+            }
+        }
+    }
+}
+
 # worktree の run は worktree の中で変更を取る(worktree が無いときは本体で取る)
 $gitArgs = if ($wtDir -and -not $wtMissing) { @('-C', $wtDir) } else { @() }
 $changes = @(git @gitArgs status --porcelain | Where-Object { $_ })
@@ -498,7 +575,7 @@ if ($guardIssues.Count -gt 0) {
     $verdict = 'outside-access'; $code = 6
 } elseif ($reportResult -ne 'found') {
     $verdict = 'no-report'; $code = 5
-} elseif (-not $isPr -and $changeCount -eq 0) {
+} elseif (-not $isPr -and -not $isReview -and $changeCount -eq 0) {
     $verdict = 'no-changes'; $code = 7
 } else {
     $verdict = 'ok'; $code = 0
@@ -572,6 +649,16 @@ if ($reportSaved) {
 }
 Write-Output "Changes: $changeCount"
 Write-Output "Verdict: $verdict"
+if ($isReview) {
+    Write-Output "Review verdict: $reviewVerdict"
+    Write-Output "Review findings: $reviewFindings"
+    Write-Output "Review summary: $reviewSummary"
+    if ($fixNotesPath -and (Test-Path -LiteralPath $fixNotesPath -PathType Leaf)) {
+        Write-Output "Fix notes: $fixNotesPath"
+    } else {
+        Write-Output "Fix notes: none"
+    }
+}
 Write-Output "--- git status --porcelain"
 git @gitArgs status --porcelain
 Write-Output "--- git diff --stat"
@@ -588,7 +675,9 @@ if (Test-Path $logPath) {
 # PR 作成の run(pr-*)はレビューしない。PR を検証して報告し、マージを待つ
 $next = switch ($code) {
     0 {
-        if ($isPr) { 'wait-merge' }
+        if ($isReview) {
+            if ($reviewVerdict -eq 'pass') { "commit $baseId" } else { "retry $baseId" }
+        } elseif ($isPr) { 'wait-merge' }
         elseif ($wtDir) { "collect $TaskId" }
         else { "review $TaskId" }
         break

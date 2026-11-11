@@ -11,6 +11,8 @@ import os
 import sys
 
 DEFAULT_PROFILE = 'auto'
+REVIEW_PREFIX = 'review-'
+REVIEW_KEYS = ('command_template', 'profile', 'subagent', 'subagent_model')
 PATTERN_KEYS = (
     'tool_activity_pattern',
     'tool_call_pattern',
@@ -41,22 +43,32 @@ def _load_definitions(path):
     return data
 
 
-def _read_child_agent(root):
+def agent_config(root, task_id=None):
     path = os.path.join(root, '.agents', 'workflow', 'config.json')
     try:
         config = _read_json(path)
     except (OSError, ValueError):
-        return '', ''
-    child = config.get('child_agent') if isinstance(config, dict) else None
-    if not isinstance(child, dict):
-        return '', ''
-    profile = child.get('profile')
-    template = child.get('command_template')
-    return (profile if isinstance(profile, str) else ''), (template if isinstance(template, str) else '')
+        return {}
+    if not isinstance(config, dict):
+        return {}
+    child = config.get('child_agent')
+    result = dict(child) if isinstance(child, dict) else {}
+    if isinstance(task_id, str) and task_id.startswith(REVIEW_PREFIX):
+        review = config.get('review')
+        for key in REVIEW_KEYS:
+            value = review.get(key) if isinstance(review, dict) else None
+            result[key] = value if isinstance(value, str) else ''
+    return result
 
 
-def load_profile(root, name=None):
-    config_name, command_template = _read_child_agent(root)
+def load_profile(root, name=None, task_id=None):
+    config = agent_config(root, task_id)
+    config_name = config.get('profile')
+    command_template = config.get('command_template')
+    if not isinstance(config_name, str):
+        config_name = ''
+    if not isinstance(command_template, str):
+        command_template = ''
     name = name or config_name or DEFAULT_PROFILE
 
     builtin = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'child-profiles.json')
@@ -88,14 +100,34 @@ def load_profile(root, name=None):
 
 
 def main(argv):
-    override = None
-    if len(argv) == 4 and argv[2] == '--profile':
-        override = argv[3]
-    elif len(argv) != 2:
-        sys.stderr.write('Usage: childprofile.py <root> [--profile <name>]\n')
+    args = argv[1:]
+    usage = 'Usage: childprofile.py <root> [--profile <name>] [--task <TaskId>]\n'
+    if not args:
+        sys.stderr.write(usage)
         return 1
+    override = None
+    task_id = None
+    rest = args[1:]
+    i = 0
+    while i < len(rest):
+        option = rest[i]
+        if option not in ('--profile', '--task') or i + 1 >= len(rest):
+            sys.stderr.write(usage)
+            return 1
+        value = rest[i + 1]
+        if option == '--profile':
+            if override is not None:
+                sys.stderr.write(usage)
+                return 1
+            override = value
+        else:
+            if task_id is not None:
+                sys.stderr.write(usage)
+                return 1
+            task_id = value
+        i += 2
     try:
-        p = load_profile(argv[1], override)
+        p = load_profile(args[0], override, task_id)
     except ProfileError as e:
         sys.stderr.write('%s\n' % e)
         return 1

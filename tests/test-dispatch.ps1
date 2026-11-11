@@ -13,6 +13,16 @@ function Set-Child {
 
 function Get-DoneExit { return (Get-Content "$script:Proj/.agents/workflow/runs/T1-1/done" -Encoding utf8)[0] }
 
+# review.command_template を設定する(review の run は child_agent より review を優先する)
+function Set-ReviewTemplate {
+    param([string]$Value)
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg.PSObject.Properties.Remove('review')
+    $cfg | Add-Member -NotePropertyName review -NotePropertyValue ([pscustomobject]@{ command_template = $Value })
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+}
+
 # dispatch-run と同じ形式で guard.sha256 を書き(runs/<run>/prompt.md と管理ファイル)、
 # dispatch-run と同じく git-state.ps1 の出力で git-state.txt も書く
 function Write-Guard {
@@ -181,6 +191,25 @@ Invoke-TestCase "run: 通常の非0は数値のまま" {
     Set-Child 'exit 3'
     Invoke-Script dispatch-run.ps1 -TaskId T1 -Attempt 1
     Assert-Eq "EXIT:3" (Get-DoneExit) "done marker"
+}
+
+Invoke-TestCase "run: review の run は review.command_template で子を起動する" {
+    Set-Child 'exit 3'
+    Write-Utf8File "$script:Proj/review-child.ps1" "exit 0`n"
+    Set-ReviewTemplate 'pwsh -NoProfile -File ./review-child.ps1 "{prompt}"'
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/review-T1-1/prompt.md" "prompt`n"
+    Invoke-Script dispatch-run.ps1 -TaskId review-T1 -Attempt 1
+    $done = @(Get-Content "$script:Proj/.agents/workflow/runs/review-T1-1/done" -Encoding utf8)
+    Assert-Eq "EXIT:0" $done[0] "done marker"
+}
+
+Invoke-TestCase "run: review の run は main-tree.txt を記録する" {
+    Set-Child 'Write-Output hello'
+    Set-ReviewTemplate 'pwsh -NoProfile -File ./child.ps1 "{prompt}"'
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/review-T1-1/prompt.md" "prompt`n"
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-run.ps1 -TaskId review-T1 -Attempt 1
+    Assert-Contains ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/review-T1-1/main-tree.txt")) "a.txt" "main-tree.txt records untracked file"
 }
 
 Invoke-TestCase "run: isolate_xdg 未指定/false は XDG を引き継ぐ" {
