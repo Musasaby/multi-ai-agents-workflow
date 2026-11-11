@@ -25,10 +25,16 @@ set -uo pipefail
 #   --other-runs <ID,ID,...> は --run のときだけ使える。上の1つ目の「ほかの run のブランチ」の除外を、
 #   参照名が refs/heads/agents-run/<ID>-<数字> で <ID> が --other-runs にある行に限る
 #   (--other-runs が無い・空なら、自分以外の agents-run/* を何も除かない)
-# 未知の引数・値が無いオプション・--run と --parent の片方だけ・--ref との併用は、
-# stderr に使い方を出して exit 1 する。
+#   --main-tree を付けると、上の4行の代わりに、カレントディレクトリの作業ツリーの変更を
+#   次の2つのコマンドの出力のパスの和集合(LC_ALL=C sort -u の順)について
+#   "<sha256 の16進小文字>  <path>" の形(区切りは空白2つ。ファイルが無ければ "-  <path>")で1行ずつ出す。
+#   git の失敗は、その部分を空として扱う。ほかのオプションとは併用できない
+#     git -c core.quotepath=false diff --name-only HEAD -- . ':(exclude).agents/workflow'
+#     git -c core.quotepath=false ls-files --others --exclude-standard -- . ':(exclude).agents/workflow'
+# 未知の引数・値が無いオプション・--run と --parent の片方だけ・--ref との併用・
+# --main-tree とほかのオプションの併用は、stderr に使い方を出して exit 1 する。
 
-USAGE="Usage: git-state.sh [--ref <refname> | --run <refname> --parent <refname> [--other-runs <ID,ID,...>]]"
+USAGE="Usage: git-state.sh [--main-tree | --ref <refname> | --run <refname> --parent <refname> [--other-runs <ID,ID,...>]]"
 
 # --- 引数 ---
 REF_ARG=""
@@ -39,8 +45,13 @@ PARENT_ARG=""
 USE_PARENT=0
 OTHER_RUNS=""
 USE_OTHER=0
+USE_MAIN=0
 while [ $# -gt 0 ]; do
     case "$1" in
+        --main-tree)
+            USE_MAIN=1
+            shift
+            ;;
         --ref)
             if [ $# -lt 2 ]; then
                 echo "$USAGE" >&2
@@ -83,6 +94,10 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
+if [ "$USE_MAIN" -eq 1 ] && { [ "$USE_REF" -eq 1 ] || [ "$USE_RUN" -eq 1 ] || [ "$USE_PARENT" -eq 1 ] || [ "$USE_OTHER" -eq 1 ]; }; then
+    echo "$USAGE" >&2
+    exit 1
+fi
 if [ "$USE_OTHER" -eq 1 ] && [ "$USE_RUN" -eq 0 ]; then
     echo "$USAGE" >&2
     exit 1
@@ -96,6 +111,27 @@ fi
 if ! git rev-parse --git-dir > /dev/null 2>&1; then
     echo "not a git repository" >&2
     exit 1
+fi
+
+# --- main-tree(作業ツリーの変更をパスごとのハッシュで出す) ---
+if [ "$USE_MAIN" -eq 1 ]; then
+    # git が失敗した部分は空の出力として扱う(stderr は捨てる)
+    {
+        git -c core.quotepath=false diff --name-only HEAD -- . ':(exclude).agents/workflow' 2> /dev/null
+        git -c core.quotepath=false ls-files --others --exclude-standard -- . ':(exclude).agents/workflow' 2> /dev/null
+    } | LC_ALL=C sort -u | while IFS= read -r MAIN_PATH; do
+        if [ -f "$MAIN_PATH" ]; then
+            if command -v sha256sum > /dev/null 2>&1; then
+                MAIN_SHA="$(sha256sum "$MAIN_PATH" | cut -d' ' -f1)"
+            else
+                MAIN_SHA="$(shasum -a 256 "$MAIN_PATH" | cut -d' ' -f1)"
+            fi
+        else
+            MAIN_SHA=-
+        fi
+        printf '%s  %s\n' "$MAIN_SHA" "$MAIN_PATH"
+    done
+    exit 0
 fi
 
 # --- head ---

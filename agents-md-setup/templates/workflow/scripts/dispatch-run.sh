@@ -146,6 +146,12 @@ else
   bash "$SCRIPT_DIR/git-state.sh" > "$RUN_DIR/git-state.txt"
 fi
 
+# worktree の run では、子の実行中に本体(メインの作業ツリー)で起きた変更も dispatch-check が
+# 検知できるよう、起動時のパスごとのハッシュを main-tree.txt に記録する(失敗しても起動は止めない)
+if [ -n "$WT_PATH" ]; then
+  bash "$SCRIPT_DIR/git-state.sh" --main-tree > "$RUN_DIR/main-tree.txt" || true
+fi
+
 # --prepare-only: guard・git-state・tmp を用意したところで終える(子は起動せず、done も書かない)
 if [ "$PREPARE_ONLY" = true ]; then
   exit 0
