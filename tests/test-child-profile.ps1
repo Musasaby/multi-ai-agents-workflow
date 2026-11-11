@@ -15,19 +15,29 @@ function Set-ChildAgent {
     Write-Utf8File $path (($config | ConvertTo-Json -Depth 10) + "`n")
 }
 
+# Set-Review <profile|""> <command_template>: config.json の review を書き換える
+function Set-Review {
+    param([string]$Profile, [string]$CommandTemplate)
+    $path = "$script:Proj/.agents/workflow/config.json"
+    $config = [System.IO.File]::ReadAllText($path) | ConvertFrom-Json
+    $review = [ordered]@{ command_template = $CommandTemplate }
+    if ($Profile) { $review['profile'] = $Profile }
+    $config | Add-Member -NotePropertyName review -NotePropertyValue $review -Force
+    Write-Utf8File $path (($config | ConvertTo-Json -Depth 10) + "`n")
+}
+
 # Invoke-Profile: Get-ChildProfile を呼び $script:Prof / $script:Err / $script:Code を設定する
 function Invoke-Profile {
-    param([string]$Name = '')
+    param([string]$Name = '', [string]$TaskId = '')
     $script:Prof = $null
     $script:Err = ''
     $script:Code = 0
     . "$script:Proj/.agents/workflow/scripts/childprofile.ps1"
     try {
-        if ($Name) {
-            $script:Prof = Get-ChildProfile -Root $script:Proj -Name $Name
-        } else {
-            $script:Prof = Get-ChildProfile -Root $script:Proj
-        }
+        $params = @{ Root = $script:Proj }
+        if ($Name) { $params.Name = $Name }
+        if ($TaskId) { $params.TaskId = $TaskId }
+        $script:Prof = Get-ChildProfile @params
     } catch {
         $script:Code = 1
         $script:Err = $_.Exception.Message
@@ -78,6 +88,30 @@ Invoke-TestCase "profile: 上書きに未定義の名前を渡すと exit 1" {
     Invoke-Profile "nope"
     Assert-Eq 1 $script:Code "unknown -Name rejected"
     Assert-Contains $script:Err "Unknown child profile: nope (defined: auto, claude-stream-json, opencode, plain, subagent)" "message"
+}
+
+Invoke-TestCase "review の run は review.command_template から出力形式を決める" {
+    Set-ChildAgent "opencode" 'opencode run "{prompt}"'
+    Set-Review "" 'claude -p --output-format stream-json "{prompt}"'
+    Invoke-Profile -TaskId 'review-T1'
+    Assert-Eq 0 $script:Code "exit: $($script:Err)"
+    Assert-Eq "claude-stream-json" $script:Prof.OutputFormat "output_format from review.command_template"
+}
+
+Invoke-TestCase "review の run は review.profile を使う" {
+    Set-ChildAgent "" 'opencode run "{prompt}"'
+    Set-Review "opencode" 'opencode run "{prompt}"'
+    Invoke-Profile -TaskId 'review-T1'
+    Assert-Eq 0 $script:Code "exit: $($script:Err)"
+    Assert-Eq "opencode" $script:Prof.Name "name from review.profile"
+}
+
+Invoke-TestCase "通常のタスクは review の設定を使わない" {
+    Set-ChildAgent "opencode" 'opencode run "{prompt}"'
+    Set-Review "" 'claude -p --output-format stream-json "{prompt}"'
+    Invoke-Profile -TaskId 'T1'
+    Assert-Eq 0 $script:Code "exit: $($script:Err)"
+    Assert-Eq "text" $script:Prof.OutputFormat "output_format from child_agent.command_template"
 }
 
 Show-Summary

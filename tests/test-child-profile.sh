@@ -19,6 +19,22 @@ with open(p, 'w', encoding='utf-8', newline='\n') as f:
 " "$(py_path "$PROJ/.agents/workflow/config.json")" "$1" "$2"
 }
 
+# set_review <profile|""> <command_template>: config.json の review を書き換える
+set_review() {
+    python3 -c "
+import json, sys
+p = sys.argv[1]
+with open(p, encoding='utf-8') as f:
+    c = json.load(f)
+c['review'] = {}
+if sys.argv[2]:
+    c['review']['profile'] = sys.argv[2]
+c['review']['command_template'] = sys.argv[3]
+with open(p, 'w', encoding='utf-8', newline='\n') as f:
+    json.dump(c, f)
+" "$(py_path "$PROJ/.agents/workflow/config.json")" "$1" "$2"
+}
+
 # run_profile: childprofile.py を実行し OUT / ERR / CODE を設定する(OUT は行ごとの比較用に末尾改行を保つ)
 run_profile() {
     local out_file err_file
@@ -77,10 +93,37 @@ t_profile_override_unknown() {
     assert_contains "$ERR" "Unknown child profile: nope (defined: auto, claude-stream-json, opencode, plain, subagent)" "message"
 }
 
+t_review_command_template() {
+    set_child_agent "opencode" 'opencode run "{prompt}"'
+    set_review "" 'claude -p --output-format stream-json "{prompt}"'
+    run_profile --task review-T1
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_eq "claude-stream-json" "${LINES_OUT[1]}" "output_format from review.command_template"
+}
+
+t_review_profile() {
+    set_child_agent "" 'opencode run "{prompt}"'
+    set_review "opencode" 'opencode run "{prompt}"'
+    run_profile --task review-T1
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_eq "opencode" "${LINES_OUT[0]}" "name from review.profile"
+}
+
+t_normal_task_ignores_review() {
+    set_child_agent "opencode" 'opencode run "{prompt}"'
+    set_review "" 'claude -p --output-format stream-json "{prompt}"'
+    run_profile --task T1
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_eq "text" "${LINES_OUT[1]}" "output_format from child_agent.command_template"
+}
+
 echo "test-child-profile.sh"
 test_case "profile: 未指定は auto で、command_template に stream-json があれば claude-stream-json の出力形式" t_auto_default
 test_case "profile: 利用先の child-profiles.json が同名の組み込み定義を置き換える" t_custom_replaces_builtin
 test_case "profile: 未定義の名前は exit 1" t_unknown_profile
 test_case "profile: プロファイル名の上書きが config.json の profile より優先される" t_profile_override
 test_case "profile: 上書きに未定義の名前を渡すと exit 1" t_profile_override_unknown
+test_case "review の run は review.command_template から出力形式を決める" t_review_command_template
+test_case "review の run は review.profile を使う" t_review_profile
+test_case "通常のタスクは review の設定を使わない" t_normal_task_ignores_review
 summary
