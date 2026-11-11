@@ -106,6 +106,9 @@ if ($wtPath) {
     $gitState = & pwsh -NoProfile -File "$PSScriptRoot/git-state.ps1"
 }
 [System.IO.File]::WriteAllText((Join-Path (Get-Location) "$runDir/git-state.txt"), (($gitState -join "`n") + "`n"), [System.Text.UTF8Encoding]::new($false))
+# 起動時刻を UTC の1行で記録する(dispatch-check が CLI ログをこの時刻より後の行に絞るため)
+$startedAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture)
+[System.IO.File]::WriteAllText((Join-Path (Get-Location) "$runDir/started"), "$startedAt`n", [System.Text.UTF8Encoding]::new($false))
 # worktree の run では、子の実行中に本体(メインの作業ツリー)で起きた変更も dispatch-check が
 # 検知できるよう、起動時のパスごとのハッシュを main-tree.txt に記録する(失敗しても起動は止めない)
 if ($wtPath) {
@@ -194,7 +197,8 @@ function ConvertTo-HumanLine {
             return ($lines -join "`n")
         }
         'result' {
-            return "[result] exit_subtype=$($obj.subtype) result=$($obj.result)"
+            # 本文(result)は output.jsonl に残るため、output.log には結果の種別だけを書く
+            return "[result] exit_subtype=$($obj.subtype)"
         }
         default {
             $compact = ($obj | ConvertTo-Json -Compress -Depth 5)

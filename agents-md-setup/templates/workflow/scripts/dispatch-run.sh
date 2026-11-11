@@ -145,6 +145,8 @@ except Exception:
 else
   bash "$SCRIPT_DIR/git-state.sh" > "$RUN_DIR/git-state.txt"
 fi
+# 起動時刻を UTC の1行で記録する(dispatch-check が CLI ログをこの時刻より後の行に絞るため)
+date -u +%Y-%m-%dT%H:%M:%SZ > "$RUN_DIR/started"
 
 # worktree の run では、子の実行中に本体(メインの作業ツリー)で起きた変更も dispatch-check が
 # 検知できるよう、起動時のパスごとのハッシュを main-tree.txt に記録する(失敗しても起動は止めない)
@@ -292,7 +294,8 @@ if is_stream:
                     lines.append('[tool_result] ' + text)
             return '\n'.join(lines)
         if t == 'result':
-            return '[result] exit_subtype=' + str(obj.get('subtype')) + ' result=' + str(obj.get('result'))
+            # 本文(result)は output.jsonl に残るため、output.log には結果の種別だけを書く
+            return '[result] exit_subtype=' + str(obj.get('subtype'))
         compact = json.dumps(obj, ensure_ascii=False)
         if len(compact) > 300:
             compact = compact[:300] + '...(truncated)'
