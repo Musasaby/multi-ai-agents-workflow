@@ -17,6 +17,7 @@
 │   ├── dispatch-prompt-gen.ps1 / .sh
 │   ├── dispatch-prompt-template.md
 │   ├── dispatch-pr-prompt-template.md   PR作成の単発依頼用(dispatch-prompt-gen --pr)
+│   ├── dispatch-pr-refine-template.md   PR作成の run に足す推敲の節(text_refine.mode が dispatch のとき)
 │   ├── dispatch-review-template.md  レビュー役の単発依頼用(dispatch-prompt-gen --review)
 │   ├── state-sync.ps1 / .sh
 │   ├── req-status.ps1 / .sh  要件ごとの充足状況の一覧(グループ・サイクル完了時の充足確認に使う)
@@ -49,6 +50,8 @@
 │   ├── output.log       子エージェントの出力
 │   ├── done             完了マーカー(EXIT/END の2行)
 │   ├── exit-signal      シグナル番号の一時ファイル(POSIX版のみ。done 書き出し時に削除)
+│   ├── refine.txt       PR作成の run で子に推敲させる対象(`<場面> <入力のパス>` が1行ずつ。dispatch-prompt-gen --pr が書き、dispatch-check が読む)
+│   ├── summary.md       完了時のサマリーの下書き(dispatch-prompt-gen --pr が `runs/refine/summary.md` から移す)
 │   └── report.md        完了報告(dispatch-check が ok / no-changes のとき自動で保存)
 ├── comprehension/                ← 理解確認(タスク単位)
 ├── archive/<日時-スラッグ>/      ← 一巡した過去サイクルの退避先(.gitignore対象)
@@ -101,6 +104,7 @@
 | `text_refine.skill` | 推敲に使う yomiyasu を呼ぶ名前(入れ方ごとに違う。プラグインなら `yomiyasu:yomiyasu`、skill 単体なら `yomiyasu` など)。`null`・空なら推敲しない。名前は推測せず、`text-refine` の `Found:` 行を見て利用者が決める | `null` |
 | `text_refine.targets` | 推敲する場面。`summary`(完了サマリー報告)・`confirm`(ユーザーへの確認依頼)・`commit`(コミットメッセージの説明の1行)・`pr_body`(PR説明)・`task_done`(タスク1件の完了報告)・`tasks`(agent-task-plan で書く tasks.md)から選ぶ配列。既存の利用先は `"tasks"` を足すと有効になる | 6つすべて |
 | `text_refine.reader` | 推敲後の文章の読み手。`expert`(同じ分野の専門家)・`informed`(分野は違うが技術に詳しい人)・`general`(専門知識のない人)。他の値は `informed` 扱い | `informed` |
+| `text_refine.mode` | 推敲を誰が行うか。`parent` は親が推敲する。`dispatch` は、PR 本文(`pr_body`)と完了時のサマリー(`summary`)を PR 作成の子が推敲し、コミットの説明・タスク完了報告・確認依頼(`commit`・`task_done`・`confirm`)は推敲しない。tasks.md(`tasks`)はどちらの値でも親が推敲する。値が無い・他の値は `parent`。`dispatch` は、PR 作成の子の CLI から `text_refine.skill` の名前で yomiyasu を呼べることが前提 | `parent` |
 
 **Windows での `command_template`**: `bash ./x.sh "{prompt}"` のように `bash` だけで書くと、`dispatch-run` が子を起動するときの
 Windows のコマンド検索順で System32 の `bash.exe`(WSL)が Git Bash より先に選ばれ、Windows のパスが見えずに失敗することがある。
