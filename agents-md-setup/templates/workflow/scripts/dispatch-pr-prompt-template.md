@@ -33,6 +33,8 @@
    で本文を更新する。タイトルは変えない。`gh pr edit` は使わない(GitHub の旧 Projects 廃止のエラー
    `GraphQL: Projects (classic) is being deprecated ...` で失敗するため)
 
+{refine_instruction}
+
 ## 完了報告フォーマット
 ```
 ## 完了報告

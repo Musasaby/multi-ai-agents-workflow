@@ -183,11 +183,55 @@ if [ "$PR_MODE" = true ]; then
     python3 - "$STATE_PATH_PY" "$(to_py_path "$SCRIPT_DIR/dispatch-pr-prompt-template.md")" \
         "$(to_py_path "$PR_RUN_DIR/prompt.md")" "$BRANCH" "$BASE_BRANCH" "$BASE_REF" \
         ".agents/workflow/runs/pr-${PR_N}-1" "$COMMITS" "$(to_py_path "$TASKS_PATH")" \
-        "$(to_py_path "$SCRIPT_DIR")" <<'PY' || { rmdir "$PR_RUN_DIR" 2>/dev/null; exit 1; }
+        "$(to_py_path "$SCRIPT_DIR")" "$CONFIG_PATH_PY" <<'PY' || { rmdir "$PR_RUN_DIR" 2>/dev/null; exit 1; }
 import json, os, sys
-state_path, template_path, prompt_path, branch, base, base_ref, run_dir, commits, tasks_path, script_dir = sys.argv[1:11]
+state_path, template_path, prompt_path, branch, base, base_ref, run_dir, commits, tasks_path, script_dir, config_path = sys.argv[1:12]
 sys.path.insert(0, script_dir)
 import tasklib
+
+REFINE_SOURCE = '.agents/workflow/runs/refine/summary.md'   # カレントディレクトリはプロジェクトのルート
+WHEN = {
+    'pr_body': '手順4 の後、手順5 の前に行う。推敲できたとき(下の 2. が `Next: continue` で終わったとき)は、手順5 で `{input}` の代わりに `{output}` を使う。',
+    'summary': '手順5 の後に行う。親が書いた完了時のサマリーの下書きを推敲する。',
+}
+
+def refine_instruction():
+    # 戻り値: {refine_instruction} に入れる文字列。推敲しないときは ''
+    # 1. config_path の text_refine.mode が 'dispatch' でなければ '' を返す
+    #    (ファイルが無い・読めない・キーが無いときも '')
+    text_refine = tasklib.load_config(config_path).get('text_refine')
+    if not isinstance(text_refine, dict) or text_refine.get('mode') != 'dispatch':
+        return ''
+    # 2. targets = [('pr_body', run_dir + '/pr-body.md')]
+    targets = [('pr_body', run_dir + '/pr-body.md')]
+    # 3. REFINE_SOURCE があれば、prompt.md と同じディレクトリの summary.md へ移し、
+    #    targets に ('summary', run_dir + '/summary.md') を足す
+    if os.path.exists(REFINE_SOURCE):
+        os.replace(REFINE_SOURCE, run_dir + '/summary.md')
+        targets.append(('summary', run_dir + '/summary.md'))
+    # 4. script_dir の dispatch-pr-refine-template.md を読み、targets ごとに節を作る
+    with open(os.path.join(script_dir, 'dispatch-pr-refine-template.md'), encoding='utf-8') as f:
+        refine_template = f.read()
+    sections = []
+    for scene, input_path in targets:
+        base_path, ext = os.path.splitext(input_path)
+        output_path = base_path + '.refined' + ext
+        # {when} を最初に置換する(WHEN の文に {input}・{output} が入っているため)
+        section = refine_template.replace('{when}', WHEN[scene])
+        section = section.replace('{scene}', scene)
+        section = section.replace('{input}', input_path)
+        section = section.replace('{output}', output_path)
+        section = section.replace('{request_command}',
+                                  '.agents/workflow/scripts/text-refine.sh ' + scene + ' ' + input_path + ' --request')
+        section = section.replace('{check_command}',
+                                  '.agents/workflow/scripts/text-refine.sh ' + scene + ' ' + input_path + ' --check')
+        sections.append(section)
+    # 5. prompt.md と同じディレクトリの refine.txt に '<場面> <入力のパス>' を1行ずつ書く
+    with open(os.path.join(os.path.dirname(prompt_path), 'refine.txt'), 'w', encoding='utf-8', newline='\n') as f:
+        for scene, input_path in targets:
+            f.write(scene + ' ' + input_path + '\n')
+    # 6. 各節の末尾の改行を取り除き、空行1つでつないで返す
+    return '\n\n'.join(section.rstrip('\n') for section in sections)
 commits = [c for c in commits.split() if c]
 with open(state_path, encoding='utf-8') as f:
     tasks = json.load(f)['tasks']
@@ -215,7 +259,8 @@ requirement_list = '\n'.join(req_lines) if req_lines else \
 with open(template_path, encoding='utf-8') as f:
     text = f.read()
 for key, value in (('{task_list}', '\n'.join(selected)), ('{requirement_list}', requirement_list), ('{branch}', branch),
-                   ('{base_branch}', base), ('{base_ref}', base_ref), ('{run_dir}', run_dir)):
+                   ('{base_branch}', base), ('{base_ref}', base_ref), ('{run_dir}', run_dir),
+                   ('{refine_instruction}', refine_instruction())):
     text = text.replace(key, value)
 with open(prompt_path, 'w', encoding='utf-8', newline='\n') as f:
     f.write(text)
