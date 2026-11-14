@@ -2,10 +2,12 @@
 set -euo pipefail
 
 # yomiyasu(文章推敲 skill)への依頼文を config.json の text_refine から機械生成する(推敲そのものは親が行う)。
-# 引数: <target> <input> [--check]
+# 引数: <target> <input> [--check|--request]
 #       target は summary / confirm / commit / pr_body / task_done / tasks のいずれか
 #       --check は推敲済みファイルに対する yomiyasu の記録を探し、判断が要る候補を出す
+#       --request は text_refine.mode が dispatch でも依頼文を出す(PR 作成の子が使う)
 # stdout: 推敲しないとき "Refine: off"、(skill 未設定なら導入検出の "Found: <場所>" と "Hint: ..."、)"Next: continue"。
+#       text_refine.mode が dispatch で --check も --request も無く、場面が tasks でなければ "Refine: dispatch"、"Next: continue"。
 #       推敲するとき "Refine: <skill>"、"Output: <出力パス>"、"Request: <依頼文>"、"Next: refine"
 #       --check のとき: 推敲しない/yomiyasu 以外なら "Refine: off"/"Refine: <skill>"+"Check: skipped"、"Next: continue"。
 #       yomiyasu なら "Refine: <skill>"、"Output: <出力パス>"、"Record: <記録>"、"Candidates: N"、"Candidate: <キー> <抜粋>"...。
@@ -20,7 +22,7 @@ export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
 export PYTHONDONTWRITEBYTECODE=1
 
-USAGE="Usage: text-refine.sh <summary|confirm|commit|pr_body|task_done|tasks> <input> [--check]"
+USAGE="Usage: text-refine.sh <summary|confirm|commit|pr_body|task_done|tasks> <input> [--check|--request]"
 
 if [ "$#" -ne 2 ] && [ "$#" -ne 3 ]; then
     echo "$USAGE" >&2
@@ -30,12 +32,16 @@ fi
 TARGET="$1"
 INPUT="$2"
 CHECK=0
+REQUEST=0
 if [ "$#" -eq 3 ]; then
-    if [ "$3" != "--check" ]; then
-        echo "$USAGE" >&2
-        exit 1
-    fi
-    CHECK=1
+    case "$3" in
+        --check) CHECK=1 ;;
+        --request) REQUEST=1 ;;
+        *)
+            echo "$USAGE" >&2
+            exit 1
+            ;;
+    esac
 fi
 
 case "$TARGET" in
@@ -60,13 +66,14 @@ to_py_path() {
     fi
 }
 
-python3 - "$TARGET" "$INPUT" "$(to_py_path "$ROOT")" "$(to_py_path "$CONFIG_PATH")" "$(to_py_path "$HOME")" "$CHECK" <<'PY'
+python3 - "$TARGET" "$INPUT" "$(to_py_path "$ROOT")" "$(to_py_path "$CONFIG_PATH")" "$(to_py_path "$HOME")" "$CHECK" "$REQUEST" <<'PY'
 import glob, hashlib, json, os, re, sys
 
 sys.stdout.reconfigure(newline='\n')
 
 target, input_path, root, config_path, home = sys.argv[1:6]
 check = sys.argv[6] == '1'
+request_opt = sys.argv[7] == '1'
 
 DEFAULT_TARGETS = ['summary', 'confirm', 'commit', 'pr_body', 'task_done', 'tasks']
 READERS = {
@@ -109,6 +116,7 @@ if not isinstance(targets, list):
 reader = cfg.get('reader')
 if reader not in READERS:
     reader = 'informed'
+mode = cfg.get('mode')
 
 skill_set = isinstance(skill, str) and skill.strip() != ''
 
@@ -194,6 +202,11 @@ if not skill_set or target not in targets:
             print('Found: ' + place)
         if found:
             print('Hint: yomiyasu is installed but text_refine.skill is not set')
+    print('Next: continue')
+    sys.exit(0)
+
+if not check and mode == 'dispatch' and target != 'tasks' and not request_opt:
+    print('Refine: dispatch')
     print('Next: continue')
     sys.exit(0)
 

@@ -1,8 +1,10 @@
 ﻿# yomiyasu(文章推敲 skill)への依頼文を config.json の text_refine から機械生成する(推敲そのものは親が行う)。
-# 引数: <target> <input> [-Check]
+# 引数: <target> <input> [-Check|-Request]
 #       target は summary / confirm / commit / pr_body / task_done / tasks のいずれか
 #       -Check は推敲済みファイルに対する yomiyasu の記録を探し、判断が要る候補を出す
+#       -Request は text_refine.mode が dispatch でも依頼文を出す(PR 作成の子が使う)
 # stdout: 推敲しないとき "Refine: off"、(skill 未設定なら導入検出の "Found: <場所>" と "Hint: ..."、)"Next: continue"。
+#       text_refine.mode が dispatch で -Check も -Request も無く、場面が tasks でなければ "Refine: dispatch"、"Next: continue"。
 #       推敲するとき "Refine: <skill>"、"Output: <出力パス>"、"Request: <依頼文>"、"Next: refine"
 #       -Check のとき: 推敲しない/yomiyasu 以外なら "Refine: off"/"Refine: <skill>"+"Check: skipped"、"Next: continue"。
 #       yomiyasu なら "Refine: <skill>"、"Output: <出力パス>"、"Record: <記録>"、"Candidates: N"、"Candidate: <キー> <抜粋>"...。
@@ -12,11 +14,12 @@
 #       同じなら "Structure: same"(yomiyasu なら続けて記録を確かめ、候補が全部判断済みのとき "Next: continue" だけで "Text:" は出さない)、
 #       違えば "Changed: L<行> <抜粋>"、"Refined: L<行> <抜粋>"、"Next: escalate reason=refine-structure-changed"
 # exit: 0=出力あり / 1=使い方・入力不備 / 2=-Check で判断待ちの候補あり / 3=-Check で確かめられない / 4=-Check で tasks の構造が変わった
-param([string]$Target, [string]$InputPath, [switch]$Check)
+param([string]$Target, [string]$InputPath, [switch]$Check, [switch]$Request)
 
-$Usage = 'Usage: text-refine.ps1 <summary|confirm|commit|pr_body|task_done|tasks> <input> [-Check]'
+$Usage = 'Usage: text-refine.ps1 <summary|confirm|commit|pr_body|task_done|tasks> <input> [-Check|-Request]'
 
-if ($args.Count -gt 0 -or -not $PSBoundParameters.ContainsKey('Target') -or -not $PSBoundParameters.ContainsKey('InputPath')) {
+if ($args.Count -gt 0 -or -not $PSBoundParameters.ContainsKey('Target') -or -not $PSBoundParameters.ContainsKey('InputPath') -or
+    ($Check -and $Request)) {
     [Console]::Error.WriteLine($Usage)
     exit 1
 }
@@ -79,6 +82,7 @@ $skill = if ($cfg) { $cfg.skill } else { $null }
 $targets = if ($cfg -and $cfg.targets -is [array]) { @($cfg.targets) } else { $DefaultTargets }
 $reader = if ($cfg) { $cfg.reader } else { $null }
 if (-not ($reader -is [string] -and (@('expert', 'informed', 'general') -ccontains $reader))) { $reader = 'informed' }
+$mode = if ($cfg) { $cfg.mode } else { $null }
 
 $skillSet = ($skill -is [string]) -and ($skill.Trim() -ne '')
 
@@ -166,6 +170,12 @@ if (-not $skillSet -or ($targets -cnotcontains $Target)) {
             Write-Output 'Hint: yomiyasu is installed but text_refine.skill is not set'
         }
     }
+    Write-Output 'Next: continue'
+    exit 0
+}
+
+if (-not $Check -and $mode -ceq 'dispatch' -and $Target -cne 'tasks' -and -not $Request) {
+    Write-Output 'Refine: dispatch'
     Write-Output 'Next: continue'
     exit 0
 }
@@ -409,11 +419,11 @@ foreach ($stale in @($OutputPath, $DecisionsPath)) {
 }
 
 $keep = $KeepBase + $KeepExtra[$Target]
-$request = "$InputPath を $skill で推敲し、本文だけを $OutputPath に書いてください。$($Kinds[$Target])。読者は$($Readers[$reader])です。" +
+$requestText = "$InputPath を $skill で推敲し、本文だけを $OutputPath に書いてください。$($Kinds[$Target])。読者は$($Readers[$reader])です。" +
     "質問はせず、意味・条件・数値を変えないでください。次のものは変えないでください: $keep。"
 
 Write-Output "Refine: $skill"
 Write-Output "Output: $OutputPath"
-Write-Output "Request: $request"
+Write-Output "Request: $requestText"
 Write-Output 'Next: refine'
 exit 0
