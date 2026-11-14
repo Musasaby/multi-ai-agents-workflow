@@ -10,7 +10,7 @@ set -uo pipefail
 # Usage: dispatch-wait.sh <TaskId> [Attempt] [--max-wait <秒>] [--interval <秒>]
 #   Attempt の既定は 1 / --max-wait の既定は 480(1回の呼び出しで待つ上限) /
 #   --interval の既定は 15(ポーリング間隔)
-# exit: 0/4/5/6/7/8 = dispatch-check.sh の結果をそのまま(done があった場合)
+# exit: 0/4/5/6/7/8/9 = dispatch-check.sh の結果をそのまま(done があった場合)
 #       1 = 使い方不備、または run が起動されていない(guard.sha256 が無い)
 #           、またはサブエージェントの run(launcher が subagent。dispatch-finish を使う)
 #       2 = まだ実行中(この呼び出しの待ち時間が --max-wait に達した)
