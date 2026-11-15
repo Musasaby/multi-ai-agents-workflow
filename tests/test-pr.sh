@@ -49,6 +49,20 @@ with open(path, 'w', encoding='utf-8') as f:
 PY
 }
 
+# config.json の text_refine.mode を書き換える: set_refine_mode <mode|null>
+set_refine_mode() {
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" "$1" <<'PY'
+import json, sys
+path, mode = sys.argv[1], sys.argv[2]
+with open(path, encoding='utf-8') as f:
+    cfg = json.load(f)
+cfg['text_refine']['mode'] = None if mode == 'null' else mode
+with open(path, 'w', encoding='utf-8', newline='\n') as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+    f.write('\n')
+PY
+}
+
 t_pr_generates() {
     setup_branch
     run_script dispatch-prompt-gen.sh --pr
@@ -188,6 +202,49 @@ t_pr_no_requirements() {
     assert_not_contains "$prompt" "{requirement_list}" "placeholder replaced"
 }
 
+t_pr_refine_dispatch() {
+    setup_branch
+    set_refine_mode dispatch
+    run_script dispatch-prompt-gen.sh --pr
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    local run_dir="$PROJ/.agents/workflow/runs/pr-1-1"
+    local prompt
+    prompt="$(cat "$run_dir/prompt.md")"
+    assert_contains "$prompt" "## 推敲(pr_body)" "pr_body refine section"
+    assert_not_contains "$prompt" "## 推敲(summary)" "no summary refine section"
+    assert_contains "$prompt" ".agents/workflow/scripts/text-refine.sh pr_body .agents/workflow/runs/pr-1-1/pr-body.md --request" "request command"
+    assert_contains "$prompt" "pr-body.refined.md" "refined output path"
+    assert_not_contains "${prompt//\{owner\}\/\{repo\}/}" "{" "all placeholders replaced except {owner}/{repo}"
+    assert_eq "pr_body .agents/workflow/runs/pr-1-1/pr-body.md" "$(cat "$run_dir/refine.txt")" "refine.txt has one line"
+}
+
+t_pr_refine_moves_summary() {
+    setup_branch
+    set_refine_mode dispatch
+    mkdir -p "$PROJ/.agents/workflow/runs/refine"
+    printf 'サマリーの下書き\n' > "$PROJ/.agents/workflow/runs/refine/summary.md"
+    run_script dispatch-prompt-gen.sh --pr
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    local run_dir="$PROJ/.agents/workflow/runs/pr-1-1"
+    assert_file_exists "$run_dir/summary.md" "summary moved into run dir"
+    assert_file_absent "$PROJ/.agents/workflow/runs/refine/summary.md" "summary source removed"
+    assert_contains "$(cat "$run_dir/prompt.md")" "## 推敲(summary)" "summary refine section"
+    assert_eq "$(printf 'pr_body .agents/workflow/runs/pr-1-1/pr-body.md\nsummary .agents/workflow/runs/pr-1-1/summary.md')" \
+        "$(cat "$run_dir/refine.txt")" "refine.txt has two lines"
+}
+
+t_pr_refine_off() {
+    setup_branch
+    mkdir -p "$PROJ/.agents/workflow/runs/refine"
+    printf 'サマリーの下書き\n' > "$PROJ/.agents/workflow/runs/refine/summary.md"
+    run_script dispatch-prompt-gen.sh --pr
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    local run_dir="$PROJ/.agents/workflow/runs/pr-1-1"
+    assert_not_contains "$(cat "$run_dir/prompt.md")" "## 推敲" "no refine section"
+    assert_file_absent "$run_dir/refine.txt" "refine.txt not written"
+    assert_file_exists "$PROJ/.agents/workflow/runs/refine/summary.md" "summary source kept"
+}
+
 t_pr_launcher_subagent() {
     setup_branch
     run_script dispatch-prompt-gen.sh --pr --launcher subagent
@@ -235,6 +292,9 @@ test_case "TaskId省略はexit 1" t_task_id_omitted
 test_case "pr: origin が無ければexit 1" t_pr_no_origin_rejected
 test_case "pr: 要件の対応をプロンプトに載せる" t_pr_requirements
 test_case "pr: 要件の節が無ければなしと書く" t_pr_no_requirements
+test_case "pr: text_refine.mode が dispatch なら推敲の節と refine.txt を書く" t_pr_refine_dispatch
+test_case "pr: サマリーの下書きがあれば run へ移して推敲の対象にする" t_pr_refine_moves_summary
+test_case "pr: text_refine.mode が dispatch でなければ推敲の節を書かない" t_pr_refine_off
 test_case "pr: --launcher subagent で launcher を書き、サブエージェント用の節を足す" t_pr_launcher_subagent
 test_case "pr: --launcher cli は launcher を書き、節を足さない" t_pr_launcher_cli
 test_case "pr: --launcher が無ければ launcher を書かない" t_pr_no_launcher
