@@ -336,7 +336,7 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 
 ### Next: 行 — 次の行動の機械可読な指示
 
-判定系スクリプト(`next-task`・`branch-check`・`group-advance`・`dispatch-start`・`dispatch-wait`・`dispatch-finish`(`dispatch-check` の結果のまま)・`dispatch-check`・`workflow-status`)は、stdout の
+判定系スクリプト(`next-task`・`branch-check`・`group-advance`・`dispatch-start`・`dispatch-wait`・`dispatch-finish`(`dispatch-check` の結果のまま)・`dispatch-check`・`workflow-status`・`workflow-run`)は、stdout の
 最後の行に `Next: <行動> [<タスクID>] [reason=<理由>]` を出す。親は exit code の表ではなく
 この行に従う。`Next:` 行が無い(exit 1 等の使い方不備・入力不備)ときは `escalate reason=error`
 として stderr をユーザーに報告する。
@@ -347,13 +347,13 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 | `dispatch <ID> <ID>...` | 同時に実行できる複数のタスクを dispatch する(`max_parallel` が 2 以上のとき) | next-task(exit 0) |
 | `wait <ID>...` | 実行中のタスクの完了を待つ(同時に始められるタスクが無い) | next-task(exit 5) |
 | `collect <ID>` | worktree の run の変更を本体へ取り込む(`dispatch-worktree collect`)。その後 review する | dispatch-check(exit 0、worktree の run) |
-| `review <ID>` | そのタスクをレビューする | next-task(exit 0、`in_review`)・dispatch-check(exit 0。PR 作成の run を除く) |
+| `review <ID>` | そのタスクをレビューする | next-task(exit 0、`in_review`)・dispatch-check(exit 0。PR 作成の run を除く)・workflow-run(段階が `manual`) |
 | `commit <ID>` | レビュー合格(pass)。品質ゲートを実行してコミットする(`agent-review-commit` skill) | dispatch-check(exit 0、レビューの run で `Verdict: pass`) |
 | `retry <ID>` | レビュー不合格(fail)。`fix-notes.md` は書かれているので次の試行で子に渡す | dispatch-check(exit 0、レビューの run で `Verdict: fail`) |
 | `subagent <ID> <N>` | サブエージェントの run を用意した。`Prompt:` の内容でサブエージェントを起動し、最終応答を `Output:` に書いて `dispatch-finish` を呼ぶ | dispatch-start(exit 0、launcher が `subagent`) |
-| `wait` | 子がまだ実行中。完了を待つ | dispatch-start(exit 0)・dispatch-wait(exit 2)・dispatch-check(exit 2)・workflow-status(実行中の run があるとき) |
-| `finish` | 全タスク完了。サマリー報告へ | next-task(exit 3)・workflow-status |
-| `group-advance` | グループ境界。group-advance を実行する | next-task(exit 6)・workflow-status |
+| `wait` | 子がまだ実行中。完了を待つ | dispatch-start(exit 0)・dispatch-wait(exit 2)・dispatch-check(exit 2)・workflow-status(実行中の run があるとき)・workflow-run(`--max-wait` に達したら呼び直す) |
+| `finish` | 全タスク完了。サマリー報告へ | next-task(exit 3)・workflow-status・workflow-run(`next-task` と同じ意味) |
+| `group-advance` | グループ境界。group-advance を実行する | next-task(exit 6)・workflow-status・workflow-run |
 | `create-pr` | PR を作成する | group-advance(exit 7)・workflow-status(PR が無いとき) |
 | `wait-merge` | PR のマージを待つ(報告して停止) | group-advance(exit 8)・dispatch-check(exit 0、PR 作成の run `pr-*`。PR を検証してから報告する)・workflow-status(PR が `OPEN` で未 push のコミットが無いとき) |
 | `update-pr` | 既存の PR に未 push のコミットを push し、本文を作り直す(PR作成の単発依頼を再実行する) | group-advance(exit 10)・workflow-status(PR が `OPEN` で未 push のコミットがある、または `origin/<branch>` が無いとき) |
@@ -378,6 +378,7 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 - `provider-error` / `idle-timeout` / `abnormal-exit` — dispatch-check の exit 4(この順で判定)
 - `permission-denied` / `outside-access` — dispatch-check の exit 6
 - `token-limit` / `no-report` — dispatch-check の exit 5
+- `conflict` — dispatch-worktree の exit 40(`collect` で変更を本体に当てられない、`create` で前の試行の持ち越しが衝突した)
 - `no-changes` — dispatch-check の exit 7(変更が無いのが正しいタスクなら review に進んでよい)・task-commit の exit 20(コミットする変更が無い)
 - `quality-gate` — quality-gate の exit 2(blocking のステップが失敗)
 - `refine-unchecked` — text-refine --check の exit 3(推敲済みファイルか yomiyasu の記録が無く、確かめられない)・dispatch-check の exit 9(PR 作成の run で、子の推敲を確かめられない)
@@ -385,6 +386,17 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 - `refine-structure-changed` — text-refine --check の exit 4(`tasks` の推敲前後で見出し・依存・要件ID 等の構造が変わった)
 - `no-steps` — quality-gate の exit 3(実行するステップが0件)
 - `not-npx` / `sync-failed` — workflow-update の exit 2 / 22(`npx skills` で導入されていない / 配置済みスクリプトとの差分確認の失敗)
+- `runner-unsupported` — workflow-run の exit 4(使える条件を満たさない。親は今のループの手順で進める)
+- `already-running` — workflow-run の exit 5(別の `workflow-run` が動いている)
+- `review-invalid` — workflow-run(レビューの run の完了報告が無効・異常終了)
+- `commit-format` — workflow-run(レビュー役の `type` か要約の形式が違う)
+- `retry-limit` — workflow-run(リトライの上限に達した)
+- `quality-gate-error` — workflow-run(品質ゲートを実行できない)
+- `not-worktree` — workflow-run(worktree の run ではない)
+- `unknown-phase` — workflow-run(タスクの段階を判定できない)
+
+`conflict`・`task-state`・`blocked` など上の一覧にある reason は `workflow-run` からも出る
+(止まる理由の全体は workflow-run の節を参照)。
 
 ### dispatch-prompt-gen — dispatchプロンプトの機械生成
 
@@ -1331,6 +1343,8 @@ Progress: <done>/<全タスク> done
 Group: <名前> <done>/<数>
 Current: <ID> <status> | <title>
 Run: <ID>-<N> running elapsed=<秒>s log_idle=<秒>s
+Runner: locked pid=<pid> / Runner: idle
+Runner last: <progress.log の最後の空でない行>
 Failed: T3, T5
 PR: <state> <url> [unpushed=<n>|unpushed=no-remote]
 Comprehension: unanswered=<n> <ファイル名> ...
@@ -1342,6 +1356,11 @@ Next: <行動> [reason=<理由>]
 - `Current:` — `in_progress` / `in_review` のタスクがあればその行、無ければ `Current: none`
 - `Run:` — `Current` が `in_progress` で、そのタスクの最新の run に `guard.sha256` があるときだけ。
   `done` ファイルがあれば `finished`、無ければ `running`(`elapsed` は guard からの経過、`log_idle` は `output.log` の無更新秒数。ログが無ければ `-`)
+- `Runner:` — `runs/workflow-run/progress.log` があるときだけ、`Run:` の後・`Failed:` の前に出す。
+  `runs/workflow-run/lock/pid` があれば `Runner: locked pid=<pid>`、無ければ `Runner: idle`。
+  プロセスが生きているかは調べない(ロックの判定は `workflow-run` 自身が行う)
+- `Runner last:` — 同じく `progress.log` があるときだけ、`Runner:` の次の行に最後の空でない行を出す
+  (空でない行が無ければ出さない。`workflow-run` の stdout を時刻付きで記録したもの)
 - `Failed:` — `failed` のタスクがあるときだけ
 - `PR:` — `next-task` の判定が `finish` / `group-advance` のときだけ(下記)
 - `Comprehension:` — 常に出す。`comprehension/` の質問ファイルのうち、回答が未記入のものの件数とファイル名
