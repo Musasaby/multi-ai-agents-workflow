@@ -239,6 +239,23 @@ Invoke-TestCase "dispatch-worktree: collect の衝突の後の create は前の�
     Assert-FileExists "$run/changes.patch" "試行 1 の changes.patch がある"
 }
 
+Invoke-TestCase "dispatch-worktree: carry があれば未 collect の前の試行の変更を持ち越す" {
+    $wt = Initialize-Collect
+    $run1 = "$script:Proj/.agents/workflow/runs/T1-1"
+    Write-Plain "$wt/base.txt" "line1`nfromwt`n"
+    Write-Plain "$run1/carry" ''
+
+    Invoke-Script dispatch-worktree.ps1 create T1 2
+    Assert-Eq 0 $script:Code "create 2 exit: $($script:Err)"
+    Assert-Contains $script:Out "Carried: " "前の試行の変更を持ち越す"
+    Assert-Contains $script:Out "T1-1/changes.patch" "試行 1 のパッチを持ち越す"
+    Assert-NotContains $script:Out "Carried: none" "Carried: none ではない"
+    Assert-Eq "line1`nfromwt`n" ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-2/worktree/base.txt") -replace "`r`n", "`n") "試行 2 の worktree に書き換えが入る"
+    $status = @(git -C $script:Proj status --porcelain)
+    Assert-Eq 0 $status.Count "本体の git status は空のまま"
+    Assert-FileAbsent $wt "試行 1 の worktree は消える"
+}
+
 Invoke-TestCase "dispatch-worktree: create で持ち越しが衝突すると exit 40 で WT・ブランチが残らず本体が戻る" {
     $wt = Initialize-Collect
     $run = "$script:Proj/.agents/workflow/runs/T1-1"
