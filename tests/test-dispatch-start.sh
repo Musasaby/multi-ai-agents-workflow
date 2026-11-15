@@ -208,6 +208,53 @@ t_review_ok() {
     assert_file_exists "$PROJ/.agents/workflow/runs/review-T1-1/done" "done within 120s"
 }
 
+# 未 collect の worktree の run を残したまま in_progress のタスクをレビューできる状態にする
+setup_review_worktree() {
+    setup "T1:in_progress" "T2:pending"
+    write_report T1 1
+    run_script dispatch-worktree.sh create T1 1
+    assert_eq 0 "$CODE" "worktree create: $ERR"
+    printf 'x\n' > "$PROJ/.agents/workflow/runs/T1-1/worktree/x.txt"
+    cat > "$PROJ/.agents/review-worktree-child.py" <<'PY'
+print("## 完了報告")
+print("- Verdict: pass")
+print("- 指摘: 0件(なし)")
+print("- 要約: x を足す")
+print("- type: feat")
+print("- fix-notes: なし")
+print("- 理解確認: なし")
+PY
+    # worktree の中には .agents/ のスタブが無いため、レビュー役のスクリプトは絶対パスで指定する
+    set_review_cfg dispatch "python3 \"$(py_path "$PROJ/.agents/review-worktree-child.py")\" \"{prompt}\""
+}
+
+t_review_pre_collect() {
+    setup_review_worktree
+    local wt
+    wt="$(sed -n 's/^path //p' "$PROJ/.agents/workflow/runs/T1-1/worktree.txt" | head -n 1 | tr -d '\r')"
+    run_script dispatch-start.sh --review T1 1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "Run: review-T1-1" "Run line"
+    assert_contains "$OUT" "Worktree: $wt" "Worktree line"
+    assert_eq "Next: wait" "$(printf '%s\n' "$OUT" | tail -1)" "last line"
+    assert_file_exists "$PROJ/.agents/workflow/runs/review-T1-1/worktree.txt" "worktree.txt"
+    assert_eq in_progress "$(state_get T1 status)" "T1 status"
+    wait_done review-T1-1
+    assert_file_exists "$PROJ/.agents/workflow/runs/review-T1-1/done" "done within 120s"
+    run_script dispatch-check.sh review-T1 1
+    assert_eq 0 "$CODE" "dispatch-check exit code: $ERR"
+    assert_eq "Next: commit T1" "$(printf '%s\n' "$OUT" | tail -1)" "dispatch-check last line"
+}
+
+t_review_pre_collect_collected() {
+    setup_review_worktree
+    : > "$PROJ/.agents/workflow/runs/T1-1/collected"
+    run_script dispatch-start.sh --review T1 1
+    assert_eq 21 "$CODE" "exit code: $ERR"
+    assert_eq "Next: escalate reason=task-status" "$(printf '%s\n' "$OUT" | tail -1)" "last line"
+    assert_file_absent "$PROJ/.agents/workflow/runs/review-T1-1/prompt.md" "no prompt"
+}
+
 t_review_mode_absent() {
     setup "T1:in_review" "T2:pending"
     run_script dispatch-start.sh --review T1
@@ -509,6 +556,8 @@ test_case "start: subagent auto + opencode プロファイルは --subagent-capa
 test_case "start: subagent never + claude-stream-json プロファイルは --subagent-capable があっても cli" t_subagent_never_stream_json_cli
 test_case "start: --pr --subagent-capable は pr の prompt.md にサブエージェント用の節を足す" t_pr_subagent_section
 test_case "start: review の run を起動する" t_review_ok
+test_case "start: 未 collect の worktree の run を in_progress のままレビューする" t_review_pre_collect
+test_case "start: collect 済みの run は in_progress のままレビューできない" t_review_pre_collect_collected
 test_case "start: review.mode が dispatch でなければ起動しない" t_review_mode_not_dispatch
 test_case "start: review.mode が無ければ exit 23" t_review_mode_absent
 test_case "start: --review でタスクが in_review でなければ exit 21" t_review_not_in_review

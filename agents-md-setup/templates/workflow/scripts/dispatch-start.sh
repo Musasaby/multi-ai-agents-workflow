@@ -19,6 +19,8 @@ set -uo pipefail
 #     state.json のそのタスクの retries + 1。review.mode が dispatch でなければ exit 23、
 #     タスクの状態が in_review でなければ exit 21、launcher が cli で review.command_template が
 #     空なら exit 24。作業ツリーの確認・worktree の作成・疎通確認・ウォームアップ・task-state は行わない。
+#     タスクが in_progress でも、その試行の run に worktree.txt があり collected が無ければ、
+#     worktree.txt をレビューの run に写して worktree の中でレビューする
 #     起動方法は review.subagent(always / never / それ以外は auto)と review-<ID> のプロファイルで決める
 # config.json の max_parallel が 2 以上で --pr でないときは、作業ツリーの確認を飛ばし、
 # タスクの状態の確認の後に dispatch-worktree create で worktree の run にする(Carried: 行と Worktree: 行を出す)
@@ -202,7 +204,12 @@ for t in s['tasks']:
 if [ "$PR_MODE" = true ]; then
     :
 elif [ "$REVIEW_MODE" = true ]; then
-    if [ "$STATUS" != "in_review" ]; then
+    # in_progress でも、その試行の run が worktree でまだ collect されていなければレビューできる
+    PRE_COLLECT=false
+    TASK_RUN_DIR=".agents/workflow/runs/${TASK_ID}-${ATTEMPT}"
+    if [ "$STATUS" = "in_progress" ] && [ -f "$TASK_RUN_DIR/worktree.txt" ] && [ ! -f "$TASK_RUN_DIR/collected" ]; then
+        PRE_COLLECT=true
+    elif [ "$STATUS" != "in_review" ]; then
         echo "Task $TASK_ID cannot be reviewed (status: ${STATUS:-<absent>})" >&2
         echo "Next: escalate reason=task-status"
         exit 21
@@ -325,6 +332,14 @@ if [ "$PR_MODE" = false ] && [ "$REVIEW_MODE" = false ] && [ "$LAUNCHER" = cli ]
     fi
 fi
 
+# 未 collect の worktree の run をレビューするときは、worktree.txt をレビューの run に写す
+# (dispatch-prompt-gen --review が worktree 用のプロンプトを作り、dispatch-run が worktree の中で動かす)
+if [ "${PRE_COLLECT:-false}" = true ]; then
+    mkdir -p "$RUN_DIR"
+    cp "$TASK_RUN_DIR/worktree.txt" "$RUN_DIR/worktree.txt"
+    PRE_COLLECT_WT="$(sed -n 's/^path //p' "$RUN_DIR/worktree.txt" | head -n 1 | tr -d '\r')"
+fi
+
 # 4. プロンプト生成
 if [ "$PR_MODE" = true ]; then
     GEN_OUT="$(bash "$SCRIPT_DIR/dispatch-prompt-gen.sh" --pr --launcher "$LAUNCHER")"
@@ -375,6 +390,9 @@ if [ "$LAUNCHER" = subagent ]; then
         SUB_MODEL="$(cfg_get subagent_model)"
     fi
     echo "Run: ${RUN_TASK_ID}-${ATTEMPT}"
+    if [ "${PRE_COLLECT:-false}" = true ]; then
+        echo "Worktree: ${PRE_COLLECT_WT:-}"
+    fi
     echo "Launcher: subagent"
     echo "Prompt: $ROOT_ABS/$RUN_DIR/prompt.md"
     echo "Workdir: $WORKDIR"
@@ -403,6 +421,9 @@ while [ ! -f "$RUN_DIR/guard.sha256" ]; do
 done
 
 echo "Run: ${RUN_TASK_ID}-${ATTEMPT}"
+if [ "${PRE_COLLECT:-false}" = true ]; then
+    echo "Worktree: ${PRE_COLLECT_WT:-}"
+fi
 echo "Launcher: cli"
 echo "Log: $RUN_DIR/output.log"
 echo "Watch: tail -f $RUN_DIR/output.log"
