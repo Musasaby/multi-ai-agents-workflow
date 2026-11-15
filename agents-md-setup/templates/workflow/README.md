@@ -474,8 +474,12 @@ PR を作る。推敲に失敗しても PR は下書きの本文で作る。
 (`{report_path}`)。置換するのは `{task_id}`・`{attempt}`・`{task_section}`・`{report_path}`・
 `{fix_notes_path}`(=`runs/<ID>-<N+1>/fix-notes.md`)・`{comprehension_instruction}`
 (config の `comprehension_check.enabled` が true なら理解確認の質問ファイルを作る指示、false なら
-作らない指示)。stdout に `RunId: review-<ID>` を出すので、`dispatch-run` に `review-<ID>` と `<N>` を
-渡して起動する。`--launcher <cli|subagent>`(ps1 は `-Launcher`)は PR モードと同じく
+作らない指示)。`runs/review-<ID>-<N>/worktree.txt` があるときは、完了報告・`fix-notes.md`・
+理解確認の質問ファイルのパスを本体の絶対パスにし、`dispatch-review-worktree-template.md` の節を
+末尾に足す。節は作業ディレクトリを worktree にし、`git status --porcelain` と `git diff HEAD` を
+その中で実行するよう指示する。worktree に持ち越した変更はステージされているため、レビュー役が
+読む差分は `git diff HEAD` になる。stdout に `RunId: review-<ID>` を出すので、`dispatch-run` に
+`review-<ID>` と `<N>` を渡して起動する。`--launcher <cli|subagent>`(ps1 は `-Launcher`)は PR モードと同じく
 `runs/review-<ID>-<N>/launcher` へ値を1行で書き、`subagent` ならサブエージェント用の節を足す。
 タスクIDの形式違反、tasks.md が無い、または tasks.md に該当タスクの節が無い場合は exit 1、
 完了報告 `report.md` が無い場合は exit 2(レビューできない)。ps1 では `-Review` と
@@ -540,7 +544,8 @@ exit 60 のときは、`dispatch-run` のプロセスが動いていないこと
 
 1. `branch-check --state`(非0なら `Next:` 行を流して止める)
 2. `review.mode` が `dispatch` か(違えば exit 23)
-3. タスクの状態が `in_review` か(違えば exit 21)
+3. タスクが `in_review` か、または `in_progress` で、その試行の run(`runs/<ID>-<N>/`)に
+   `worktree.txt` があり `collected` が無いこと(それ以外は exit 21)
 4. launcher の決定(`--subagent-capable` があるときだけ。`review.subagent` が `always` なら
    `subagent`、`never` なら `cli`、それ以外(`auto`)は `review-<ID>` のプロファイルが
    `claude-stream-json` のときだけ `subagent`)。省略時は `cli`
@@ -548,6 +553,11 @@ exit 60 のときは、`dispatch-run` のプロセスが動いていないこと
 6. `dispatch-prompt-gen --review <ID> <N> --launcher <値>`(stdout の `RunId: review-<ID>`)
 7. `dispatch-run` に `review-<ID>` と `<N>` を渡してデタッチ起動する(`--subagent-capable` かつ
    launcher が `subagent` なら `dispatch-run --prepare-only` を同期で実行し `Next: subagent review-<ID> <N>`)
+
+`in_review` のタスクは今までどおり本体でレビューする。`in_progress` で未 collect の
+worktree の run をレビューするときは、`worktree.txt` を `runs/review-<ID>-<N>/` に写し、
+レビュー役は worktree の中で動く。成功時の stdout には `Worktree: <パス>` 行が加わる。
+この起動のしかたは `workflow-run` が使う。タスクの状態は変えない。
 
 行わないこと: 作業ツリーの確認・worktree の作成(`max_parallel` が 2 以上でも同じ)・
 疎通確認・ウォームアップ・`task-state`。レビュー役は状態を変えず、コードも変えない
@@ -562,7 +572,7 @@ exit 60 のときは、`dispatch-run` のプロセスが動いていないこと
 | `1` | 使い方不備 |
 | `11`〜`15` | `branch-check --state` の exit 1〜5(stdout の `Next:` 行はそのまま流す) |
 | `20` | 作業ツリーが汚れている(リトライで fix-notes.md がある場合を除く。`reason=dirty-tree`) |
-| `21` | タスクの状態が不正(`pending` / `in_progress` 以外、タスク無しを含む。`--review` では `in_review` 以外。`reason=task-status`) |
+| `21` | タスクの状態が不正(`pending` / `in_progress` 以外、タスク無しを含む。`--review` では `in_review` ではなく、`in_progress` で未 collect の worktree の run も無い場合。`reason=task-status`) |
 | `23` | `--review` なのに config.json の `review.mode` が `dispatch` でない(`reason=review-mode`) |
 | `24` | `--review` で launcher が `cli` なのに `review.command_template` が空(`reason=review-config`) |
 | `30` / `31` | 疎通確認 / ウォームアップの失敗(`reason=healthcheck` / `warmup`。出力の末尾20行を stderr に出す) |
