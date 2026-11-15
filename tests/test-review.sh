@@ -61,6 +61,30 @@ t_review_generates() {
     assert_contains "$prompt" "質問ファイルは作らない" "comprehension disabled instruction"
 }
 
+t_review_worktree() {
+    write_review_tasks
+    write_report T1 1
+    local wt
+    wt="$(py_path "$PROJ")/wt"
+    mkdir -p "$PROJ/.agents/workflow/runs/review-T1-1"
+    {
+        printf 'path %s\n' "$wt"
+        printf 'branch refs/heads/agents-run/T1-1\n'
+        printf 'base HEAD\n'
+    } > "$PROJ/.agents/workflow/runs/review-T1-1/worktree.txt"
+    run_script dispatch-prompt-gen.sh --review T1 1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    local prompt main_root
+    prompt="$(cat "$PROJ/.agents/workflow/runs/review-T1-1/prompt.md")"
+    main_root="$(py_path "$PROJ")"
+    assert_contains "$prompt" "## worktree でレビューする場合の追加の指示" "worktree section"
+    assert_contains "$prompt" "$wt" "worktree path"
+    assert_contains "$prompt" "$main_root/.agents/workflow/runs/T1-2/fix-notes.md" "fix notes path"
+    assert_contains "$prompt" "$main_root/.agents/workflow/runs/T1-1/report.md" "report path"
+    assert_not_contains "$prompt" "{workdir}" "workdir placeholder replaced"
+    assert_not_contains "$prompt" "{main_root}" "main_root placeholder replaced"
+}
+
 t_review_report_missing() {
     write_review_tasks
     run_script dispatch-prompt-gen.sh --review T1 1
@@ -148,6 +172,7 @@ t_check_review_main_tree_changed() {
 
 echo "test-review.sh"
 test_case "review のプロンプトを生成する" t_review_generates
+test_case "worktree の run のレビューは絶対パスと追加の節を入れる" t_review_worktree
 test_case "report.md が無いと exit 2" t_review_report_missing
 test_case "理解確認が有効なら質問ファイルの指示を入れる" t_review_comprehension_enabled
 test_case "合格なら commit を出す" t_check_review_pass

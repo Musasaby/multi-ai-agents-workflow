@@ -289,9 +289,20 @@ extract_task_section() {
 # --- Review mode: 子の実装をレビューするプロンプトを生成する ---
 # 出力先は runs/review-<ID>-<N>/prompt.md。stdout に "RunId: review-<ID>" を出す。
 # report.md が無いとレビューできないため exit 2、tasks.md にタスクの節が無ければ exit 1。
+# runs/review-<ID>-<N>/worktree.txt があれば、パスを本体の絶対パスにし、worktree 用の節を足す
 if [ "$REVIEW_MODE" = true ]; then
     REPORT_REL=".agents/workflow/runs/${TASK_ID}-${ATTEMPT}/report.md"
+    REVIEW_RUN_DIR="$RUNS_BASE/review-${TASK_ID}-${ATTEMPT}"
     REPORT_PATH="$ROOT/$REPORT_REL"
+    # worktree の中でレビューする run は、材料のパスを本体の絶対パスにする
+    REVIEW_WT=""
+    if [ -f "$REVIEW_RUN_DIR/worktree.txt" ]; then
+        REVIEW_WT="$(sed -n 's/^path //p' "$REVIEW_RUN_DIR/worktree.txt" | head -n 1 | tr -d '\r')"
+    fi
+    PATH_PREFIX=""
+    if [ -n "$REVIEW_WT" ]; then
+        PATH_PREFIX="$(to_py_path "$ROOT")/"
+    fi
     if [ ! -f "$TASKS_PATH" ] || ! grep -q "^## ${TASK_ID}:" "$TASKS_PATH" 2>/dev/null; then
         echo "Task '${TASK_ID}' not found in ${TASKS_PATH}" >&2
         exit 1
@@ -302,9 +313,9 @@ if [ "$REVIEW_MODE" = true ]; then
     fi
     TASK_SECTION="$(extract_task_section "$TASK_ID")"
     # 理解確認の指示: config の comprehension_check.enabled で切り替える
-    COMPREHENSION_INSTRUCTION="$(python3 - "$CONFIG_PATH_PY" "$TASK_ID" <<'PY'
+    COMPREHENSION_INSTRUCTION="$(python3 - "$CONFIG_PATH_PY" "$TASK_ID" "$PATH_PREFIX" <<'PY'
 import json, sys
-config_path, task_id = sys.argv[1:3]
+config_path, task_id, prefix = sys.argv[1:4]
 try:
     with open(config_path, encoding='utf-8') as f:
         cc = json.load(f).get('comprehension_check') or {}
@@ -316,19 +327,18 @@ if cc.get('enabled') is True:
     q = cc.get('questions_per_task', 3)
     if isinstance(q, bool) or not isinstance(q, int) or q < 1:
         q = 3
-    print('pass のときだけ、`.agents/skills/agent-review-commit/references/comprehension-questions.md` の手順4の観点で '
-          + str(q) + ' 問の質問を作り、`.agents/skills/agent-comprehension-check/SKILL.md` の「質問ファイルのフォーマット」に従って '
-          + '`.agents/workflow/comprehension/' + task_id + '.md` に書く。`## 解説` 見出しは含めない')
+    print('pass のときだけ、`' + prefix + '.agents/skills/agent-review-commit/references/comprehension-questions.md` の手順4の観点で '
+          + str(q) + ' 問の質問を作り、`' + prefix + '.agents/skills/agent-comprehension-check/SKILL.md` の「質問ファイルのフォーマット」に従って '
+          + '`' + prefix + '.agents/workflow/comprehension/' + task_id + '.md` に書く。`## 解説` 見出しは含めない')
 else:
     print('質問ファイルは作らない(完了報告の理解確認は なし)')
 PY
 )" || exit 1
-    REVIEW_RUN_DIR="$RUNS_BASE/review-${TASK_ID}-${ATTEMPT}"
     REVIEW_PROMPT_PATH="$REVIEW_RUN_DIR/prompt.md"
     mkdir -p "$REVIEW_RUN_DIR"
     python3 - "$(to_py_path "$SCRIPT_DIR/dispatch-review-template.md")" "$(to_py_path "$REVIEW_PROMPT_PATH")" \
-        "$TASK_ID" "$ATTEMPT" "$TASK_SECTION" "$REPORT_REL" \
-        ".agents/workflow/runs/${TASK_ID}-$((ATTEMPT + 1))/fix-notes.md" "$COMPREHENSION_INSTRUCTION" <<'PY' || { rmdir "$REVIEW_RUN_DIR" 2>/dev/null; exit 1; }
+        "$TASK_ID" "$ATTEMPT" "$TASK_SECTION" "${PATH_PREFIX}${REPORT_REL}" \
+        "${PATH_PREFIX}.agents/workflow/runs/${TASK_ID}-$((ATTEMPT + 1))/fix-notes.md" "$COMPREHENSION_INSTRUCTION" <<'PY' || { rmdir "$REVIEW_RUN_DIR" 2>/dev/null; exit 1; }
 import sys
 template_path, prompt_path, task_id, attempt, task_section, report_path, fix_notes_path, comprehension = sys.argv[1:9]
 with open(template_path, encoding='utf-8') as f:
@@ -342,6 +352,23 @@ with open(prompt_path, 'w', encoding='utf-8', newline='\n') as f:
 PY
     if [ -n "$REVIEW_LAUNCHER" ]; then
         printf '%s\n' "$REVIEW_LAUNCHER" > "$REVIEW_RUN_DIR/launcher"
+    fi
+    if [ -n "$REVIEW_WT" ]; then
+        python3 - "$(to_py_path "$REVIEW_WT")" "$(to_py_path "$ROOT")" "$(to_py_path "$REVIEW_RUN_DIR")" "$(to_py_path "$SCRIPT_DIR/dispatch-review-worktree-template.md")" <<'PY'
+import os, sys
+workdir, main_root, run_dir, template_path = sys.argv[1:5]
+workdir = workdir.replace('\\', '/').rstrip('/')
+main_root = main_root.replace('\\', '/').rstrip('/')
+with open(template_path, encoding='utf-8') as f:
+    section = f.read()
+for key, value in (('{workdir}', workdir), ('{main_root}', main_root)):
+    section = section.replace(key, value)
+prompt_path = os.path.join(run_dir, 'prompt.md')
+with open(prompt_path, encoding='utf-8', newline='') as f:
+    text = f.read()
+with open(prompt_path, 'w', encoding='utf-8', newline='\n') as f:
+    f.write(text.rstrip('\n') + '\n\n' + section)
+PY
     fi
     append_subagent_section "$REVIEW_RUN_DIR"
     echo "Generated: $REVIEW_PROMPT_PATH"
