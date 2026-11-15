@@ -345,7 +345,7 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 | `create-pr` | PR を作成する | group-advance(exit 7)・workflow-status(PR が無いとき) |
 | `wait-merge` | PR のマージを待つ(報告して停止) | group-advance(exit 8)・dispatch-check(exit 0、PR 作成の run `pr-*`。PR を検証してから報告する)・workflow-status(PR が `OPEN` で未 push のコミットが無いとき) |
 | `update-pr` | 既存の PR に未 push のコミットを push し、本文を作り直す(PR作成の単発依頼を再実行する) | group-advance(exit 10)・workflow-status(PR が `OPEN` で未 push のコミットがある、または `origin/<branch>` が無いとき) |
-| `continue` | そのまま作業を続ける | branch-check(exit 0)・group-advance(exit 0)・task-commit(exit 0)・quality-gate(exit 0)・text-refine(推敲しないとき)・text-refine --check(exit 0) |
+| `continue` | そのまま作業を続ける | branch-check(exit 0)・group-advance(exit 0)・task-commit(exit 0)・quality-gate(exit 0)・text-refine(推敲しないとき。`mode` が `dispatch` で `--request` が無いときを含む)・text-refine --check(exit 0) |
 | `refine` | `Request:` の依頼文で yomiyasu に推敲させ、`Output:` のファイルを使う | text-refine(推敲するとき) |
 | `decide-candidates` | 候補ごとの判断を `Decisions:` のファイルに書いてから `--check` を実行し直す | text-refine --check(exit 2) |
 | `confirm` | `DECIDE` 行や差分をユーザーに確認する | workflow-setup(exit 3)・workflow-update(exit 3) |
@@ -368,7 +368,8 @@ PowerShell 版はすべて `exit` で終わるため、`pwsh -File` で起動し
 - `token-limit` / `no-report` — dispatch-check の exit 5
 - `no-changes` — dispatch-check の exit 7(変更が無いのが正しいタスクなら review に進んでよい)・task-commit の exit 20(コミットする変更が無い)
 - `quality-gate` — quality-gate の exit 2(blocking のステップが失敗)
-- `refine-unchecked` — text-refine --check の exit 3(推敲済みファイルか yomiyasu の記録が無く、確かめられない)
+- `refine-unchecked` — text-refine --check の exit 3(推敲済みファイルか yomiyasu の記録が無く、確かめられない)・dispatch-check の exit 9(PR 作成の run で、子の推敲を確かめられない)
+- `refine-undecided` — dispatch-check の exit 9(PR 作成の run で、判断待ちの候補が残った)
 - `refine-structure-changed` — text-refine --check の exit 4(`tasks` の推敲前後で見出し・依存・要件ID 等の構造が変わった)
 - `no-steps` — quality-gate の exit 3(実行するステップが0件)
 - `not-npx` / `sync-failed` — workflow-update の exit 2 / 22(`npx skills` で導入されていない / 配置済みスクリプトとの差分確認の失敗)
@@ -1195,14 +1196,14 @@ exit code: `0`=出力あり、`1`=使い方不備・tasks.md/state.json 不在�
 ### text-refine — yomiyasu への推敲の依頼文
 
 `config.json` の `text_refine` から、yomiyasu(日本語の推敲 skill)への依頼文を機械的に作る。
-推敲そのものは親が行い、このスクリプトは文章を書き換えない(入力ファイルは変更しない)。
+推敲そのものは親(`text_refine.mode` が `dispatch` のときの PR 本文とサマリーは、PR 作成の子)が行い、このスクリプトは文章を書き換えない(入力ファイルは変更しない)。
 サマリー報告・確認依頼・コミットメッセージ・PR説明・タスク完了報告・tasks.md を、利用者に見せる前に整えるために使う。
 
 ```powershell
-.agents/workflow/scripts/text-refine.ps1 <summary|confirm|commit|pr_body|task_done|tasks> <入力ファイル> [-Check]
+.agents/workflow/scripts/text-refine.ps1 <summary|confirm|commit|pr_body|task_done|tasks> <入力ファイル> [-Check|-Request]
 ```
 ```bash
-.agents/workflow/scripts/text-refine.sh <summary|confirm|commit|pr_body|task_done|tasks> <入力ファイル> [--check]
+.agents/workflow/scripts/text-refine.sh <summary|confirm|commit|pr_body|task_done|tasks> <入力ファイル> [--check|--request]
 ```
 
 - 第1引数は推敲する場面(`text_refine.targets` と同じ6つの値)、第2引数は推敲前の文章のファイル
@@ -1220,6 +1221,18 @@ Next: continue
 
 - `Found:` と `Hint:` は `skill` が未設定のときだけ。yomiyasu が見つかった場所ごとに `Found:` を出し、
   1件以上あれば `Hint:` を出す(入力ファイルの存在は確かめない)
+
+`text_refine.mode` が `dispatch` のとき、場面が `tasks` 以外で `--request`(ps1 は `-Request`)が無ければ、
+`Refine: dispatch` と `Next: continue` の2行を出して exit 0 で終わる(入力ファイルの有無は確かめない)。
+
+```
+Refine: dispatch
+Next: continue
+```
+
+- `--request` を付けると、`mode` に関係なく「推敲するとき」の出力になる
+- `--request` は PR 作成の子が使う(親が使うのは、子が推敲できずに親が推敲し直すときだけ)
+- `--check` は `mode` の影響を受けない
 
 推敲するとき:
 
@@ -1289,7 +1302,7 @@ Next: decide-candidates
 skill の名前は入れ方(プラグイン・skill 単体・エージェントごとの配置)で変わるため、スクリプトは推測しない。
 検出して `Hint:` を出すだけで、`text_refine.skill` は利用者が設定する。
 
-exit code: `0`=出力あり、`1`=使い方不備(引数の数・場面の値・`--check` 以外のオプション)・推敲するときに入力ファイルが無い、
+exit code: `0`=出力あり、`1`=使い方不備(引数の数・場面の値・`--check`・`--request` 以外のオプション)・推敲するときに入力ファイルが無い、
 `2`=判断が無い候補がある(`--check`)、`3`=推敲済みファイルか記録が無い(`--check`)、
 `4`=`tasks` の推敲前後で構造が変わった(`--check`)。
 
