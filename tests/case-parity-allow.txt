@@ -28,7 +28,3 @@ test-skill-size.ps1: *
 # 端末の出力コードページの切り替えは ps1(workflow-logs.ps1)専用。リダイレクト時にバイト列が変わらないことの確認
 test-workflow-logs.ps1: logs: リダイレクトで受けた日本語は BOM なしの UTF-8 のバイト列になる
 
-# T6 で外す
-test-dispatch-start.sh: start: 未 collect の worktree の run を in_progress のままレビューする
-test-dispatch-start.sh: start: collect 済みの run は in_progress のままレビューできない
-
