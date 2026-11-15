@@ -264,6 +264,91 @@ t_finish() {
     assert_eq "Next: finish" "$(last_line)" "最後の行"
 }
 
+# exit 2(--max-wait)の間は呼び直す。最大60回
+run_until_not_wait() {
+    local i
+    for i in $(seq 1 60); do
+        run_script workflow-run.sh --max-wait 5 --interval 1
+        [ "$CODE" -ne 2 ] && return 0
+    done
+    return 0
+}
+
+t_collect_commit() {
+    setup_runner
+    write_state "T1:pending" "T2:pending"
+    set_state_branch develop/t
+    run_until_not_wait
+    local runs="$PROJ/.agents/workflow/runs"
+    assert_eq 0 "$CODE" "exit 0: $ERR"
+    assert_eq "Next: finish" "$(last_line)" "最後の行"
+    assert_eq "done" "$(state_get T1 status)" "T1 の状態"
+    assert_eq "done" "$(state_get T2 status)" "T2 の状態"
+    local subjects; subjects="$(git -C "$PROJ" log --format=%s)"
+    assert_contains "$subjects" "feat: T1 を変える" "レビュー役の type と要約で T1 をコミット"
+    assert_contains "$subjects" "feat: T2 を変える" "レビュー役の type と要約で T2 をコミット"
+    local progress; progress="$(cat "$runs/workflow-run/progress.log")"
+    assert_contains "$progress" "Done: T1 " "progress.log に Done を記録"
+    assert_contains "$progress" "retries=0" "progress.log に retries を記録"
+    assert_file_absent "$runs/T1-1/worktree" "collect 後に T1 の worktree が消える"
+}
+
+t_commit_format() {
+    setup_runner
+    write_state "T1:pending" "T2:done"
+    set_state_branch develop/t
+    set_review_body 'run_name="$(basename "$(dirname "$PWD")")"
+id="${run_name%-*}"
+id="${id#review-}"
+echo "## 完了報告"
+echo "- Verdict: pass"
+echo "- 指摘: 0件(なし)"
+echo "- 要約: $id を変える"
+echo "- type: bogus"
+echo "- fix-notes: なし"
+echo "- 理解確認: なし"'
+    run_until_not_wait
+    local runs="$PROJ/.agents/workflow/runs"
+    assert_eq 3 "$CODE" "exit 3: $ERR"
+    assert_contains "$OUT" "Stopped: T1 reason=commit-format" "commit-format で止まる"
+    assert_eq "Next: escalate reason=commit-format" "$(last_line)" "最後の行"
+    assert_eq "in_review" "$(state_get T1 status)" "T1 の状態は in_review のまま"
+    assert_file_exists "$runs/T1-1/collected" "collect 済み"
+}
+
+t_group_advance() {
+    setup_runner
+    write_tasks <<'TASKS'
+# タスク一覧: test
+
+<!-- グループ g1 -->
+
+## T1: 一番目
+- **目的**: a
+- **対象**: T1.txt を直す
+- **参照ファイル**:
+  - `T1.txt`(変更対象)
+- **依存**: なし
+
+<!-- グループ g2 -->
+
+## T2: 二番目
+- **目的**: b
+- **対象**: T2.txt を直す
+- **参照ファイル**:
+  - `T2.txt`(変更対象)
+- **依存**: なし
+TASKS
+    write_state "T1:pending" "T2:pending"
+    set_state_branch develop/t
+    set_state_group g1
+    run_until_not_wait
+    assert_eq 0 "$CODE" "exit 0: $ERR"
+    assert_eq "Next: group-advance" "$(last_line)" "最後の行"
+    assert_eq "done" "$(state_get T1 status)" "T1 の状態"
+    assert_eq "pending" "$(state_get T2 status)" "T2 の状態"
+}
+
 echo "test-workflow-run.sh"
 test_case "run: 使える条件を満たさなければ runner-unsupported(exit 4)" t_runner_unsupported
 test_case "run: 生きているロックは already-running、死んでいれば引き継ぐ" t_lock
@@ -272,4 +357,7 @@ test_case "run: 実装の run が異常終了したら、その理由で止ま�
 test_case "run: 子が終わると worktree の中でレビューし、verdict を記録する" t_review_pass
 test_case "run: レビューの完了報告が無効なら review-invalid で止まる" t_review_invalid
 test_case "run: 全タスク done なら Next: finish" t_finish
+test_case "run: 合格した run を collect してコミットし、Done 行を出す" t_collect_commit
+test_case "run: type が無効なら commit-format で止まり、in_review のまま残る" t_commit_format
+test_case "run: グループの最後で Next: group-advance を返す" t_group_advance
 summary

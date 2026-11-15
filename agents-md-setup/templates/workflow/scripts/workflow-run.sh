@@ -21,13 +21,19 @@ set -uo pipefail
 #   Checked: <ID>-<N>            実装の run が dispatch-check を通った
 #   Review started: <ID>-<N>     レビューの run を起動した
 #   Review: <ID>-<N> <pass|fail> レビューの run の結果
+#   Collected: <ID>-<N>          実装の run を取り込んだ
+#   Undeclared: <ID> <パス>      変更対象に宣言していないファイル
+#   Gate warning: <ID> <ステップ> 非 blocking の品質ゲートが失敗した
+#   Done: <ID> <ハッシュ7桁> retries=<n>  コミットした
 #   Stopped: <ID> reason=<理由>  止まった(タスクIDが無ければ -)
 #   Finished: <Next の値>        グループが終わった
 #   In flight: <ID>-<N> <段階>   実行中のタスク(記録には書かない)
 #   Detail: <last-output.log のパス>  止まったときの詳細(記録には書かない)
-# Started:・Checked:・Review started:・Review:・Stopped:・Finished: は
-# runs/workflow-run/progress.log にも時刻付きで書く。
-# 止まる理由の一つに review-invalid がある(レビューの完了報告が無効・異常終了・時間超過など)。
+# Started:・Checked:・Review started:・Review:・Collected:・Undeclared:・Gate warning:・Done:・
+# Stopped:・Finished: は runs/workflow-run/progress.log にも時刻付きで書く。
+# 止まる理由には review-invalid(レビューの完了報告が無効・異常終了・時間超過など)・
+#   conflict(collect の衝突)・quality-gate(品質ゲートの失敗)・quality-gate-error(品質ゲートの異常終了)・
+#   commit-format(type か要約が不正)・task-state(状態遷移の失敗)がある。
 # ロック: runs/workflow-run/lock/pid に自分の PID を書いて実行する。ロックがあり、そのプロセスが
 #   生きていれば exit 5、死んでいれば引き継ぐ。
 
@@ -220,6 +226,91 @@ poll_review() {
     fi
 }
 
+# config.json の最上位のキー $1 の値を出す(bool は true/false、文字列・数値はそのまま、無ければ空)
+cfg_value() {
+    python3 - "$(to_py_path "$CONFIG_PATH")" "$1" <<'PY' 2> /dev/null | tr -d '\r'
+import json, sys
+try:
+    with open(sys.argv[1], encoding='utf-8') as f:
+        cfg = json.load(f)
+except Exception:
+    sys.exit(0)
+if sys.argv[2] not in cfg or cfg[sys.argv[2]] is None:
+    print('')
+else:
+    v = cfg[sys.argv[2]]
+    if isinstance(v, bool):
+        print('true' if v else 'false')
+    else:
+        print(v)
+PY
+}
+
+# 品質ゲートの方式を出す: quality_gate があれば steps、無くて test_command が空でなければ test、どちらも無ければ none
+gate_mode() {
+    python3 - "$(to_py_path "$CONFIG_PATH")" <<'PY' 2> /dev/null | tr -d '\r'
+import json, sys
+try:
+    with open(sys.argv[1], encoding='utf-8') as f:
+        cfg = json.load(f)
+except Exception:
+    print('none')
+    sys.exit(0)
+if 'quality_gate' in cfg:
+    print('steps')
+elif str(cfg.get('test_command') or '').strip():
+    print('test')
+else:
+    print('none')
+PY
+}
+
+# $1=ID $2=試行回数。合格した run を取り込み、レビュー役の type と要約でコミットする
+collect_task() {
+    call dispatch-worktree.sh collect "$1" "$2"
+    case "$CALL_CODE" in
+        0) tr -d '\r' < "$LAST" | sed -n 's/^Undeclared: //p' | while IFS= read -r p; do
+               [ "$p" = none ] || emit "Undeclared: $1 $p"; done
+           call task-state.sh "$1" review
+           [ "$CALL_CODE" -eq 0 ] || stop_run "$1" task-state
+           emit "Collected: $1-$2"
+           gate_and_commit "$1" "$2" ;;
+        40) stop_run "$1" conflict ;;                          # T15 で redo_after_conflict に置き換える
+        *) stop_run "$1" "$(next_reason collect)" ;;           # dirty-tree・worktree
+    esac
+}
+
+# $1=ID $2=試行回数。品質ゲートを通し、コミットする(状態は in_review で、変更は本体にある)
+gate_and_commit() {
+    local vfile="$RUNS/review-$1-$2/verdict" type summary hash
+    type="$(sed -n 2p "$vfile" | tr -d '\r')"; summary="$(sed -n 3p "$vfile" | tr -d '\r')"
+    if [ "$(cfg_value verify_before_commit)" = true ]; then
+        case "$(gate_mode)" in
+            steps)
+                call quality-gate.sh --out-dir "$RUNS/$1-$2/gate"
+                case "$CALL_CODE" in
+                    0) tr -d '\r' < "$LAST" | sed -n 's/^FAIL \([^ ]*\) (non-blocking).*/\1/p' | while IFS= read -r s; do
+                           emit "Gate warning: $1 $s"; done ;;
+                    3) : ;;                               # 実行するステップが無い
+                    2) stop_run "$1" quality-gate ;;      # T15 で retry_after_gate に置き換える
+                    *) stop_run "$1" quality-gate-error ;;
+                esac ;;
+            test)
+                mkdir -p "$RUNS/$1-$2/gate"
+                if ! bash -c "$(cfg_value test_command)" < /dev/null > "$RUNS/$1-$2/gate/test_command.log" 2>&1; then
+                    cp "$RUNS/$1-$2/gate/test_command.log" "$LAST"
+                    stop_run "$1" quality-gate            # T15 で retry_after_gate に置き換える
+                fi ;;
+        esac
+    fi
+    case "$type" in feat|fix|refactor|docs|test|chore|perf|ci) ;; *) stop_run "$1" commit-format ;; esac
+    if [ -z "$summary" ] || [ "$summary" = "(list)" ]; then stop_run "$1" commit-format; fi
+    call task-commit.sh "$1" "$type" "$summary"
+    if [ "$CALL_CODE" -ne 0 ] || [ "$CALL_NEXT" != continue ]; then stop_run "$1" "$(next_reason commit)"; fi
+    hash="$(tr -d '\r' < "$LAST" | sed -n 's/^Committed: \([0-9a-f]*\) .*/\1/p' | tail -n 1)"
+    emit "Done: $1 $hash retries=$(state_field "$1" retries)"
+}
+
 # $1=ID。run-phase の段階に応じて1つ進める
 handle_task() {
     local phase n; read -r phase n <<< "$(phase_of "$1")"
@@ -228,8 +319,10 @@ handle_task() {
         running) poll_impl "$1" "$n" ;;
         review-start) start_review "$1" "$n" ;;
         reviewing)    poll_review "$1" "$n" ;;
+        collect) collect_task "$1" "$n" ;;
+        gate)    gate_and_commit "$1" "$n" ;;
+        retry)   stop_run "$1" not-implemented ;;   # T15 で置き換える
         manual)  stop_run "$1" manual "Next: review $1" ;;
-        collect|gate|retry) stop_run "$1" not-implemented ;;   # T14〜T15 で置き換える
         *)       stop_run "$1" unknown-phase ;;
     esac
 }
