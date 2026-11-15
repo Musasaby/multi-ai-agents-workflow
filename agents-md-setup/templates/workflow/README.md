@@ -451,6 +451,15 @@ PR が既にある場合は、子が未 push のコミットを push し、PR �
 (`dispatch-start --pr` が起動方法を渡すのに使う)。値が `cli`・`subagent` 以外(空を含む)なら
 使い方を stderr に出して exit 1(run ディレクトリは作らない)。ps1 では `-Pr` なしで `-Launcher` を付けても exit 1。
 
+`config.json` の `text_refine.mode` が `dispatch` のときは、`dispatch-pr-refine-template.md` から作った
+推敲の節を prompt.md の `{refine_instruction}` の位置に入れる(`dispatch` でなければ何も入れない)。
+推敲の対象は PR 本文(`runs/pr-<N>-1/pr-body.md`)で、`.agents/workflow/runs/refine/summary.md`
+(親が書いた完了時のサマリーの下書き)があれば `runs/pr-<N>-1/summary.md` に移して対象に加える。
+対象は `runs/pr-<N>-1/refine.txt` に `<場面> <入力のパス>` の形で1行ずつ書く。子は対象ごとに
+`text-refine <場面> <入力のパス> --request` で依頼文を受け取って推敲し、`--check` で確かめる。
+候補を直すか残すかは子が決める。PR 本文を推敲できたときは、推敲済みのファイル(`pr-body.refined.md`)で
+PR を作る。推敲に失敗しても PR は下書きの本文で作る。
+
 ```powershell
 .agents/workflow/scripts/dispatch-prompt-gen.ps1 -Pr [-Launcher cli|subagent]
 ```
@@ -771,6 +780,7 @@ exit code(複数に当たる場合は上の行を優先する):
 | `6` | `permission-denied` / `outside-access` | 権限拒否で中断(`Permission denied: yes`)、またはプロジェクト外アクセスの検出(`Outside access: yes`) |
 | `5` | `no-report` | 完了報告が無い・無効 |
 | `7` | `no-changes` | 完了報告はあるが作業ツリーに変更が無い(`pr-*` の run では判定しない) |
+| `9` | `refine-unchecked` / `refine-undecided` | PR 作成の run(`pr-*`)で、子の推敲を確かめられない・判断待ちの候補が残った(`refine.txt` がある run だけ。ほかの判定が ok のときに判定する) |
 | `0` | `ok` | 正常終了かつ完了報告あり |
 | `2` | — | done マーカーが無い(まだ実行中) |
 | `1` | — | 使い方不備、またはプロファイルを解決できない(stderr に原因を出す) |
@@ -830,6 +840,20 @@ exit code(複数に当たる場合は上の行を優先する):
 `0` 以外の場合はレビューに進まず、出力された内容をユーザーに報告する(`7` は、変更が無いのが
 正しいタスクに限り検証に進んでよい。詳細は `agent-dispatch` skill §2)。
 
+**PR 作成の run の推敲の確認**(`pr-*`): `runs/pr-<N>-1/refine.txt` があり、ほかの判定が `ok` のとき、
+行ごとに `text-refine <場面> <パス> --check` を実行する。結果を `Refine <場面>: <結果>` の行で出す。
+結果は次のいずれか。
+
+- `ok` — 推敲を確かめられた
+- `off` — 推敲しない設定(`text_refine.skill` が未設定等)
+- `skipped` — yomiyasu 以外の skill
+- `undecided` — 判断待ちの候補が残った(`Undecided:` の行も出す)
+- `unchecked` — 推敲済みファイルや記録が無い(`Unchecked:` の行も出す)
+
+`undecided`・`unchecked` が1つでもあれば exit 9 で、`Verdict:` と `Next: escalate reason=` は、
+`unchecked` があれば `refine-unchecked`、無ければ `refine-undecided` になる。それ以外は exit 0 で
+`Next: wait-merge`。
+
 ### dispatch-wait — 子の完了待ち
 
 run の完了をポーリングで待つ。1回の呼び出しで `--max-wait` 秒まで待ち、`done` マーカーが
@@ -850,7 +874,7 @@ run の完了をポーリングで待つ。1回の呼び出しで `--max-wait` �
 
 | exit | 意味 |
 |------|------|
-| `0` / `4`〜`8` | `done` があった。`dispatch-check` の結果のまま(上の表) |
+| `0` / `4`〜`9` | `done` があった。`dispatch-check` の結果のまま(上の表) |
 | `1` | 使い方不備、または run が起動されていない。サブエージェントの run(`runs/<ID>-<N>/launcher` が `subagent`)も exit 1(`dispatch-finish` を使う。`guard.sha256` の確認より前に判定する) |
 | `2` | まだ実行中(この呼び出しの待ちが `--max-wait` に達した)。最後の行は `Next: wait`。再度呼んで待ちを続ける |
 | `3` | 経過が `child_agent.timeout_seconds` を超えた。最後の行は `Next: escalate reason=timeout` |
