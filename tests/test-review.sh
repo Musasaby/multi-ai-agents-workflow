@@ -61,6 +61,30 @@ t_review_generates() {
     assert_contains "$prompt" "質問ファイルは作らない" "comprehension disabled instruction"
 }
 
+t_review_worktree() {
+    write_review_tasks
+    write_report T1 1
+    local wt
+    wt="$(py_path "$PROJ")/wt"
+    mkdir -p "$PROJ/.agents/workflow/runs/review-T1-1"
+    {
+        printf 'path %s\n' "$wt"
+        printf 'branch refs/heads/agents-run/T1-1\n'
+        printf 'base HEAD\n'
+    } > "$PROJ/.agents/workflow/runs/review-T1-1/worktree.txt"
+    run_script dispatch-prompt-gen.sh --review T1 1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    local prompt main_root
+    prompt="$(cat "$PROJ/.agents/workflow/runs/review-T1-1/prompt.md")"
+    main_root="$(py_path "$PROJ")"
+    assert_contains "$prompt" "## worktree でレビューする場合の追加の指示" "worktree section"
+    assert_contains "$prompt" "$wt" "worktree path"
+    assert_contains "$prompt" "$main_root/.agents/workflow/runs/T1-2/fix-notes.md" "fix notes path"
+    assert_contains "$prompt" "$main_root/.agents/workflow/runs/T1-1/report.md" "report path"
+    assert_not_contains "$prompt" "{workdir}" "workdir placeholder replaced"
+    assert_not_contains "$prompt" "{main_root}" "main_root placeholder replaced"
+}
+
 t_review_report_missing() {
     write_review_tasks
     run_script dispatch-prompt-gen.sh --review T1 1
@@ -86,6 +110,30 @@ t_check_review_pass() {
     assert_eq 0 "$CODE" "exit code: $ERR"
     assert_contains "$OUT" "Next: commit T1" "next commit"
     assert_contains "$OUT" "Review summary: 問題なし" "review summary"
+}
+
+t_check_review_type_valid() {
+    write_review_tasks
+    make_review_run $'## 完了報告\n- Verdict: pass\n- 指摘: なし\n- 要約: 問題なし\n- type: feat\n- fix-notes: なし\n- 理解確認: 対象外'
+    run_script dispatch-check.sh review-T1 1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "Review type: feat" "review type"
+    assert_eq "Next: commit T1" "$(printf '%s\n' "$OUT" | tail -1)" "last line"
+}
+
+t_check_review_type_invalid() {
+    write_review_tasks
+    make_review_run $'## 完了報告\n- Verdict: pass\n- 指摘: なし\n- 要約: 問題なし\n- fix-notes: なし\n- 理解確認: 対象外'
+    run_script dispatch-check.sh review-T1 1
+    assert_eq 0 "$CODE" "missing type -> exit 0: $ERR"
+    assert_contains "$OUT" "Review type: invalid" "missing type -> invalid"
+    assert_eq "Next: commit T1" "$(printf '%s\n' "$OUT" | tail -1)" "last line"
+
+    make_review_run $'## 完了報告\n- Verdict: pass\n- 指摘: なし\n- 要約: 問題なし\n- type: bogus\n- fix-notes: なし\n- 理解確認: 対象外'
+    run_script dispatch-check.sh review-T1 1
+    assert_eq 0 "$CODE" "bogus type -> exit 0: $ERR"
+    assert_contains "$OUT" "Review type: invalid" "bogus type -> invalid"
+    assert_eq "Next: commit T1" "$(printf '%s\n' "$OUT" | tail -1)" "last line"
 }
 
 t_check_review_fail_with_fix_notes() {
@@ -124,9 +172,12 @@ t_check_review_main_tree_changed() {
 
 echo "test-review.sh"
 test_case "review のプロンプトを生成する" t_review_generates
+test_case "worktree の run のレビューは絶対パスと追加の節を入れる" t_review_worktree
 test_case "report.md が無いと exit 2" t_review_report_missing
 test_case "理解確認が有効なら質問ファイルの指示を入れる" t_review_comprehension_enabled
 test_case "合格なら commit を出す" t_check_review_pass
+test_case "type が決まった値なら Review type に出す" t_check_review_type_valid
+test_case "type が無い・決まった値でなければ Review type は invalid" t_check_review_type_invalid
 test_case "不合格で fix-notes があれば retry を出す" t_check_review_fail_with_fix_notes
 test_case "不合格で fix-notes が無ければ no-report" t_check_review_fail_without_fix_notes
 test_case "Verdict が pass/fail 以外なら no-report" t_check_review_invalid_verdict

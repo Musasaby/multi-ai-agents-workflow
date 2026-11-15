@@ -191,6 +191,27 @@ function Initialize-ReviewProject {
     Write-Report -Id T1 -Attempt 1
 }
 
+# 未 collect の worktree の run を残したまま in_progress のタスクをレビューできる状態にする
+function Initialize-ReviewWorktreeProject {
+    Initialize-ReviewProject
+    Set-State 'T1:in_progress' 'T2:pending'
+    Set-StateBranch develop/t
+    Invoke-Script dispatch-worktree.ps1 create T1 1
+    Assert-Eq 0 $script:Code "worktree create: $($script:Err)"
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/T1-1/worktree/x.txt" "x`n"
+    Write-Utf8File "$script:Proj/.agents/review-worktree-child.ps1" @'
+Write-Output "## 完了報告"
+Write-Output "- Verdict: pass"
+Write-Output "- 指摘: 0件(なし)"
+Write-Output "- 要約: x を足す"
+Write-Output "- type: feat"
+Write-Output "- fix-notes: なし"
+Write-Output "- 理解確認: なし"
+'@
+    $stub = "$script:Proj/.agents/review-worktree-child.ps1".Replace('\', '/')
+    Set-ReviewCfg -Mode dispatch -CommandTemplate "pwsh -NoProfile -File `"$stub`" `"{prompt}`""
+}
+
 Invoke-TestCase "start: healthcheck_command が失敗すれば exit 30" {
     Initialize-StartProject 'T1:pending', 'T2:pending'
     Set-ChildCfg healthcheck_command 'exit 3'
@@ -401,6 +422,32 @@ Invoke-TestCase "start: review の run を起動する" {
     Assert-Eq in_review (Get-StateTask T1).status "T1 status"
     Wait-Done review-T1-1
     Assert-FileExists "$script:Proj/.agents/workflow/runs/review-T1-1/done" "done within 120s"
+}
+
+Invoke-TestCase "start: 未 collect の worktree の run を in_progress のままレビューする" {
+    Initialize-ReviewWorktreeProject
+    $wt = ([string]([System.IO.File]::ReadAllLines("$script:Proj/.agents/workflow/runs/T1-1/worktree.txt", [System.Text.Encoding]::UTF8) | Where-Object { $_ -like 'path *' } | Select-Object -First 1)).Substring(5).TrimEnd("`r")
+    Invoke-Script dispatch-start.ps1 -Review -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Out "Run: review-T1-1" "Run line"
+    Assert-Contains $script:Out "Worktree: $wt" "Worktree line"
+    Assert-Eq "Next: wait" ((Get-LastLine $script:Out).Trim()) "last line"
+    Assert-FileExists "$script:Proj/.agents/workflow/runs/review-T1-1/worktree.txt" "worktree.txt"
+    Assert-Eq in_progress (Get-StateTask T1).status "T1 status"
+    Wait-Done review-T1-1
+    Assert-FileExists "$script:Proj/.agents/workflow/runs/review-T1-1/done" "done within 120s"
+    Invoke-Script dispatch-check.ps1 '-TaskId' 'review-T1' '-Attempt' '1'
+    Assert-Eq 0 $script:Code "dispatch-check exit code: $($script:Err)"
+    Assert-Eq "Next: commit T1" ((Get-LastLine $script:Out).Trim()) "dispatch-check last line"
+}
+
+Invoke-TestCase "start: collect 済みの run は in_progress のままレビューできない" {
+    Initialize-ReviewWorktreeProject
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/T1-1/collected" ''
+    Invoke-Script dispatch-start.ps1 -Review -TaskId T1 -Attempt 1
+    Assert-Eq 21 $script:Code "exit code: $($script:Err)"
+    Assert-Eq "Next: escalate reason=task-status" ((Get-LastLine $script:Out).Trim()) "last line"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/runs/review-T1-1/prompt.md" "no prompt"
 }
 
 Invoke-TestCase "start: review.mode が dispatch でなければ起動しない" {

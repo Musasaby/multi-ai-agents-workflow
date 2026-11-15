@@ -50,6 +50,24 @@ Invoke-TestCase "review のプロンプトを生成する" {
     Assert-Contains $prompt "質問ファイルは作らない" "comprehension disabled instruction"
 }
 
+Invoke-TestCase "worktree の run のレビューは絶対パスと追加の節を入れる" {
+    Set-ReviewTasks
+    Set-Report -TaskId 'T1' -Attempt 1
+    $wt = "$script:Proj/wt".Replace('\', '/')
+    $null = New-Item -ItemType Directory -Force "$script:Proj/.agents/workflow/runs/review-T1-1"
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/review-T1-1/worktree.txt" "path $wt`nbranch refs/heads/agents-run/T1-1`nbase HEAD`n"
+    Invoke-Script dispatch-prompt-gen.ps1 '-Review' '-TaskId' 'T1' '-Attempt' '1'
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    $prompt = [System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/review-T1-1/prompt.md")
+    $mainRoot = "$script:Proj".Replace('\', '/')
+    Assert-Contains $prompt "## worktree でレビューする場合の追加の指示" "worktree section"
+    Assert-Contains $prompt $wt "worktree path"
+    Assert-Contains $prompt "$mainRoot/.agents/workflow/runs/T1-2/fix-notes.md" "fix notes path"
+    Assert-Contains $prompt "$mainRoot/.agents/workflow/runs/T1-1/report.md" "report path"
+    Assert-NotContains $prompt "{workdir}" "workdir placeholder replaced"
+    Assert-NotContains $prompt "{main_root}" "main_root placeholder replaced"
+}
+
 Invoke-TestCase "report.md が無いと exit 2" {
     Set-ReviewTasks
     Invoke-Script dispatch-prompt-gen.ps1 '-Review' '-TaskId' 'T1' '-Attempt' '1'
@@ -74,6 +92,30 @@ Invoke-TestCase "合格なら commit を出す" {
     Assert-Eq 0 $script:Code "exit code: $($script:Err)"
     Assert-Contains $script:Out "Next: commit T1" "next commit"
     Assert-Contains $script:Out "Review summary: 問題なし" "review summary"
+}
+
+Invoke-TestCase "type が決まった値なら Review type に出す" {
+    Set-ReviewTasks
+    New-ReviewRun "## 完了報告`n- Verdict: pass`n- 指摘: なし`n- 要約: 問題なし`n- type: feat`n- fix-notes: なし`n- 理解確認: 対象外"
+    Invoke-Script dispatch-check.ps1 '-TaskId' 'review-T1' '-Attempt' '1'
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Out "Review type: feat" "review type"
+    Assert-Eq "Next: commit T1" (($script:Out -split "`n")[-1]).Trim() "last line"
+}
+
+Invoke-TestCase "type が無い・決まった値でなければ Review type は invalid" {
+    Set-ReviewTasks
+    New-ReviewRun "## 完了報告`n- Verdict: pass`n- 指摘: なし`n- 要約: 問題なし`n- fix-notes: なし`n- 理解確認: 対象外"
+    Invoke-Script dispatch-check.ps1 '-TaskId' 'review-T1' '-Attempt' '1'
+    Assert-Eq 0 $script:Code "missing type -> exit 0: $($script:Err)"
+    Assert-Contains $script:Out "Review type: invalid" "missing type -> invalid"
+    Assert-Eq "Next: commit T1" (($script:Out -split "`n")[-1]).Trim() "last line"
+
+    New-ReviewRun "## 完了報告`n- Verdict: pass`n- 指摘: なし`n- 要約: 問題なし`n- type: bogus`n- fix-notes: なし`n- 理解確認: 対象外"
+    Invoke-Script dispatch-check.ps1 '-TaskId' 'review-T1' '-Attempt' '1'
+    Assert-Eq 0 $script:Code "bogus type -> exit 0: $($script:Err)"
+    Assert-Contains $script:Out "Review type: invalid" "bogus type -> invalid"
+    Assert-Eq "Next: commit T1" (($script:Out -split "`n")[-1]).Trim() "last line"
 }
 
 Invoke-TestCase "不合格で fix-notes があれば retry を出す" {

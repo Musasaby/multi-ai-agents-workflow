@@ -20,6 +20,7 @@
 # commit <ベースのタスクID>(レビューの run で Verdict が pass のとき)/
 # retry <ベースのタスクID>(レビューの run で Verdict が fail のとき)/
 # escalate reason=<理由>(refine-unchecked / refine-undecided を含む)。使い方不備の exit 1 では出さない)
+# レビューの run では `Review type:` に type(決まった値でなければ `invalid`)を出す
 # Windows にはシグナルの仕組みが無いため、dispatch-run.ps1 は signal:* を書き出さない
 # (強制終了は通常の非0終了として記録される)。POSIX 版が書き出した done も同じ規則で判定する。
 param(
@@ -509,13 +510,13 @@ $reportResult = Get-ReportResult $cleanLines $toolFlags $required
 # pass なら理解確認が有効なときに comprehension/<ベースID>.md があるかを確かめる
 function Get-ReviewFields {
     param([string[]]$Lines)
-    $values = @('', '', '')
+    $values = @('', '', '', '')
     $last = -1
     for ($i = 0; $i -lt $Lines.Count; $i++) { if ($Lines[$i] -match '^## 完了報告[ \t]*$') { $last = $i } }
     if ($last -lt 0) { return $values }
     $end = $Lines.Count - 1
     for ($i = $last + 1; $i -lt $Lines.Count; $i++) { if ($Lines[$i] -match '^## ') { $end = $i - 1; break } }
-    $targets = @('Verdict', '指摘', '要約')
+    $targets = @('Verdict', '指摘', '要約', 'type')
     for ($k = 0; $k -lt $targets.Count; $k++) {
         for ($i = $last + 1; $i -le $end; $i++) {
             $prefix = $null
@@ -534,6 +535,7 @@ function Get-ReviewFields {
 $reviewVerdict = ''
 $reviewFindings = ''
 $reviewSummary = ''
+$reviewType = ''
 $fixNotesPath = ''
 if ($isReview) {
     $fixNotesPath = ".agents/workflow/runs/$baseId-$($Attempt + 1)/fix-notes.md"
@@ -541,6 +543,10 @@ if ($isReview) {
     $reviewVerdict = "$($reviewFields[0])"
     $reviewFindings = "$($reviewFields[1])"
     $reviewSummary = "$($reviewFields[2])"
+    $reviewType = "$($reviewFields[3])"
+    if ($reviewType -cnotmatch '^(feat|fix|refactor|docs|test|chore|perf|ci)$') {
+        $reviewType = 'invalid'
+    }
     if ($reportResult -eq 'found') {
         if ($reviewVerdict -ne 'pass' -and $reviewVerdict -ne 'fail') {
             $reportResult = 'invalid (Verdict must be pass or fail)'
@@ -695,6 +701,7 @@ if ($isReview) {
     Write-Output "Review verdict: $reviewVerdict"
     Write-Output "Review findings: $reviewFindings"
     Write-Output "Review summary: $reviewSummary"
+    Write-Output "Review type: $reviewType"
     if ($fixNotesPath -and (Test-Path -LiteralPath $fixNotesPath -PathType Leaf)) {
         Write-Output "Fix notes: $fixNotesPath"
     } else {

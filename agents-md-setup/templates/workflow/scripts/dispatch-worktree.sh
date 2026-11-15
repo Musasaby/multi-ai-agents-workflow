@@ -5,7 +5,8 @@ set -uo pipefail
 # Usage: dispatch-worktree.sh <create|collect|remove|abort> <TaskId> <Attempt>
 #   RUN=.agents/workflow/runs/<TaskId>-<Attempt>、WT=$RUN/worktree、ブランチ=agents-run/<TaskId>-<Attempt>
 #   create : WT を HEAD から作る。試行回数が 2 以上なら、前の試行の変更を取り除いてから、
-#            新しい WT に 3way で持ち越す(前の試行に $RUN/collected が無ければ取り除かず持ち越さない)。
+#            新しい WT に 3way で持ち越す(前の試行に $RUN/collected が無ければ取り除かず持ち越さない。
+#            前の試行に collected が無くても、carry があれば取り除かずに持ち越す)。
 #            取り除いたら $RUN/reverted に前のパッチのパスを書く。$RUN/worktree.txt(path / branch / base の3行)を書く
 #   collect: WT の変更を $RUN/changes.patch にして本体へ git apply し、空の $RUN/collected を作って WT を消す。
 #            tasks.md の changed に無いファイルは `Undeclared: <path>` で出す
@@ -238,6 +239,9 @@ if [ "$ATTEMPT" -ge 2 ]; then
             fi
             CARRY="$PREV_PATCH"
         fi
+    elif [ -f "$PREV/carry" ] && [ -s "$PREV_PATCH" ]; then
+        # 未 collect の変更を持ち越す(本体には入っていないので、本体からは取り除かない)
+        CARRY="$PREV_PATCH"
     elif [ -e "$PREV_PATCH" ]; then
         NOT_COLLECTED="$PREV_PATCH"
     fi

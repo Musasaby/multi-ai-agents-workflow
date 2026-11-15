@@ -19,6 +19,7 @@
 │   ├── dispatch-pr-prompt-template.md   PR作成の単発依頼用(dispatch-prompt-gen --pr)
 │   ├── dispatch-pr-refine-template.md   PR作成の run に足す推敲の節(text_refine.mode が dispatch のとき)
 │   ├── dispatch-review-template.md  レビュー役の単発依頼用(dispatch-prompt-gen --review)
+│   ├── dispatch-review-worktree-template.md  レビューの run を worktree の中で動かすときに足す節
 │   ├── state-sync.ps1 / .sh
 │   ├── req-status.ps1 / .sh  要件ごとの充足状況の一覧(グループ・サイクル完了時の充足確認に使う)
 │   ├── next-task.ps1 / .sh
@@ -46,6 +47,7 @@
 │   ├── worktree.txt     worktree の path / branch / base の3行(dispatch-worktree create が作成、dispatch-run・dispatch-check が読む)
 │   ├── main-tree.txt    起動時の本体の未コミットの変更のパスとハッシュ(git-state --main-tree の出力。dispatch-run が worktree の run のとき作成、dispatch-check が本体の変更の検知に使う)
 │   ├── changes.patch    collect が worktree の変更から作る差分(本体へ git apply する)
+│   ├── carry            未 collect のこの試行の変更を次の試行に持ち越す印(workflow-run が書き、dispatch-worktree create が読む)
 │   ├── tmp/             子エージェントの一時ディレクトリ(TMPDIR・TEMP・TMP がここを指す。GIT_CEILING_DIRECTORIES はその親の runs/<タスクID>-<試行回数>/ を指す)
 │   ├── output.log       子エージェントの出力
 │   ├── done             完了マーカー(EXIT/END の2行)
@@ -474,8 +476,12 @@ PR を作る。推敲に失敗しても PR は下書きの本文で作る。
 (`{report_path}`)。置換するのは `{task_id}`・`{attempt}`・`{task_section}`・`{report_path}`・
 `{fix_notes_path}`(=`runs/<ID>-<N+1>/fix-notes.md`)・`{comprehension_instruction}`
 (config の `comprehension_check.enabled` が true なら理解確認の質問ファイルを作る指示、false なら
-作らない指示)。stdout に `RunId: review-<ID>` を出すので、`dispatch-run` に `review-<ID>` と `<N>` を
-渡して起動する。`--launcher <cli|subagent>`(ps1 は `-Launcher`)は PR モードと同じく
+作らない指示)。`runs/review-<ID>-<N>/worktree.txt` があるときは、完了報告・`fix-notes.md`・
+理解確認の質問ファイルのパスを本体の絶対パスにし、`dispatch-review-worktree-template.md` の節を
+末尾に足す。節は作業ディレクトリを worktree にし、`git status --porcelain` と `git diff HEAD` を
+その中で実行するよう指示する。worktree に持ち越した変更はステージされているため、レビュー役が
+読む差分は `git diff HEAD` になる。stdout に `RunId: review-<ID>` を出すので、`dispatch-run` に
+`review-<ID>` と `<N>` を渡して起動する。`--launcher <cli|subagent>`(ps1 は `-Launcher`)は PR モードと同じく
 `runs/review-<ID>-<N>/launcher` へ値を1行で書き、`subagent` ならサブエージェント用の節を足す。
 タスクIDの形式違反、tasks.md が無い、または tasks.md に該当タスクの節が無い場合は exit 1、
 完了報告 `report.md` が無い場合は exit 2(レビューできない)。ps1 では `-Review` と
@@ -540,7 +546,8 @@ exit 60 のときは、`dispatch-run` のプロセスが動いていないこと
 
 1. `branch-check --state`(非0なら `Next:` 行を流して止める)
 2. `review.mode` が `dispatch` か(違えば exit 23)
-3. タスクの状態が `in_review` か(違えば exit 21)
+3. タスクが `in_review` か、または `in_progress` で、その試行の run(`runs/<ID>-<N>/`)に
+   `worktree.txt` があり `collected` が無いこと(それ以外は exit 21)
 4. launcher の決定(`--subagent-capable` があるときだけ。`review.subagent` が `always` なら
    `subagent`、`never` なら `cli`、それ以外(`auto`)は `review-<ID>` のプロファイルが
    `claude-stream-json` のときだけ `subagent`)。省略時は `cli`
@@ -548,6 +555,11 @@ exit 60 のときは、`dispatch-run` のプロセスが動いていないこと
 6. `dispatch-prompt-gen --review <ID> <N> --launcher <値>`(stdout の `RunId: review-<ID>`)
 7. `dispatch-run` に `review-<ID>` と `<N>` を渡してデタッチ起動する(`--subagent-capable` かつ
    launcher が `subagent` なら `dispatch-run --prepare-only` を同期で実行し `Next: subagent review-<ID> <N>`)
+
+`in_review` のタスクは今までどおり本体でレビューする。`in_progress` で未 collect の
+worktree の run をレビューするときは、`worktree.txt` を `runs/review-<ID>-<N>/` に写し、
+レビュー役は worktree の中で動く。成功時の stdout には `Worktree: <パス>` 行が加わる。
+この起動のしかたは `workflow-run` が使う。タスクの状態は変えない。
 
 行わないこと: 作業ツリーの確認・worktree の作成(`max_parallel` が 2 以上でも同じ)・
 疎通確認・ウォームアップ・`task-state`。レビュー役は状態を変えず、コードも変えない
@@ -562,7 +574,7 @@ exit 60 のときは、`dispatch-run` のプロセスが動いていないこと
 | `1` | 使い方不備 |
 | `11`〜`15` | `branch-check --state` の exit 1〜5(stdout の `Next:` 行はそのまま流す) |
 | `20` | 作業ツリーが汚れている(リトライで fix-notes.md がある場合を除く。`reason=dirty-tree`) |
-| `21` | タスクの状態が不正(`pending` / `in_progress` 以外、タスク無しを含む。`--review` では `in_review` 以外。`reason=task-status`) |
+| `21` | タスクの状態が不正(`pending` / `in_progress` 以外、タスク無しを含む。`--review` では `in_review` ではなく、`in_progress` で未 collect の worktree の run も無い場合。`reason=task-status`) |
 | `23` | `--review` なのに config.json の `review.mode` が `dispatch` でない(`reason=review-mode`) |
 | `24` | `--review` で launcher が `cli` なのに `review.command_template` が空(`reason=review-config`) |
 | `30` / `31` | 疎通確認 / ウォームアップの失敗(`reason=healthcheck` / `warmup`。出力の末尾20行を stderr に出す) |
@@ -684,7 +696,7 @@ sh 版では位置引数の前でも後でも指定できる。
 `Provider error:`)、完了報告の判定(`Completion report:`)、変更件数(`Changes:`)、
 `git status --porcelain`、`git diff --stat`、`output.log` の末尾30行をまとめて出力する。
 レビューの run(`review-*`)では、これに `Review verdict:`・`Review findings:`・`Review summary:`・
-`Fix notes:` の4行を加える(後述)。
+`Review type:`・`Fix notes:` の5行を加える(後述)。
 
 - **改ざん検知**: `dispatch-run` は起動時に `prompt.md`・`state.json`・`tasks.md`・`config.json`・
   `.agents/workflow/child-profiles.json` の
@@ -817,7 +829,9 @@ exit code(複数に当たる場合は上の行を優先する):
 
 **レビューの run**(`review-*`): 終了状態・改ざん検知などは通常の run と同じ。加えて次を判定する。
 
-- **完了報告の必須項目**: `Verdict`・`指摘`・`要約`・`fix-notes`・`理解確認` の5つ(`Completion report:` で判定)
+- **完了報告の必須項目**: `Verdict`・`指摘`・`要約`・`fix-notes`・`理解確認` の5つ(`Completion report:` で判定)。
+  `type` も項目にあるが必須ではなく、無い・決まった値でないときは `Review type: invalid` になる。
+  `要約` と `type` は、コミットメッセージ(`<type>: <要約>`)に使われることがある(`workflow-run` の経路)
 - **追加の検証**: 完了報告が有効なとき、`Verdict` が `pass` / `fail` 以外なら
   `invalid (Verdict must be pass or fail)`、`fail` なのに
   `.agents/workflow/runs/<ID>-<N+1>/fix-notes.md` が無ければ `invalid (fix-notes not found: <パス>)`、
@@ -833,7 +847,9 @@ exit code(複数に当たる場合は上の行を優先する):
   (`main-tree.txt` が無いのも改ざん)。レビュー役はコードを変えないため、本体の変更は tampered(exit 8)
   になる
 - **出力**: 通常の行に加えて `Review verdict:`(pass / fail)・`Review findings:`(`指摘` の値)・
-  `Review summary:`(`要約` の値)・`Fix notes:`(`fix-notes.md` があればそのパス、無ければ `none`)の4行を出す
+  `Review summary:`(`要約` の値)・`Review type:`(feat / fix / refactor / docs / test / chore / perf / ci の
+  どれか。それ以外や項目が無いときは `invalid`)・`Fix notes:`(`fix-notes.md` があればそのパス、無ければ
+  `none`)の5行を出す。`Review type:` は表示だけで、exit code と `Next:` 行は変わらない
 - **Next**: exit 0 で `Verdict` が `pass` なら `Next: commit <ID>`(品質ゲートとコミットへ)、`fail` なら
   `Next: retry <ID>`(`fix-notes.md` は書かれているので次の試行で子に渡す)
 
@@ -914,7 +930,9 @@ run の完了をポーリングで待つ。1回の呼び出しで `--max-wait` �
 
 - `create`: WT を HEAD から作る。試行回数が 2 以上で、前の試行に `collected`(collect が成功した印)があれば、
   前の試行の変更(`changes.patch`)を本体から取り除き(取り除いたら `$RUN/reverted` に前のパッチのパスを書く)、
-  新しい WT に 3way で持ち越す。`collected` が無い前の試行(collect が衝突・失敗して取り込まれなかった)の変更は
+  新しい WT に 3way で持ち越す。`collected` が無くても、前の試行に `carry`(未 collect の変更を次の試行に
+  持ち越す印)があれば、前の試行の変更は本体に入っていないため本体から取り除かずに、新しい WT に 3way で
+  持ち越す。`collected` も `carry` も無い前の試行(collect が衝突・失敗して取り込まれなかった)の変更は
   本体に無いので持ち越さない。stdout に `Carried: <パッチ>` / `Carried: none` /
   `Carried: none (not collected: <前のパッチのパス>)` のどれかと、`Worktree: <パス>`、`Branch: <名前>` を出す。
   持ち越しが衝突したら exit 40 で、WT・ブランチを残さず、取り除いた変更を本体に戻す

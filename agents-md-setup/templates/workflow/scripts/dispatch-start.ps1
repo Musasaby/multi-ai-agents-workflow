@@ -15,8 +15,10 @@
 #   -Review: レビューの run(review-<ID>-<N>)を起動する。-Attempt の省略時は state.json のそのタスクの
 #     retries + 1。review.mode が dispatch でなければ exit 23、タスクの状態が in_review でなければ exit 21、
 #     launcher が cli で review.command_template が空なら exit 24。作業ツリーの確認・worktree の作成・
-#     疎通確認・ウォームアップ・task-state は行わない。起動方法は review.subagent(always / never /
-#     それ以外は auto)と review-<ID> のプロファイルで決める
+#     疎通確認・ウォームアップ・task-state は行わない。
+#     タスクが in_progress でも、その試行の run に worktree.txt があり collected が無ければ、
+#     worktree.txt をレビューの run に写して worktree の中でレビューする
+#     起動方法は review.subagent(always / never / それ以外は auto)と review-<ID> のプロファイルで決める
 # config.json の max_parallel が 2 以上で -Pr でないときは、作業ツリーの確認を飛ばし、
 # タスクの状態の確認の後に dispatch-worktree create で worktree の run にする(Carried: 行と Worktree: 行を出す)
 # exit:
@@ -142,6 +144,7 @@ if ($Review) {
 
 # 3. タスクの状態
 $status = ''
+$preCollect = $false
 if (-not $Pr) {
     try {
         $state = Get-Content '.agents/workflow/state.json' -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json
@@ -154,7 +157,11 @@ if (-not $Pr) {
 if ($Pr) {
     # 確認しない
 } elseif ($Review) {
-    if ($status -ne 'in_review') {
+    # in_progress でも、その試行の run が worktree でまだ collect されていなければレビューできる
+    $taskRunDir = ".agents/workflow/runs/$TaskId-$Attempt"
+    if ($status -eq 'in_progress' -and (Test-Path -LiteralPath "$taskRunDir/worktree.txt" -PathType Leaf) -and -not (Test-Path -LiteralPath "$taskRunDir/collected" -PathType Leaf)) {
+        $preCollect = $true
+    } elseif ($status -ne 'in_review') {
         $shown = if ($status) { $status } else { '<absent>' }
         [Console]::Error.WriteLine("Task $TaskId cannot be reviewed (status: $shown)")
         Write-Output "Next: escalate reason=task-status"
@@ -287,6 +294,16 @@ if (-not $Pr -and -not $Review -and $launcher -eq 'cli' -and $warmup -and -not (
     }
 }
 
+# 未 collect の worktree の run をレビューするときは、worktree.txt をレビューの run に写す
+# (dispatch-prompt-gen -Review が worktree 用のプロンプトを作り、dispatch-run が worktree の中で動かす)
+$preCollectWt = ''
+if ($preCollect) {
+    New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+    Copy-Item -LiteralPath "$taskRunDir/worktree.txt" -Destination "$runDir/worktree.txt" -Force
+    $wtLine = [System.IO.File]::ReadAllLines((Join-Path (Get-Location).Path "$runDir/worktree.txt")) | Where-Object { $_ -like 'path *' } | Select-Object -First 1
+    if ($wtLine) { $preCollectWt = ([string]$wtLine).Substring(5).TrimEnd("`r") }
+}
+
 # 4. プロンプト生成
 if ($Pr) {
     $genOut = @(& pwsh -NoProfile -File "$PSScriptRoot/dispatch-prompt-gen.ps1" -Pr -Launcher $launcher)
@@ -337,6 +354,7 @@ if ($launcher -eq 'subagent') {
     $subModel = if ($Review) { Get-ReviewCfg 'subagent_model' } else { Get-ChildCfg 'subagent_model' }
     if (-not $subModel) { $subModel = 'default' }
     Write-Output "Run: $runTaskId-$Attempt"
+    if ($preCollect) { Write-Output "Worktree: $preCollectWt" }
     Write-Output "Launcher: subagent"
     Write-Output "Prompt: $rootAbs/$runDir/prompt.md"
     Write-Output "Workdir: $workdir"
@@ -364,6 +382,7 @@ while (-not (Test-Path -LiteralPath "$runDir/guard.sha256" -PathType Leaf)) {
 }
 
 Write-Output "Run: $runTaskId-$Attempt"
+if ($preCollect) { Write-Output "Worktree: $preCollectWt" }
 Write-Output "Launcher: cli"
 Write-Output "Log: $runDir/output.log"
 Write-Output "Watch: Get-Content $runDir/output.log -Wait -Tail 20"

@@ -50,6 +50,21 @@ function Add-WorktreeSection {
     [System.IO.File]::WriteAllText($promptFile, $text, [System.Text.UTF8Encoding]::new($false))
 }
 
+# runs/review-<ID>-<N>/worktree.txt がある run は、prompt.md の末尾に worktree でレビューする節を足す
+function Add-ReviewWorktreeSection {
+    param([string]$RunDirPath, [string]$WorktreePath)
+    if (-not $WorktreePath) { return }
+    $workdir = $WorktreePath.Replace('\', '/').TrimEnd('/')
+    $mainRoot = "$Root".Replace('\', '/').TrimEnd('/')
+    $section = Get-Content "$PSScriptRoot/dispatch-review-worktree-template.md" -Raw -Encoding UTF8
+    $section = $section.Replace('{workdir}', $workdir)
+    $section = $section.Replace('{main_root}', $mainRoot)
+    $promptFile = Join-Path $RunDirPath 'prompt.md'
+    $text = [System.IO.File]::ReadAllText($promptFile, [System.Text.Encoding]::UTF8)
+    $text = $text.TrimEnd("`n", "`r") + "`n`n" + $section.Replace("`r`n", "`n")
+    [System.IO.File]::WriteAllText($promptFile, $text, [System.Text.UTF8Encoding]::new($false))
+}
+
 # runs/<ID>-<N>/launcher が subagent の run は、prompt.md の末尾にサブエージェント用の節を足す
 function Add-SubagentSection {
     param([string]$RunDirPath)
@@ -110,6 +125,19 @@ if ($Review) {
         if ($reviewInSection) { $reviewSectionLines += $line }
     }
     $reviewTaskSection = ($reviewSectionLines -join "`n").TrimEnd("`r", "`n")
+    # worktree の中でレビューする run は、材料のパスを本体の絶対パスにする
+    $reviewRunDir = "$RunsBase/review-$TaskId-$Attempt"
+    $reviewWt = ''
+    $reviewWtFile = "$reviewRunDir/worktree.txt"
+    if (Test-Path -LiteralPath $reviewWtFile -PathType Leaf) {
+        foreach ($l in (Get-Content -LiteralPath $reviewWtFile -Encoding UTF8)) {
+            if ($l -match '^path (.+)$') { $reviewWt = $Matches[1].Trim(); break }
+        }
+    }
+    $pathPrefix = ''
+    if ($reviewWt) {
+        $pathPrefix = "$Root".Replace('\', '/').TrimEnd('/') + '/'
+    }
     # 理解確認の指示: config の comprehension_check.enabled で切り替える
     $ccEnabled = $false
     $ccCount = 3
@@ -122,11 +150,10 @@ if ($Review) {
         }
     } catch {}
     if ($ccEnabled) {
-        $comprehensionInstruction = 'pass のときだけ、`.agents/skills/agent-review-commit/references/comprehension-questions.md` の手順4の観点で ' + $ccCount + ' 問の質問を作り、`.agents/skills/agent-comprehension-check/SKILL.md` の「質問ファイルのフォーマット」に従って ' + '`.agents/workflow/comprehension/' + $TaskId + '.md` に書く。`## 解説` 見出しは含めない'
+        $comprehensionInstruction = 'pass のときだけ、`' + $pathPrefix + '.agents/skills/agent-review-commit/references/comprehension-questions.md` の手順4の観点で ' + $ccCount + ' 問の質問を作り、`' + $pathPrefix + '.agents/skills/agent-comprehension-check/SKILL.md` の「質問ファイルのフォーマット」に従って ' + '`' + $pathPrefix + '.agents/workflow/comprehension/' + $TaskId + '.md` に書く。`## 解説` 見出しは含めない'
     } else {
         $comprehensionInstruction = '質問ファイルは作らない(完了報告の理解確認は なし)'
     }
-    $reviewRunDir = "$RunsBase/review-$TaskId-$Attempt"
     $reviewPromptPath = "$reviewRunDir/prompt.md"
     $fixNotesRel = ".agents/workflow/runs/$TaskId-$($Attempt + 1)/fix-notes.md"
     $null = New-Item -ItemType Directory -Force $reviewRunDir
@@ -134,13 +161,14 @@ if ($Review) {
     $reviewText = $reviewTemplate.Replace('{task_id}', $TaskId)
     $reviewText = $reviewText.Replace('{attempt}', "$Attempt")
     $reviewText = $reviewText.Replace('{task_section}', $reviewTaskSection)
-    $reviewText = $reviewText.Replace('{report_path}', $reportRel)
-    $reviewText = $reviewText.Replace('{fix_notes_path}', $fixNotesRel)
+    $reviewText = $reviewText.Replace('{report_path}', "$pathPrefix$reportRel")
+    $reviewText = $reviewText.Replace('{fix_notes_path}', "$pathPrefix$fixNotesRel")
     $reviewText = $reviewText.Replace('{comprehension_instruction}', $comprehensionInstruction)
     [System.IO.File]::WriteAllText($reviewPromptPath, $reviewText, [System.Text.UTF8Encoding]::new($false))
     if ($Launcher) {
         [System.IO.File]::WriteAllText("$reviewRunDir/launcher", "$Launcher`n", [System.Text.UTF8Encoding]::new($false))
     }
+    Add-ReviewWorktreeSection $reviewRunDir $reviewWt
     Add-SubagentSection $reviewRunDir
     Write-Output "Generated: $reviewPromptPath"
     Write-Output "RunId: review-$TaskId"

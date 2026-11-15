@@ -24,6 +24,7 @@ set -uo pipefail
 # commit <ベースのタスクID>(レビューの run で Verdict が pass のとき)/
 # retry <ベースのタスクID>(レビューの run で Verdict が fail のとき)/
 # escalate reason=<理由>(refine-unchecked / refine-undecided を含む)。使い方不備の exit 1 では出さない)
+# レビューの run では `Review type:` に type(決まった値でなければ `invalid`)を出す
 
 TASK_ID="${1:?Usage: dispatch-check.sh <TaskId> [Attempt]}"
 ATTEMPT="${2:-1}"
@@ -555,6 +556,7 @@ REPORT_RESULT="$(printf '%s\n' "$RAW_LOG" | TOOL_ACTIVITY_RE="$TOOL_ACTIVITY_RE"
 REVIEW_VERDICT=""
 REVIEW_FINDINGS=""
 REVIEW_SUMMARY=""
+REVIEW_TYPE=""
 FIX_NOTES_PATH=""
 if [ "$IS_REVIEW" = true ]; then
     FIX_NOTES_PATH=".agents/workflow/runs/${BASE_ID}-$((ATTEMPT + 1))/fix-notes.md"
@@ -569,8 +571,8 @@ if [ "$IS_REVIEW" = true ]; then
             if (!last) exit
             end = NR
             for (i = last + 1; i <= NR; i++) if (lines[i] ~ /^## /) { end = i - 1; break }
-            target[1] = "Verdict"; target[2] = "指摘"; target[3] = "要約"
-            for (k = 1; k <= 3; k++) {
+            target[1] = "Verdict"; target[2] = "指摘"; target[3] = "要約"; target[4] = "type"
+            for (k = 1; k <= 4; k++) {
                 value = ""
                 for (i = last + 1; i <= end; i++) {
                     plen = 0
@@ -588,6 +590,10 @@ if [ "$IS_REVIEW" = true ]; then
     REVIEW_VERDICT="$(printf '%s\n' "$REVIEW_FIELDS" | sed -n '1p')"
     REVIEW_FINDINGS="$(printf '%s\n' "$REVIEW_FIELDS" | sed -n '2p')"
     REVIEW_SUMMARY="$(printf '%s\n' "$REVIEW_FIELDS" | sed -n '3p')"
+    REVIEW_TYPE="$(printf '%s\n' "$REVIEW_FIELDS" | sed -n '4p')"
+    if ! printf '%s\n' "$REVIEW_TYPE" | grep -qxE 'feat|fix|refactor|docs|test|chore|perf|ci'; then
+        REVIEW_TYPE=invalid
+    fi
     if [ "$REPORT_RESULT" = found ]; then
         if [ "$REVIEW_VERDICT" != pass ] && [ "$REVIEW_VERDICT" != fail ]; then
             REPORT_RESULT="invalid (Verdict must be pass or fail)"
@@ -761,6 +767,7 @@ if [ "$IS_REVIEW" = true ]; then
     echo "Review verdict: ${REVIEW_VERDICT}"
     echo "Review findings: ${REVIEW_FINDINGS}"
     echo "Review summary: ${REVIEW_SUMMARY}"
+    echo "Review type: ${REVIEW_TYPE}"
     if [ -n "$FIX_NOTES_PATH" ] && [ -f "$FIX_NOTES_PATH" ]; then
         echo "Fix notes: ${FIX_NOTES_PATH}"
     else

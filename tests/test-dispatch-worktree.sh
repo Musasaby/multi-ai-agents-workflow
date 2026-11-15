@@ -261,6 +261,22 @@ t_create_after_collect_conflict() {
     assert_file_exists "$run/changes.patch" "試行 1 の changes.patch がある"
 }
 
+t_create_carry_uncollected() {
+    setup_collect
+    local run1="$PROJ/.agents/workflow/runs/T1-1"
+    printf 'line1\nfromwt\n' > "$WTDIR/base.txt"
+    : > "$run1/carry"
+
+    run_script dispatch-worktree.sh create T1 2
+    assert_eq 0 "$CODE" "create 2 exit: $ERR"
+    assert_contains "$OUT" "Carried: " "前の試行の変更を持ち越す"
+    assert_contains "$OUT" "T1-1/changes.patch" "試行 1 のパッチを持ち越す"
+    assert_not_contains "$OUT" "Carried: none" "Carried: none ではない"
+    assert_eq "line1 fromwt" "$(tr -d '\r' < "$PROJ/.agents/workflow/runs/T1-2/worktree/base.txt" | tr '\n' ' ' | sed 's/ $//')" "試行 2 の worktree に書き換えが入る"
+    assert_eq "" "$(git -C "$PROJ" status --porcelain)" "本体の git status は空のまま"
+    assert_file_absent "$WTDIR" "試行 1 の worktree は消える"
+}
+
 t_create_carry_conflict() {
     setup_collect
     local run="$PROJ/.agents/workflow/runs/T1-1"
@@ -610,6 +626,7 @@ test_case "dispatch-worktree: collect で変更が本体に入り worktree が�
 test_case "dispatch-worktree: collect で本体と衝突すると exit 40 で worktree が残る" t_collect_conflict
 test_case "dispatch-worktree: collect が成功すると collected ができる" t_collect_marks_collected
 test_case "dispatch-worktree: collect の衝突の後の create は前の試行を持ち越さない" t_create_after_collect_conflict
+test_case "dispatch-worktree: carry があれば未 collect の前の試行の変更を持ち越す" t_create_carry_uncollected
 test_case "dispatch-worktree: create で持ち越しが衝突すると exit 40 で WT・ブランチが残らず本体が戻る" t_create_carry_conflict
 test_case "dispatch-worktree: abort で worktree・ブランチ・worktree.txt が消える" t_abort
 test_case "dispatch-worktree: abort で reverted のパッチが本体に当たり reverted が消える" t_abort_reapply
