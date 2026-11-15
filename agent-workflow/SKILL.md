@@ -139,8 +139,7 @@ PR を更新してから報告する。
 - 報告の形は `references/report-template.md` に従う
 - **タスク1件が done になったとき**(リトライ途中は報告しない)に最低限報告する項目:
   タスクID・結果(done)、コミットハッシュ(コミット済みの場合)、リトライ回数。
-  テンプレートの該当場面に従って `.agents/workflow/runs/refine/task_done.md` に下書きし、
-  場面 `task_done` の推敲を通してから報告する
-- ユーザーに判断を求めて停止するときは、場面 `confirm`(`.agents/workflow/runs/refine/confirm.md`)の
-  推敲を通してから報告する
-- 報告が短くなりすぎた・状況が分からなくなったときは `workflow-status` を実行し、その出力からテンプレートの形で報告し直す
+  `.agents/workflow/runs/refine/task_done.md` に下書きし、場面 `task_done` の推敲を通してから報告する
+  (`workflow-run` の経路では `Done:` の行をそのまま伝える)
+- 停止して判断を仰ぐときは、場面 `confirm` の推敲を通してから報告する
+- 報告が短すぎる・状況が分からないときは `workflow-status` の出力からテンプレートの形で報告し直す
