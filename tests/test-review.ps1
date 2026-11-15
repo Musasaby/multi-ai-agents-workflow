@@ -50,6 +50,24 @@ Invoke-TestCase "review のプロンプトを生成する" {
     Assert-Contains $prompt "質問ファイルは作らない" "comprehension disabled instruction"
 }
 
+Invoke-TestCase "worktree の run のレビューは絶対パスと追加の節を入れる" {
+    Set-ReviewTasks
+    Set-Report -TaskId 'T1' -Attempt 1
+    $wt = "$script:Proj/wt".Replace('\', '/')
+    $null = New-Item -ItemType Directory -Force "$script:Proj/.agents/workflow/runs/review-T1-1"
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/review-T1-1/worktree.txt" "path $wt`nbranch refs/heads/agents-run/T1-1`nbase HEAD`n"
+    Invoke-Script dispatch-prompt-gen.ps1 '-Review' '-TaskId' 'T1' '-Attempt' '1'
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    $prompt = [System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/review-T1-1/prompt.md")
+    $mainRoot = "$script:Proj".Replace('\', '/')
+    Assert-Contains $prompt "## worktree でレビューする場合の追加の指示" "worktree section"
+    Assert-Contains $prompt $wt "worktree path"
+    Assert-Contains $prompt "$mainRoot/.agents/workflow/runs/T1-2/fix-notes.md" "fix notes path"
+    Assert-Contains $prompt "$mainRoot/.agents/workflow/runs/T1-1/report.md" "report path"
+    Assert-NotContains $prompt "{workdir}" "workdir placeholder replaced"
+    Assert-NotContains $prompt "{main_root}" "main_root placeholder replaced"
+}
+
 Invoke-TestCase "report.md が無いと exit 2" {
     Set-ReviewTasks
     Invoke-Script dispatch-prompt-gen.ps1 '-Review' '-TaskId' 'T1' '-Attempt' '1'
