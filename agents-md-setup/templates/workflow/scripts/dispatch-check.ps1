@@ -12,12 +12,14 @@
 #     最後のツール実行の後に出力が無い場合は、その旨を理由に書く
 #   7=変更0件(完了報告はあるが作業ツリーに変更が無い。PR 作成の run(pr-*)と
 #     レビューの run(review-*)では判定しない)
+#   9=PR 作成の run(pr-*)で、子の推敲を確かめられない・判断待ちの候補が残った(refine.txt がある
+#     run だけ。ほかの判定が ok のときに判定する)
 #   0=正常終了かつ完了報告あり / 2=done マーカーが無い(まだ実行中) / 1=使い方不備
 # stdout の最後の行には次のアクションを示す `Next:` 行を出す(wait / review <TaskId> /
 # collect <TaskId>(worktree の run で正常のとき)/
 # commit <ベースのタスクID>(レビューの run で Verdict が pass のとき)/
 # retry <ベースのタスクID>(レビューの run で Verdict が fail のとき)/
-# escalate reason=<理由>。使い方不備の exit 1 では出さない)
+# escalate reason=<理由>(refine-unchecked / refine-undecided を含む)。使い方不備の exit 1 では出さない)
 # Windows にはシグナルの仕組みが無いため、dispatch-run.ps1 は signal:* を書き出さない
 # (強制終了は通常の非0終了として記録される)。POSIX 版が書き出した done も同じ規則で判定する。
 param(
@@ -581,6 +583,46 @@ if ($guardIssues.Count -gt 0) {
     $verdict = 'ok'; $code = 0
 }
 
+# --- PR 作成の run(pr-*)の推敲の確認 ---
+$refineLines = [System.Collections.Generic.List[string]]::new()
+$refineWorst = ''   # 空 / undecided / unchecked(unchecked を優先する)
+if ($isPr -and $code -eq 0 -and (Test-Path -LiteralPath "$runDir/refine.txt" -PathType Leaf)) {
+    foreach ($refineLine in [System.IO.File]::ReadAllLines((Join-Path (Get-Location) "$runDir/refine.txt"))) {
+        # 空行は飛ばし、最初の空白で場面とパスに分ける
+        $trimmed = $refineLine.Trim()
+        if ($trimmed -eq '') { continue }
+        $parts = @($trimmed -split '\s+', 2)
+        $scene = $parts[0]
+        $path = if ($parts.Count -gt 1) { $parts[1] } else { '' }
+        $rOut = @(& pwsh -NoProfile -File "$PSScriptRoot/text-refine.ps1" $scene $path -Check 2>$null)
+        $rCode = $LASTEXITCODE
+        # 結果を決める
+        if ($rCode -eq 0 -and $rOut -ccontains 'Refine: off') {
+            $rResult = 'off'
+        } elseif ($rCode -eq 0 -and $rOut -ccontains 'Check: skipped') {
+            $rResult = 'skipped'
+        } elseif ($rCode -eq 0) {
+            $rResult = 'ok'
+        } elseif ($rCode -eq 2) {
+            $rResult = 'undecided'
+        } else {
+            $rResult = 'unchecked'
+        }
+        $refineLines.Add("Refine ${scene}: ${rResult}")
+        if ($rResult -eq 'undecided' -or $rResult -eq 'unchecked') {
+            foreach ($e in @($rOut | Where-Object { $_.StartsWith('Undecided: ', [StringComparison]::Ordinal) -or $_.StartsWith('Unchecked: ', [StringComparison]::Ordinal) })) {
+                $refineLines.Add($e)
+            }
+        }
+        if ($rResult -eq 'unchecked') {
+            $refineWorst = 'unchecked'
+        } elseif ($rResult -eq 'undecided' -and $refineWorst -cne 'unchecked') {
+            $refineWorst = 'undecided'
+        }
+    }
+    if ($refineWorst -ne '') { $verdict = "refine-$refineWorst"; $code = 9 }
+}
+
 # --- 完了報告の report.md への書き出し($code が 0・7 = 完了報告が有効で改ざん・異常終了が無いとき) ---
 # ブロックの範囲は Get-ReportResult と同じ: 最後の `## 完了報告` 行から、その後の最初の `## ` 行の
 # 直前(無ければ末尾)まで。ANSI エスケープを除いた行で範囲を判定して書き出し、ブロック末尾の空行は
@@ -659,6 +701,9 @@ if ($isReview) {
         Write-Output "Fix notes: none"
     }
 }
+if ($refineLines.Count -gt 0) {
+    $refineLines | ForEach-Object { Write-Output $_ }
+}
 Write-Output "--- git status --porcelain"
 git @gitArgs status --porcelain
 Write-Output "--- git diff --stat"
@@ -700,6 +745,7 @@ $next = switch ($code) {
         break
     }
     7 { 'escalate reason=no-changes'; break }
+    9 { "escalate reason=refine-$refineWorst"; break }
 }
 Write-Output "Next: $next"
 

@@ -28,6 +28,14 @@ function Initialize-Branch {
     Write-Utf8File "$script:Proj/.agents/workflow/state.json" ($state | ConvertTo-Json -Depth 10)
 }
 
+function Set-RefineMode {
+    param([string]$Mode)
+    $cfgPath = "$script:Proj/.agents/workflow/config.json"
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $cfg.text_refine | Add-Member -NotePropertyName mode -NotePropertyValue $Mode -Force
+    Write-Utf8File $cfgPath ($cfg | ConvertTo-Json -Depth 10)
+}
+
 Write-Host "test-pr.ps1"
 
 Invoke-TestCase "pr: プロンプト生成" {
@@ -138,6 +146,45 @@ Invoke-TestCase "pr: 要件の節が無ければなしと書く" {
     $prompt = [System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/pr-1-1/prompt.md")
     Assert-Contains $prompt "- なし(tasks.md に要件の節が無い、またはこの PR のタスクに対応する要件が無い)" "none text"
     Assert-NotContains $prompt "{requirement_list}" "placeholder replaced"
+}
+
+Invoke-TestCase "pr: text_refine.mode が dispatch なら推敲の節と refine.txt を書く" {
+    Initialize-Branch
+    Set-RefineMode 'dispatch'
+    Invoke-Script dispatch-prompt-gen.ps1 '-Pr'
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    $runDir = "$script:Proj/.agents/workflow/runs/pr-1-1"
+    $prompt = [System.IO.File]::ReadAllText("$runDir/prompt.md")
+    Assert-Contains $prompt "## 推敲(pr_body)" "pr_body refine section"
+    Assert-NotContains $prompt "## 推敲(summary)" "no summary refine section"
+    Assert-Contains $prompt "text-refine.ps1 pr_body .agents/workflow/runs/pr-1-1/pr-body.md -Request" "request command"
+    Assert-Contains $prompt "pr-body.refined.md" "refined output path"
+    Assert-NotContains ($prompt.Replace('{owner}/{repo}', '')) "{" "all placeholders replaced except {owner}/{repo}"
+    Assert-Eq "pr_body .agents/workflow/runs/pr-1-1/pr-body.md`n" ([System.IO.File]::ReadAllText("$runDir/refine.txt")) "refine.txt has one line"
+}
+
+Invoke-TestCase "pr: サマリーの下書きがあれば run へ移して推敲の対象にする" {
+    Initialize-Branch
+    Set-RefineMode 'dispatch'
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/refine/summary.md" "サマリーの下書き`n"
+    Invoke-Script dispatch-prompt-gen.ps1 '-Pr'
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    $runDir = "$script:Proj/.agents/workflow/runs/pr-1-1"
+    Assert-FileExists "$runDir/summary.md" "summary moved into run dir"
+    Assert-FileAbsent "$script:Proj/.agents/workflow/runs/refine/summary.md" "summary source removed"
+    Assert-Contains ([System.IO.File]::ReadAllText("$runDir/prompt.md")) "## 推敲(summary)" "summary refine section"
+    Assert-Eq "pr_body .agents/workflow/runs/pr-1-1/pr-body.md`nsummary .agents/workflow/runs/pr-1-1/summary.md`n" ([System.IO.File]::ReadAllText("$runDir/refine.txt")) "refine.txt has two lines"
+}
+
+Invoke-TestCase "pr: text_refine.mode が dispatch でなければ推敲の節を書かない" {
+    Initialize-Branch
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/refine/summary.md" "サマリーの下書き`n"
+    Invoke-Script dispatch-prompt-gen.ps1 '-Pr'
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    $runDir = "$script:Proj/.agents/workflow/runs/pr-1-1"
+    Assert-NotContains ([System.IO.File]::ReadAllText("$runDir/prompt.md")) "## 推敲" "no refine section"
+    Assert-FileAbsent "$runDir/refine.txt" "refine.txt not written"
+    Assert-FileExists "$script:Proj/.agents/workflow/runs/refine/summary.md" "summary source kept"
 }
 
 Invoke-TestCase "pr: -Launcher subagent で launcher を書き、サブエージェント用の節を足す" {

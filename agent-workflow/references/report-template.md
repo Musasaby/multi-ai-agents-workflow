@@ -62,6 +62,9 @@ yomiyasu は同梱しない。利用者が導入し、config.json の `text_refi
      (例: Claude Code の `npx skills add` では `yomiyasu`、Claude Code のプラグインと Codex では `yomiyasu:yomiyasu`)
    - 親の skill 一覧に yomiyasu が無いとき(別のエージェント用に入っているとき)は、その旨
 
+   `Refine: dispatch` が出たとき(`text_refine.mode` が `dispatch`)も `Next: continue` なので、
+   下書きをそのまま使う。PR 本文と完了時のサマリーは PR 作成の子が推敲する(手順は `pr.md`)。
+
    config.json は、利用者の承認なしに書き換えない
 4. `Next: refine` のときは、`Request:` 行の依頼文を**一字も変えずに**そのまま自分への依頼として実行する
    (依頼文に skill 名が入っている)。そのあと `Output:` のファイルを読んで使う

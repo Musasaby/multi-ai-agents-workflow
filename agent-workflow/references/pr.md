@@ -14,8 +14,16 @@ PR 作成の前に、要件が満たされているかを親が確かめる。�
    .agents/workflow/scripts/req-status.sh
    ```
 2. 対象は、この PR のタスクを含む要件(グループ完了時)または全要件(サイクル完了時)。
-   要件ごとに、要件の本文を `git diff origin/<base_branch>...HEAD` と対応タスクの完了報告に照らし、
-   「満たした / 部分 / 未対応」を判断する。`partial` の要件で未完了タスクが後のグループにあるものは、
+   要件ごとに、要件の本文を次の材料に照らして「満たした / 部分 / 未対応」を判断する。
+   全体の diff は読まない。
+   - `req-status` の出力(要件と対応タスクの状態)
+   - コミットの説明の一覧(`git log origin/<base_branch>..HEAD --oneline`)。
+     `review.mode` が `dispatch` のときは、レビュー役の `要約` をもとに書かれている
+
+   この2つで判断がつかない要件だけ、対応タスクの受け入れ基準(tasks.md)と完了報告
+   (`runs/<ID>-<N>/report.md`)を読む。それでも判断がつかなければ、対応タスクのコミットの
+   diff(`git show <コミット>`)を読む。
+   `partial` の要件で未完了タスクが後のグループにあるものは、
    このグループで担う分だけを判断する。`## 対象外` 節に記録済みの要件・要件の一部は除外する
 3. 部分・未対応があれば PR 作成に進まず停止する。要件と判断の根拠を報告し、追加モード
    (`agent-task-plan`)でタスクを足すか、対象外にするかをユーザーに確認する。対象外にする場合は
@@ -48,17 +56,35 @@ PR 作成の前に、要件が満たされているかを親が確かめる。�
    - `Next: wait-merge` → 手順4(PR の検証)に進む(レビュー・コミットは行わない)
    - `Next: wait`(1回の呼び出しの待ち時間の上限に達しただけで、子はまだ実行中) → 同じ引数で
      `dispatch-wait` を再度実行して待ちを続ける
+   - `Next: escalate reason=refine-unchecked` または `refine-undecided` → PR は作られている。
+     手順4(PR の検証)を行ってから「子が推敲できなかったとき」に進む
    - それ以外(`Next: escalate reason=...` 等) → reason と stderr、`output.log` の末尾を
      ユーザーに報告して停止する
 4. **PR の検証**: `gh pr view <作業ブランチ> --json url,state,baseRefName` を実行し、
    PR が存在し、`baseRefName` が `<base_branch>` であることを確認する。確認できなければ、
    `output.log` の末尾を添えてユーザーに報告する
-5. **PR 本文の推敲**: `text-refine pr_body .agents/workflow/runs/pr-<N>-1/pr-body.md` を実行する。
+5. **PR 本文の推敲**: 手順3の出力に `Refine pr_body:` の行があるとき(`text_refine.mode` が
+   `dispatch`)は、PR 作成の子が推敲している。親は推敲せず、yomiyasu も呼ばない。`ok` なら
+   推敲済みの本文で PR が作られている。`off`・`skipped` なら推敲しない設定である。どちらも
+   手順6に進む。`Refine pr_body:` の行が無いときは、以下を行う。
+   `text-refine pr_body .agents/workflow/runs/pr-<N>-1/pr-body.md` を実行する。
    `Next: refine` なら、`Request:` の依頼文どおりに推敲させ、テンプレートの「日本語の推敲」の
    `--check` の手順を通す。そのあと `gh pr view <作業ブランチ> --json number` で
    PR 番号を取り、`gh api -X PATCH "repos/{owner}/{repo}/pulls/<number>" -F body=@<Output: のパス>` で
    本文を更新する。`Next: continue` なら、この手順は飛ばす
 6. PR URL をユーザーに報告して停止する(マージはユーザーが行う)
+
+## 子が推敲できなかったとき
+
+`text_refine.mode` が `dispatch` のとき、PR 作成の子が推敲できなかった場合(手順3の
+`Next: escalate reason=refine-unchecked` または `refine-undecided`)は、PR は下書きの本文で
+作られている。止めて、次のどちらにするかを利用者に確かめる。
+
+- **下書きのまま使う**: 何もしない
+- **親が推敲する**: `text-refine <場面> <Refine 行の対象のファイル> --request` を実行し、
+  `report-template.md` の「日本語の推敲」の手順4以降を行う。PR 本文は、手順5の
+  `gh api -X PATCH` で更新する。このとき親が yomiyasu の skill 本文を読み込み、コンテキストを
+  多く使うことを、確かめるときに伝える
 
 ## 完了時のサマリー報告
 
@@ -72,9 +98,21 @@ PR 作成の前に、要件が満たされているかを親が確かめる。�
 実行して PR を更新する(子が push と PR 本文の作り直しを行う)。親は自分で `git push` や
 PR 本文の更新をしない。PR を更新してから、以下の出力をもとにサマリーを報告する。
 
+`text_refine.mode` が `dispatch` のときは、次のとおりにする(通常の「日本語の推敲」の手順は
+行わない)。
+
+- `workflow-status --summary` の `Next:` が `create-pr` / `update-pr` のとき: 要件の充足確認の後、
+  PR 作成の前に、サマリーを `.agents/workflow/runs/refine/summary.md` に下書きする。PR の URL は
+  書かない。PR 作成の run がこの下書きを `runs/pr-<N>-1/summary.md` に移し、子が推敲する
+- PR 作成の run の出力が `Refine summary: ok` なら、`text-refine summary
+  .agents/workflow/runs/pr-<N>-1/summary.md --check` を実行し、`Text:` の本文を一字も変えずに
+  示す。続けて PR の URL を1行で添える。`off`・`skipped` なら下書きをそのまま示し、URL を添える
+- PR 作成の run を実行しないとき(`Next:` が `wait-merge` など)は、下書きをそのまま示す(推敲しない)
+
 出力(Task 行・Requirement 行・Comprehension 行・Worktree 行・PR 行)をもとに、
 `report-template.md` の「完了時のサマリー」の形で `.agents/workflow/runs/refine/summary.md` に
-下書きする。テンプレートの「日本語の推敲」の手順(場面 `summary`)を通してから、ユーザーに示す。
+下書きする。テンプレートの「日本語の推敲」の手順(場面 `summary`)を通してから、ユーザーに示す
+(`text_refine.mode` が `dispatch` のときは、上のとおり子が推敲する)。
 項目と、作るときに使う行は次のとおり。
 
 - タスクごとの結果(done/failed、コミットハッシュ、リトライ回数): Task 行

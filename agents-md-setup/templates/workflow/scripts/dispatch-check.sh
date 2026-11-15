@@ -16,12 +16,14 @@ set -uo pipefail
 #     最後のツール実行の後に出力が無い場合は、その旨を理由に書く
 #   7=変更0件(完了報告はあるが作業ツリーに変更が無い。PR 作成の run(pr-*)と
 #     レビューの run(review-*)では判定しない)
+#   9=PR 作成の run(pr-*)で、子の推敲を確かめられない・判断待ちの候補が残った(refine.txt がある
+#     run だけ。ほかの判定が ok のときに判定する)
 #   0=正常終了かつ完了報告あり / 2=done マーカーが無い(まだ実行中) / 1=使い方不備
 # stdout の最後の行には次のアクションを示す `Next:` 行を出す(wait / review <TaskId> /
 # collect <TaskId>(worktree の run で正常のとき)/
 # commit <ベースのタスクID>(レビューの run で Verdict が pass のとき)/
 # retry <ベースのタスクID>(レビューの run で Verdict が fail のとき)/
-# escalate reason=<理由>。使い方不備の exit 1 では出さない)
+# escalate reason=<理由>(refine-unchecked / refine-undecided を含む)。使い方不備の exit 1 では出さない)
 
 TASK_ID="${1:?Usage: dispatch-check.sh <TaskId> [Attempt]}"
 ATTEMPT="${2:-1}"
@@ -638,6 +640,51 @@ else
     VERDICT="ok"; CODE=0
 fi
 
+# --- PR 作成の run(pr-*)の推敲の確認 ---
+REFINE_LINES=""   # 出力する行をためる
+REFINE_WORST=""   # 空 / undecided / unchecked(unchecked を優先する)
+if [ "$IS_PR" = true ] && [ "$CODE" -eq 0 ] && [ -f "$RUN_DIR/refine.txt" ]; then
+    while read -r scene path; do
+        # 空行は飛ばす。path の末尾の CR は取り除く
+        if [ -z "${scene%$'\r'}" ] && [ -z "$path" ]; then
+            continue
+        fi
+        path="${path%$'\r'}"
+        R_OUT="$(bash "$SCRIPT_DIR/text-refine.sh" "$scene" "$path" --check 2> /dev/null)"; R_CODE=$?
+        # 結果を決める
+        if [ "$R_CODE" -eq 0 ] && printf '%s\n' "$R_OUT" | grep -qxF 'Refine: off'; then
+            R_RESULT=off
+        elif [ "$R_CODE" -eq 0 ] && printf '%s\n' "$R_OUT" | grep -qxF 'Check: skipped'; then
+            R_RESULT=skipped
+        elif [ "$R_CODE" -eq 0 ]; then
+            R_RESULT=ok
+        elif [ "$R_CODE" -eq 2 ]; then
+            R_RESULT=undecided
+        else
+            R_RESULT=unchecked
+        fi
+        if [ -z "$REFINE_LINES" ]; then
+            REFINE_LINES="Refine ${scene}: ${R_RESULT}"
+        else
+            REFINE_LINES="${REFINE_LINES}
+Refine ${scene}: ${R_RESULT}"
+        fi
+        if [ "$R_RESULT" = undecided ] || [ "$R_RESULT" = unchecked ]; then
+            R_EXTRA="$(printf '%s\n' "$R_OUT" | grep -E '^(Undecided|Unchecked): ')"
+            if [ -n "$R_EXTRA" ]; then
+                REFINE_LINES="${REFINE_LINES}
+${R_EXTRA}"
+            fi
+        fi
+        if [ "$R_RESULT" = unchecked ]; then
+            REFINE_WORST=unchecked
+        elif [ "$R_RESULT" = undecided ] && [ "$REFINE_WORST" != unchecked ]; then
+            REFINE_WORST=undecided
+        fi
+    done < "$RUN_DIR/refine.txt"
+    if [ -n "$REFINE_WORST" ]; then VERDICT="refine-$REFINE_WORST"; CODE=9; fi
+fi
+
 # --- 完了報告の report.md への書き出し(CODE が 0・7 = 完了報告が有効で改ざん・異常終了が無いとき) ---
 # ブロックの範囲は完了報告の判定の awk と同じ: 最後の `## 完了報告` 行から、その後の最初の `## ` 行の
 # 直前(無ければ末尾)まで。ANSI エスケープを除いた行で範囲を判定して書き出し、ブロック末尾の空行は
@@ -720,6 +767,9 @@ if [ "$IS_REVIEW" = true ]; then
         echo "Fix notes: none"
     fi
 fi
+if [ -n "$REFINE_LINES" ]; then
+    printf '%s\n' "$REFINE_LINES"
+fi
 echo "--- git status --porcelain"
 git_in_wt status --porcelain
 echo "--- git diff --stat"
@@ -774,6 +824,7 @@ case "$CODE" in
         esac
         ;;
     7) NEXT="escalate reason=no-changes" ;;
+    9) NEXT="escalate reason=refine-$REFINE_WORST" ;;
 esac
 echo "Next: $NEXT"
 

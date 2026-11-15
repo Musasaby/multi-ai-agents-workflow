@@ -509,6 +509,20 @@ make_run() { # $1 = EXIT 値, $2 = output.log の内容, $3 = run 名(省略時 
     write_guard "$run"
 }
 
+# text-refine.sh を、渡された行を stdout に出して指定の exit code で終わるスクリプトで上書きする。
+# ダミープロジェクトのスクリプトはテストごとのコピーなので、このリポジトリのファイルは変わらない
+stub_text_refine() { # $1 = exit code, $2... = stdout に出す行
+    local code="$1" line
+    shift
+    {
+        printf '#!/bin/bash\n'
+        for line in "$@"; do
+            printf "printf '%%s\\\\n' %s\n" "$(printf '%q' "$line")"
+        done
+        printf 'exit %s\n' "$code"
+    } > "$PROJ/.agents/workflow/scripts/text-refine.sh"
+}
+
 REPORT=$'作業しました\n## 完了報告\n- 変更ファイル: a.txt\n- テスト結果: 全件パス'
 ESC=$'\033'
 
@@ -767,6 +781,60 @@ t_check_pr_run_without_changes() {
     run_script dispatch-check.sh pr-1 1
     assert_eq 0 "$CODE" "pr run is not checked for changes: $OUT"
     assert_eq "Next: wait-merge" "${OUT##*$'\n'}" "pr run is not reviewed"
+}
+
+# T7: PR の run の推敲を確かめられれば Refine 行を出して wait-merge
+t_check_pr_run_refine_ok() {
+    make_run 0 $'## 完了報告\n- PR URL: https://github.com/o/r/pull/1' pr-1-1
+    printf 'pr_body .agents/workflow/runs/pr-1-1/pr-body.md\nsummary .agents/workflow/runs/pr-1-1/summary.md\n' \
+        > "$PROJ/.agents/workflow/runs/pr-1-1/refine.txt"
+    stub_text_refine 0 'Refine: yomiyasu' 'Record: runs/r1/attempt-1.json' 'Next: continue'
+    run_script dispatch-check.sh pr-1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Refine pr_body: ok" "pr_body ok"
+    assert_contains "$OUT" "Refine summary: ok" "summary ok"
+    assert_eq "Next: wait-merge" "${OUT##*$'\n'}" "next line"
+}
+
+# T7: PR の run の推敲を確かめられなければ refine-unchecked
+t_check_pr_run_refine_unchecked() {
+    make_run 0 $'## 完了報告\n- PR URL: https://github.com/o/r/pull/1' pr-1-1
+    printf 'pr_body\n' > "$PROJ/.agents/workflow/runs/pr-1-1/refine.txt"
+    stub_text_refine 3 'Unchecked: output not found' 'Next: escalate reason=refine-unchecked'
+    run_script dispatch-check.sh pr-1 1
+    assert_eq 9 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Refine pr_body: unchecked" "pr_body unchecked"
+    assert_contains "$OUT" "Unchecked: output not found" "unchecked reason"
+    assert_contains "$OUT" "Verdict: refine-unchecked" "verdict"
+    assert_eq "Next: escalate reason=refine-unchecked" "${OUT##*$'\n'}" "next line"
+}
+
+# T7: PR の run の推敲に判断待ちの候補が残れば refine-undecided
+t_check_pr_run_refine_undecided() {
+    make_run 0 $'## 完了報告\n- PR URL: https://github.com/o/r/pull/1' pr-1-1
+    printf 'pr_body\n' > "$PROJ/.agents/workflow/runs/pr-1-1/refine.txt"
+    stub_text_refine 2 'Undecided: L1 excess_list' 'Next: decide-candidates'
+    run_script dispatch-check.sh pr-1 1
+    assert_eq 9 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Refine pr_body: undecided" "pr_body undecided"
+    assert_contains "$OUT" "Undecided: L1 excess_list" "undecided candidate"
+    assert_eq "Next: escalate reason=refine-undecided" "${OUT##*$'\n'}" "next line"
+}
+
+# T7: PR の run の推敲が off と skipped のときは wait-merge
+t_check_pr_run_refine_off_and_skipped() {
+    make_run 0 $'## 完了報告\n- PR URL: https://github.com/o/r/pull/1' pr-1-1
+    printf 'pr_body\n' > "$PROJ/.agents/workflow/runs/pr-1-1/refine.txt"
+    stub_text_refine 0 'Refine: off' 'Next: continue'
+    run_script dispatch-check.sh pr-1 1
+    assert_contains "$OUT" "Refine pr_body: off" "off"
+    assert_eq 0 "$CODE" "exit code (off): $OUT"
+    assert_eq "Next: wait-merge" "${OUT##*$'\n'}" "next line (off)"
+    stub_text_refine 0 'Refine: other' 'Check: skipped' 'Next: continue'
+    run_script dispatch-check.sh pr-1 1
+    assert_contains "$OUT" "Refine pr_body: skipped" "skipped"
+    assert_eq 0 "$CODE" "exit code (skipped): $OUT"
+    assert_eq "Next: wait-merge" "${OUT##*$'\n'}" "next line (skipped)"
 }
 
 # #34: 管理ファイルの変更・削除を検知する
@@ -1175,6 +1243,10 @@ test_case "check: 利用先の child-profiles.json の権限拒否パターン�
 test_case "check: 未定義の profile は exit 1" t_check_profile_unknown
 test_case "check: 変更0件はexit 7" t_check_no_changes
 test_case "check: PR作成のrunは変更0件でも正常" t_check_pr_run_without_changes
+test_case "check: PR の run の推敲を確かめられれば Refine 行を出して wait-merge" t_check_pr_run_refine_ok
+test_case "check: PR の run の推敲を確かめられなければ refine-unchecked" t_check_pr_run_refine_unchecked
+test_case "check: PR の run の推敲に判断待ちの候補が残れば refine-undecided" t_check_pr_run_refine_undecided
+test_case "check: PR の run の推敲が off と skipped のときは wait-merge" t_check_pr_run_refine_off_and_skipped
 test_case "check: state.jsonの変更はexit 8" t_check_state_changed
 test_case "check: prompt.mdの削除はexit 8" t_check_prompt_deleted
 test_case "check: guard.sha256が無ければexit 8" t_check_guard_missing

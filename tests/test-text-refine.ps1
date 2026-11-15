@@ -26,6 +26,19 @@ function Set-Refine {
     Write-Utf8File $path ($cfg | ConvertTo-Json -Depth 10)
 }
 
+# config.json の text_refine.mode を書き換える: Set-RefineMode $null|'mode'
+function Set-RefineMode {
+    param($Mode)
+    $path = "$script:Proj/.agents/workflow/config.json"
+    $cfg = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    if ($cfg.text_refine.PSObject.Properties['mode']) {
+        $cfg.text_refine.mode = $Mode
+    } else {
+        $cfg.text_refine | Add-Member -NotePropertyName mode -NotePropertyValue $Mode
+    }
+    Write-Utf8File $path ($cfg | ConvertTo-Json -Depth 10)
+}
+
 function Write-SkillMd {
     param([string]$Path, [string]$Name)
     Write-Utf8File $Path "---`nname: $Name`n---`n"
@@ -260,6 +273,49 @@ Invoke-TestCase "text-refine: tasks のチェックは機械パースする行�
         Assert-Contains $script:Out "Candidates: 0" "候補なし"
         Assert-Contains $script:Out "Next: continue" "続行"
         Assert-NotContains $script:Out "Text:" "本文を出さない"
+    } finally { Remove-TestHome }
+}
+
+Invoke-TestCase "text-refine: dispatch では -Request が無ければ依頼文を出さない" {
+    New-TestHome
+    try {
+        Set-Refine 'yomiyasu'
+        Set-RefineMode 'dispatch'
+        Invoke-Script text-refine.ps1 commit x.md
+        Assert-Eq 0 $script:Code "exit: $($script:Err)"
+        Assert-Contains $script:Out "Refine: dispatch" "dispatch"
+        Assert-NotContains $script:Out "Request:" "依頼文を出さない"
+        Assert-Eq "Next: continue" (@($script:Out -split "`n")[-1]) "最後の行"
+        Invoke-Script text-refine.ps1 pr_body x.md
+        Assert-Eq 0 $script:Code "exit: $($script:Err)"
+        Assert-Contains $script:Out "Refine: dispatch" "dispatch"
+        Assert-NotContains $script:Out "Request:" "依頼文を出さない"
+        Assert-Eq "Next: continue" (@($script:Out -split "`n")[-1]) "最後の行"
+    } finally { Remove-TestHome }
+}
+
+Invoke-TestCase "text-refine: dispatch でも -Request なら依頼文を出す" {
+    New-TestHome
+    try {
+        Set-Refine 'yomiyasu'
+        Set-RefineMode 'dispatch'
+        Write-Utf8File "$script:Proj/.agents/workflow/runs/refine/pr_body.md" "本文`n"
+        Invoke-Script text-refine.ps1 pr_body .agents/workflow/runs/refine/pr_body.md -Request
+        Assert-Eq 0 $script:Code "exit: $($script:Err)"
+        Assert-Contains $script:Out "Request:" "依頼文を出す"
+        Assert-Eq "Next: refine" (@($script:Out -split "`n")[-1]) "最後の行"
+    } finally { Remove-TestHome }
+}
+
+Invoke-TestCase "text-refine: dispatch でも tasks は依頼文を出す" {
+    New-TestHome
+    try {
+        Set-Refine 'yomiyasu'
+        Set-RefineMode 'dispatch'
+        Write-Utf8File "$script:Proj/.agents/workflow/runs/refine/tasks.md" "# タスク`n"
+        Invoke-Script text-refine.ps1 tasks .agents/workflow/runs/refine/tasks.md
+        Assert-Eq 0 $script:Code "exit: $($script:Err)"
+        Assert-Eq "Next: refine" (@($script:Out -split "`n")[-1]) "最後の行"
     } finally { Remove-TestHome }
 }
 

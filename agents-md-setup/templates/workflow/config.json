@@ -38,7 +38,8 @@
   "text_refine": {
     "skill": null,
     "targets": ["summary", "confirm", "commit", "pr_body", "task_done", "tasks"],
-    "reader": "informed"
+    "reader": "informed",
+    "mode": "parent"
   },
   "base_branch": "main",
   "upstream": {

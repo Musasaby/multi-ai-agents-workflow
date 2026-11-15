@@ -29,6 +29,20 @@ with open(path, 'w', encoding='utf-8', newline='\n') as f:
 PY
 }
 
+# config.json の text_refine.mode を書き換える: set_refine_mode <mode|null>
+set_refine_mode() {
+    python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" "$1" <<'PY'
+import json, sys
+path, mode = sys.argv[1], sys.argv[2]
+with open(path, encoding='utf-8') as f:
+    cfg = json.load(f)
+cfg['text_refine']['mode'] = None if mode == 'null' else mode
+with open(path, 'w', encoding='utf-8', newline='\n') as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+    f.write('\n')
+PY
+}
+
 write_skill_md() { # path name
     mkdir -p "$(dirname "$1")"
     printf -- '---\nname: %s\n---\n' "$2" > "$1"
@@ -288,6 +302,48 @@ t_tasks_check_same() {
     cleanup_home
 }
 
+t_dispatch_skip_request() {
+    new_home
+    set_refine yomiyasu
+    set_refine_mode dispatch
+    HOME="$TEST_HOME" run_script text-refine.sh commit x.md
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_contains "$OUT" "Refine: dispatch" "dispatch"
+    assert_not_contains "$OUT" "Request:" "依頼文を出さない"
+    assert_eq "Next: continue" "${OUT##*$'\n'}" "最後の行"
+    HOME="$TEST_HOME" run_script text-refine.sh pr_body x.md
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_contains "$OUT" "Refine: dispatch" "dispatch"
+    assert_not_contains "$OUT" "Request:" "依頼文を出さない"
+    assert_eq "Next: continue" "${OUT##*$'\n'}" "最後の行"
+    cleanup_home
+}
+
+t_dispatch_request() {
+    new_home
+    set_refine yomiyasu
+    set_refine_mode dispatch
+    mkdir -p "$PROJ/.agents/workflow/runs/refine"
+    echo "本文" > "$PROJ/.agents/workflow/runs/refine/pr_body.md"
+    HOME="$TEST_HOME" run_script text-refine.sh pr_body .agents/workflow/runs/refine/pr_body.md --request
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_contains "$OUT" "Request:" "依頼文を出す"
+    assert_eq "Next: refine" "${OUT##*$'\n'}" "最後の行"
+    cleanup_home
+}
+
+t_dispatch_tasks_request() {
+    new_home
+    set_refine yomiyasu
+    set_refine_mode dispatch
+    mkdir -p "$PROJ/.agents/workflow/runs/refine"
+    echo "# タスク" > "$PROJ/.agents/workflow/runs/refine/tasks.md"
+    HOME="$TEST_HOME" run_script text-refine.sh tasks .agents/workflow/runs/refine/tasks.md
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_eq "Next: refine" "${OUT##*$'\n'}" "最後の行"
+    cleanup_home
+}
+
 echo "test-text-refine.sh"
 test_case "text-refine: skill が null なら Refine: off と Next: continue" t_off_when_null
 test_case "text-refine: 未設定ならエージェントを問わず導入を見つけて知らせる" t_detect_installed
@@ -302,4 +358,7 @@ test_case "text-refine: チェックは同じ最終稿の最新の記録を使�
 test_case "text-refine: tasks の場面は機械パースする行を変えないよう依頼する" t_tasks_request
 test_case "text-refine: tasks のチェックは機械パースする行が変わったら止める" t_tasks_check_changed
 test_case "text-refine: tasks のチェックは機械パースする行が同じなら本文を出さずに続ける" t_tasks_check_same
+test_case "text-refine: dispatch では --request が無ければ依頼文を出さない" t_dispatch_skip_request
+test_case "text-refine: dispatch でも --request なら依頼文を出す" t_dispatch_request
+test_case "text-refine: dispatch でも tasks は依頼文を出す" t_dispatch_tasks_request
 summary

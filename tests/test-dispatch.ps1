@@ -48,6 +48,14 @@ function New-Run {
     Write-Guard $Run
 }
 
+# text-refine.ps1 を、渡された行を stdout に出して指定の exit code で終わるスクリプトで上書きする。
+# ダミープロジェクトのスクリプトはテストごとのコピーなので、このリポジトリのファイルは変わらない
+function Set-TextRefineStub {
+    param([int]$Code, [string[]]$Lines)
+    $body = foreach ($line in $Lines) { "Write-Output '$($line.Replace("'", "''"))'" }
+    Write-Utf8File "$script:Proj/.agents/workflow/scripts/text-refine.ps1" ((@($body) + "exit $Code") -join "`n" + "`n")
+}
+
 function Set-Isolate {
     param([string]$Value)
     $cfgPath = "$script:Proj/.agents/workflow/config.json"
@@ -634,6 +642,59 @@ Invoke-TestCase "check: PR作成のrunは変更0件でも正常" {
     Invoke-Script dispatch-check.ps1 -TaskId pr-1 -Attempt 1
     Assert-Eq 0 $script:Code "pr run is not checked for changes: $($script:Out)"
     Assert-Eq "Next: wait-merge" (($script:Out -split "`n")[-1]) "pr run is not reviewed"
+}
+
+# T7: PR の run の推敲を確かめられれば Refine 行を出して wait-merge
+Invoke-TestCase "check: PR の run の推敲を確かめられれば Refine 行を出して wait-merge" {
+    New-Run 0 "## 完了報告`n- PR URL: https://github.com/o/r/pull/1" 'pr-1-1'
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/pr-1-1/refine.txt" ("pr_body .agents/workflow/runs/pr-1-1/pr-body.md`nsummary .agents/workflow/runs/pr-1-1/summary.md`n")
+    Set-TextRefineStub -Code 0 -Lines @('Refine: yomiyasu', 'Record: runs/r1/attempt-1.json', 'Next: continue')
+    Invoke-Script dispatch-check.ps1 -TaskId pr-1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Refine pr_body: ok" "pr_body ok"
+    Assert-Contains $script:Out "Refine summary: ok" "summary ok"
+    Assert-Eq "Next: wait-merge" (($script:Out -split "`n")[-1]) "next line"
+}
+
+# T7: PR の run の推敲を確かめられなければ refine-unchecked
+Invoke-TestCase "check: PR の run の推敲を確かめられなければ refine-unchecked" {
+    New-Run 0 "## 完了報告`n- PR URL: https://github.com/o/r/pull/1" 'pr-1-1'
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/pr-1-1/refine.txt" "pr_body`n"
+    Set-TextRefineStub -Code 3 -Lines @('Unchecked: output not found', 'Next: escalate reason=refine-unchecked')
+    Invoke-Script dispatch-check.ps1 -TaskId pr-1 -Attempt 1
+    Assert-Eq 9 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Refine pr_body: unchecked" "pr_body unchecked"
+    Assert-Contains $script:Out "Unchecked: output not found" "unchecked reason"
+    Assert-Contains $script:Out "Verdict: refine-unchecked" "verdict"
+    Assert-Eq "Next: escalate reason=refine-unchecked" (($script:Out -split "`n")[-1]) "next line"
+}
+
+# T7: PR の run の推敲に判断待ちの候補が残れば refine-undecided
+Invoke-TestCase "check: PR の run の推敲に判断待ちの候補が残れば refine-undecided" {
+    New-Run 0 "## 完了報告`n- PR URL: https://github.com/o/r/pull/1" 'pr-1-1'
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/pr-1-1/refine.txt" "pr_body`n"
+    Set-TextRefineStub -Code 2 -Lines @('Undecided: L1 excess_list', 'Next: decide-candidates')
+    Invoke-Script dispatch-check.ps1 -TaskId pr-1 -Attempt 1
+    Assert-Eq 9 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Refine pr_body: undecided" "pr_body undecided"
+    Assert-Contains $script:Out "Undecided: L1 excess_list" "undecided candidate"
+    Assert-Eq "Next: escalate reason=refine-undecided" (($script:Out -split "`n")[-1]) "next line"
+}
+
+# T7: PR の run の推敲が off と skipped のときは wait-merge
+Invoke-TestCase "check: PR の run の推敲が off と skipped のときは wait-merge" {
+    New-Run 0 "## 完了報告`n- PR URL: https://github.com/o/r/pull/1" 'pr-1-1'
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/pr-1-1/refine.txt" "pr_body`n"
+    Set-TextRefineStub -Code 0 -Lines @('Refine: off', 'Next: continue')
+    Invoke-Script dispatch-check.ps1 -TaskId pr-1 -Attempt 1
+    Assert-Contains $script:Out "Refine pr_body: off" "off"
+    Assert-Eq 0 $script:Code "exit code (off): $($script:Out)"
+    Assert-Eq "Next: wait-merge" (($script:Out -split "`n")[-1]) "next line (off)"
+    Set-TextRefineStub -Code 0 -Lines @('Refine: other', 'Check: skipped', 'Next: continue')
+    Invoke-Script dispatch-check.ps1 -TaskId pr-1 -Attempt 1
+    Assert-Contains $script:Out "Refine pr_body: skipped" "skipped"
+    Assert-Eq 0 $script:Code "exit code (skipped): $($script:Out)"
+    Assert-Eq "Next: wait-merge" (($script:Out -split "`n")[-1]) "next line (skipped)"
 }
 
 # #34: 管理ファイルの変更・削除を検知する
