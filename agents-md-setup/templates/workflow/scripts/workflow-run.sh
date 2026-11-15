@@ -19,11 +19,15 @@ set -uo pipefail
 # stdout の行(詳細は runs/workflow-run/last-output.log):
 #   Started: <ID>-<N>            実装の run を起動した
 #   Checked: <ID>-<N>            実装の run が dispatch-check を通った
+#   Review started: <ID>-<N>     レビューの run を起動した
+#   Review: <ID>-<N> <pass|fail> レビューの run の結果
 #   Stopped: <ID> reason=<理由>  止まった(タスクIDが無ければ -)
 #   Finished: <Next の値>        グループが終わった
 #   In flight: <ID>-<N> <段階>   実行中のタスク(記録には書かない)
 #   Detail: <last-output.log のパス>  止まったときの詳細(記録には書かない)
-# Started:・Checked:・Stopped:・Finished: は runs/workflow-run/progress.log にも時刻付きで書く。
+# Started:・Checked:・Review started:・Review:・Stopped:・Finished: は
+# runs/workflow-run/progress.log にも時刻付きで書く。
+# 止まる理由の一つに review-invalid がある(レビューの完了報告が無効・異常終了・時間超過など)。
 # ロック: runs/workflow-run/lock/pid に自分の PID を書いて実行する。ロックがあり、そのプロセスが
 #   生きていれば exit 5、死んでいれば引き継ぐ。
 
@@ -191,14 +195,41 @@ poll_impl() {
     esac
 }
 
+# $1=ID $2=試行回数。レビューの run を起動する
+start_review() {
+    call dispatch-start.sh --review "$1" "$2"
+    if [ "$CALL_CODE" -eq 0 ] && [ "$CALL_NEXT" = wait ]; then emit "Review started: $1-$2"
+    else stop_run "$1" "$(next_reason review-start)"; fi
+}
+
+# $LAST から `<見出し>: ` で始まる最後の行の値を出す($1=見出し。例: "Review type")
+last_field() { tr -d '\r' < "$LAST" | sed -n "s/^$1: //p" | tail -n 1; }
+
+# $1=ID $2=試行回数。レビューの run の完了を1回だけ確かめる
+poll_review() {
+    local vfile="$RUNS/review-$1-$2/verdict"
+    call dispatch-wait.sh "review-$1" "$2" --max-wait 0
+    if [ "$CALL_CODE" -eq 2 ]; then return; fi
+    if [ "$CALL_CODE" -eq 0 ] && [ "$CALL_NEXT" = "commit $1" ]; then
+        printf 'pass\n%s\n%s\n' "$(last_field 'Review type')" "$(last_field 'Review summary')" > "$vfile"
+        emit "Review: $1-$2 pass"
+    elif [ "$CALL_CODE" -eq 0 ] && [ "$CALL_NEXT" = "retry $1" ]; then
+        printf 'fail\n' > "$vfile"; emit "Review: $1-$2 fail"
+    else
+        stop_run "$1" review-invalid       # 完了報告が無効・異常終了・時間超過など
+    fi
+}
+
 # $1=ID。run-phase の段階に応じて1つ進める
 handle_task() {
     local phase n; read -r phase n <<< "$(phase_of "$1")"
     case "$phase" in
         start)   start_task "$1" "$n" ;;
         running) poll_impl "$1" "$n" ;;
+        review-start) start_review "$1" "$n" ;;
+        reviewing)    poll_review "$1" "$n" ;;
         manual)  stop_run "$1" manual "Next: review $1" ;;
-        review-start|reviewing|collect|gate|retry) stop_run "$1" not-implemented ;;   # T13〜T15 で置き換える
+        collect|gate|retry) stop_run "$1" not-implemented ;;   # T14〜T15 で置き換える
         *)       stop_run "$1" unknown-phase ;;
     esac
 }

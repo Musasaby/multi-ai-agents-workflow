@@ -69,7 +69,20 @@ echo "- 変更ファイル: $id.txt"
 echo "- テスト結果: 全件パス"
 SH
     chmod +x "$PROJ/.agents/child-stub.sh"
-    printf '#!/bin/bash\necho "## 完了報告"\necho "- Verdict: pass"\n' > "$PROJ/.agents/review-stub.sh"
+    # レビュー役。カレントディレクトリ(worktree)の親ディレクトリ名(review-<ID>-<N>)からタスクIDを取る
+    cat > "$PROJ/.agents/review-stub.sh" <<'SH'
+#!/bin/bash
+run_name="$(basename "$(dirname "$PWD")")"
+id="${run_name%-*}"
+id="${id#review-}"
+echo "## 完了報告"
+echo "- Verdict: pass"
+echo "- 指摘: 0件(なし)"
+echo "- 要約: $id を変える"
+echo "- type: feat"
+echo "- fix-notes: なし"
+echo "- 理解確認: なし"
+SH
     chmod +x "$PROJ/.agents/review-stub.sh"
     python3 - "$(py_path "$PROJ/.agents/workflow/config.json")" \
         "$(py_path "$PROJ/.agents/child-stub.sh")" "$(py_path "$PROJ/.agents/review-stub.sh")" \
@@ -94,6 +107,12 @@ PY
 set_child_body() {
     printf '#!/bin/bash\n%s\n' "$1" > "$PROJ/.agents/child-stub.sh"
     chmod +x "$PROJ/.agents/child-stub.sh"
+}
+
+# レビュー役のスタブを $1 の本文に差し替える(config は同じ絶対パスを指したまま)
+set_review_body() {
+    printf '#!/bin/bash\n%s\n' "$1" > "$PROJ/.agents/review-stub.sh"
+    chmod +x "$PROJ/.agents/review-stub.sh"
 }
 
 # 30秒眠ってから完了報告を出す子
@@ -199,6 +218,43 @@ t_abnormal_exit() {
     wait_done T2-1
 }
 
+t_review_pass() {
+    setup_runner
+    write_state "T1:pending" "T2:done"
+    set_state_branch develop/t
+    local i
+    for i in $(seq 1 60); do
+        run_script workflow-run.sh --max-wait 2 --interval 1
+        [ -f "$PROJ/.agents/workflow/runs/review-T1-1/verdict" ] && break
+    done
+    local runs="$PROJ/.agents/workflow/runs"
+    assert_file_exists "$runs/T1-1/checked" "実装の run が checked"
+    assert_file_exists "$runs/review-T1-1/worktree.txt" "レビューの worktree.txt"
+    assert_eq "pass" "$(sed -n '1p' "$runs/review-T1-1/verdict" | tr -d '\r')" "verdict の1行目"
+    assert_eq "feat" "$(sed -n '2p' "$runs/review-T1-1/verdict" | tr -d '\r')" "verdict の2行目"
+    assert_eq "T1 を変える" "$(sed -n '3p' "$runs/review-T1-1/verdict" | tr -d '\r')" "verdict の3行目"
+    assert_eq "$(sed -n 's/^path //p' "$runs/T1-1/worktree.txt" | head -n 1 | tr -d '\r')" \
+        "$(sed -n 's/^path //p' "$runs/review-T1-1/worktree.txt" | head -n 1 | tr -d '\r')" \
+        "レビューは実装と同じ worktree の中で行う"
+    assert_contains "$(cat "$runs/workflow-run/progress.log")" "Review: T1-1 pass" "progress.log に記録"
+}
+
+t_review_invalid() {
+    setup_runner
+    write_state "T1:pending" "T2:done"
+    set_state_branch develop/t
+    set_review_body ':'        # 何も出力しないレビュー役
+    local i
+    for i in $(seq 1 60); do
+        run_script workflow-run.sh --max-wait 2 --interval 1
+        [ "$CODE" -eq 3 ] && break
+    done
+    assert_eq 3 "$CODE" "exit 3: $ERR"
+    assert_contains "$OUT" "Stopped: T1 reason=review-invalid" "無効な完了報告で止まる"
+    assert_eq "Next: escalate reason=review-invalid" "$(last_line)" "最後の行"
+    assert_eq "in_progress" "$(state_get T1 status)" "T1 の状態は in_progress のまま"
+}
+
 t_finish() {
     setup_runner
     write_state "T1:done" "T2:done"
@@ -213,5 +269,7 @@ test_case "run: 使える条件を満たさなければ runner-unsupported(exit 
 test_case "run: 生きているロックは already-running、死んでいれば引き継ぐ" t_lock
 test_case "run: 並列に起動し、max-wait で Next: wait を返す" t_parallel_max_wait
 test_case "run: 実装の run が異常終了したら、その理由で止まる" t_abnormal_exit
+test_case "run: 子が終わると worktree の中でレビューし、verdict を記録する" t_review_pass
+test_case "run: レビューの完了報告が無効なら review-invalid で止まる" t_review_invalid
 test_case "run: 全タスク done なら Next: finish" t_finish
 summary
