@@ -213,6 +213,52 @@ if ($Pr) {
     }
     $prRunDir = "$RunsBase/pr-$prN-1"
     $null = New-Item -ItemType Directory -Force $prRunDir
+    # 推敲の指示を組み立てる。推敲しないときは '' を返す。
+    # config.json の text_refine.mode が 'dispatch' でなければ推敲しない
+    # (ファイルが無い・読めない・キーが無いときも推敲しない)。
+    function Get-RefineInstruction {
+        $refineSource = '.agents/workflow/runs/refine/summary.md'   # カレントディレクトリはプロジェクトのルート
+        $when = @{
+            pr_body = '手順4 の後、手順5 の前に行う。推敲できたとき(下の 2. が `Next: continue` で終わったとき)は、手順5 で `{input}` の代わりに `{output}` を使う。'
+            summary = '手順5 の後に行う。親が書いた完了時のサマリーの下書きを推敲する。'
+        }
+        $textRefine = $null
+        try {
+            $config = [System.IO.File]::ReadAllText($ConfigPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json -ErrorAction Stop
+            $textRefine = $config.text_refine
+        } catch {
+            $textRefine = $null
+        }
+        if (-not ($textRefine -is [pscustomobject]) -or -not ($textRefine.mode -is [string]) -or $textRefine.mode -cne 'dispatch') {
+            return ''
+        }
+        $targets = @([pscustomobject]@{ Scene = 'pr_body'; InputPath = ".agents/workflow/runs/pr-$prN-1/pr-body.md" })
+        if (Test-Path -LiteralPath $refineSource -PathType Leaf) {
+            Move-Item -LiteralPath $refineSource -Destination "$prRunDir/summary.md" -Force
+            $targets += [pscustomobject]@{ Scene = 'summary'; InputPath = ".agents/workflow/runs/pr-$prN-1/summary.md" }
+        }
+        $refineTemplate = Get-Content "$PSScriptRoot/dispatch-pr-refine-template.md" -Raw -Encoding UTF8
+        $sections = @()
+        foreach ($target in $targets) {
+            $scene = $target.Scene
+            $inputPath = $target.InputPath
+            $ext = [System.IO.Path]::GetExtension($inputPath)
+            $outputPath = $inputPath.Substring(0, $inputPath.Length - $ext.Length) + '.refined' + $ext
+            # {when} を最初に置換する(WHEN の文に {input}・{output} が入っているため)
+            $section = $refineTemplate.Replace('{when}', $when[$scene])
+            $section = $section.Replace('{scene}', $scene)
+            $section = $section.Replace('{input}', $inputPath)
+            $section = $section.Replace('{output}', $outputPath)
+            $section = $section.Replace('{request_command}',
+                "pwsh -NoProfile -File .agents/workflow/scripts/text-refine.ps1 $scene $inputPath -Request")
+            $section = $section.Replace('{check_command}',
+                "pwsh -NoProfile -File .agents/workflow/scripts/text-refine.ps1 $scene $inputPath -Check")
+            $sections += $section
+        }
+        $refineTxt = (($targets | ForEach-Object { "$($_.Scene) $($_.InputPath)" }) -join "`n") + "`n"
+        [System.IO.File]::WriteAllText("$prRunDir/refine.txt", $refineTxt, [System.Text.UTF8Encoding]::new($false))
+        return (($sections | ForEach-Object { $_.TrimEnd("`n") }) -join "`n`n")
+    }
     $text = Get-Content "$PSScriptRoot/dispatch-pr-prompt-template.md" -Raw -Encoding UTF8
     $text = $text.Replace('{task_list}', ($selected -join "`n"))
     $text = $text.Replace('{requirement_list}', $requirementList)
@@ -220,6 +266,7 @@ if ($Pr) {
     $text = $text.Replace('{base_branch}', $baseBranch)
     $text = $text.Replace('{base_ref}', $baseRef)
     $text = $text.Replace('{run_dir}', ".agents/workflow/runs/pr-$prN-1")
+    $text = $text.Replace('{refine_instruction}', (Get-RefineInstruction))
     [System.IO.File]::WriteAllText("$prRunDir/prompt.md", $text, [System.Text.UTF8Encoding]::new($false))
     if ($Launcher) {
         [System.IO.File]::WriteAllText("$prRunDir/launcher", "$Launcher`n", [System.Text.UTF8Encoding]::new($false))
