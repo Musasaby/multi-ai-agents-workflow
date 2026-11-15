@@ -12,7 +12,7 @@
 
 ## 材料
 
-- `git status --porcelain` と `git diff`(未追跡のファイルは中身を読む)
+- `git status --porcelain` と `git diff HEAD`(未追跡のファイルは中身を読む)
 - 子エージェントの完了報告: `{report_path}`
 
 ## 手順
@@ -44,6 +44,13 @@
 
 {comprehension_instruction}
 
+### 5. コミットの type と説明
+
+`type` と `要約` は、そのままコミットメッセージ(`<type>: <要約>`)に使われることがある。次のとおり書く。
+
+- `type`: feat / fix / refactor / docs / test / chore / perf / ci のどれか1つ(変更の中心に合うもの)
+- `要約`: タスクのタイトルをもとにした日本語の1行。「〜を足す」「〜を直す」のように動詞で終え、句点を付けない。`feat:` のような接頭辞とタスクIDは書かない
+
 ## 完了報告フォーマット
 
 各項目は1行の値として書く(複数行にしない)。
@@ -53,6 +60,7 @@
 - Verdict: <pass | fail>
 - 指摘: <件数>件(<原因種別。無ければ なし>)
 - 要約: <変更内容の1行要約>
+- type: <feat | fix | refactor | docs | test | chore | perf | ci>
 - fix-notes: <fail のとき書いた {fix_notes_path}。pass なら なし>
 - 理解確認: <作った質問ファイルのパス。作らないなら なし>
 ```

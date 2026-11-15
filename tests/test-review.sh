@@ -88,6 +88,30 @@ t_check_review_pass() {
     assert_contains "$OUT" "Review summary: 問題なし" "review summary"
 }
 
+t_check_review_type_valid() {
+    write_review_tasks
+    make_review_run $'## 完了報告\n- Verdict: pass\n- 指摘: なし\n- 要約: 問題なし\n- type: feat\n- fix-notes: なし\n- 理解確認: 対象外'
+    run_script dispatch-check.sh review-T1 1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$OUT" "Review type: feat" "review type"
+    assert_eq "Next: commit T1" "$(printf '%s\n' "$OUT" | tail -1)" "last line"
+}
+
+t_check_review_type_invalid() {
+    write_review_tasks
+    make_review_run $'## 完了報告\n- Verdict: pass\n- 指摘: なし\n- 要約: 問題なし\n- fix-notes: なし\n- 理解確認: 対象外'
+    run_script dispatch-check.sh review-T1 1
+    assert_eq 0 "$CODE" "missing type -> exit 0: $ERR"
+    assert_contains "$OUT" "Review type: invalid" "missing type -> invalid"
+    assert_eq "Next: commit T1" "$(printf '%s\n' "$OUT" | tail -1)" "last line"
+
+    make_review_run $'## 完了報告\n- Verdict: pass\n- 指摘: なし\n- 要約: 問題なし\n- type: bogus\n- fix-notes: なし\n- 理解確認: 対象外'
+    run_script dispatch-check.sh review-T1 1
+    assert_eq 0 "$CODE" "bogus type -> exit 0: $ERR"
+    assert_contains "$OUT" "Review type: invalid" "bogus type -> invalid"
+    assert_eq "Next: commit T1" "$(printf '%s\n' "$OUT" | tail -1)" "last line"
+}
+
 t_check_review_fail_with_fix_notes() {
     write_review_tasks
     make_review_run $'## 完了報告\n- Verdict: fail\n- 指摘: a.txt の修正\n- 要約: 修正が必要\n- fix-notes: あり\n- 理解確認: 対象外' \
@@ -127,6 +151,8 @@ test_case "review のプロンプトを生成する" t_review_generates
 test_case "report.md が無いと exit 2" t_review_report_missing
 test_case "理解確認が有効なら質問ファイルの指示を入れる" t_review_comprehension_enabled
 test_case "合格なら commit を出す" t_check_review_pass
+test_case "type が決まった値なら Review type に出す" t_check_review_type_valid
+test_case "type が無い・決まった値でなければ Review type は invalid" t_check_review_type_invalid
 test_case "不合格で fix-notes があれば retry を出す" t_check_review_fail_with_fix_notes
 test_case "不合格で fix-notes が無ければ no-report" t_check_review_fail_without_fix_notes
 test_case "Verdict が pass/fail 以外なら no-report" t_check_review_invalid_verdict
