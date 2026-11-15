@@ -3,6 +3,8 @@
 # stdout: "Progress: <done>/<全タスク> done"、"Group: <名前> <done>/<数>"(グループ区切りがあるときだけ)、
 #       "Current: <ID> <status> | <title>" / "Current: none"、
 #       "Run: <ID>-<N> running elapsed=<秒>s log_idle=<秒>s" / "Run: <ID>-<N> finished"(in_progress で run があるときだけ)、
+#       "Runner: locked pid=<pid>" / "Runner: idle"、"Runner last: <progress.log の最後の空でない行>"
+#       (runs/workflow-run/progress.log があるときだけ)、
 #       "Failed: T3, T5"(failed があるときだけ)、"PR: <state> <url>" / "PR: none" / "PR: unknown"(finish / group-advance のときだけ)、
 #       "Comprehension: unanswered=<n>[ <ファイル名> ...]"、最後に "Next: ..."
 #       -Summary のときは、先頭に "Task <ID> <status> <commit 先頭7文字 | -> retries=<n> | <title>"(全タスク)と
@@ -195,6 +197,25 @@ if ($null -eq $current) {
             }
         }
     }
+}
+
+# --- Runner(workflow-run の記録があるときだけ) ---
+$runnerDir = "$RunsDir/workflow-run"
+$progressPath = "$runnerDir/progress.log"
+if (Test-Path $progressPath -PathType Leaf) {
+    $pidPath = "$runnerDir/lock/pid"
+    if (Test-Path $pidPath -PathType Leaf) {
+        $pidValue = ([System.IO.File]::ReadAllText($pidPath, [System.Text.Encoding]::UTF8)).Trim()
+        $out.Add("Runner: locked pid=$pidValue")
+    } else {
+        $out.Add('Runner: idle')
+    }
+    $lastProgress = ''
+    foreach ($l in ([System.IO.File]::ReadAllText($progressPath, [System.Text.Encoding]::UTF8) -split "`n")) {
+        $s = $l.Trim()
+        if ($s) { $lastProgress = $s }
+    }
+    if ($lastProgress) { $out.Add("Runner last: $lastProgress") }
 }
 
 # --- Failed ---
