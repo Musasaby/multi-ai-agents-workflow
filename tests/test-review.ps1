@@ -76,6 +76,30 @@ Invoke-TestCase "合格なら commit を出す" {
     Assert-Contains $script:Out "Review summary: 問題なし" "review summary"
 }
 
+Invoke-TestCase "type が決まった値なら Review type に出す" {
+    Set-ReviewTasks
+    New-ReviewRun "## 完了報告`n- Verdict: pass`n- 指摘: なし`n- 要約: 問題なし`n- type: feat`n- fix-notes: なし`n- 理解確認: 対象外"
+    Invoke-Script dispatch-check.ps1 '-TaskId' 'review-T1' '-Attempt' '1'
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains $script:Out "Review type: feat" "review type"
+    Assert-Eq "Next: commit T1" (($script:Out -split "`n")[-1]).Trim() "last line"
+}
+
+Invoke-TestCase "type が無い・決まった値でなければ Review type は invalid" {
+    Set-ReviewTasks
+    New-ReviewRun "## 完了報告`n- Verdict: pass`n- 指摘: なし`n- 要約: 問題なし`n- fix-notes: なし`n- 理解確認: 対象外"
+    Invoke-Script dispatch-check.ps1 '-TaskId' 'review-T1' '-Attempt' '1'
+    Assert-Eq 0 $script:Code "missing type -> exit 0: $($script:Err)"
+    Assert-Contains $script:Out "Review type: invalid" "missing type -> invalid"
+    Assert-Eq "Next: commit T1" (($script:Out -split "`n")[-1]).Trim() "last line"
+
+    New-ReviewRun "## 完了報告`n- Verdict: pass`n- 指摘: なし`n- 要約: 問題なし`n- type: bogus`n- fix-notes: なし`n- 理解確認: 対象外"
+    Invoke-Script dispatch-check.ps1 '-TaskId' 'review-T1' '-Attempt' '1'
+    Assert-Eq 0 $script:Code "bogus type -> exit 0: $($script:Err)"
+    Assert-Contains $script:Out "Review type: invalid" "bogus type -> invalid"
+    Assert-Eq "Next: commit T1" (($script:Out -split "`n")[-1]).Trim() "last line"
+}
+
 Invoke-TestCase "不合格で fix-notes があれば retry を出す" {
     Set-ReviewTasks
     New-ReviewRun "## 完了報告`n- Verdict: fail`n- 指摘: a.txt の修正`n- 要約: 修正が必要`n- fix-notes: あり`n- 理解確認: 対象外" `
