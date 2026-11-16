@@ -1,4 +1,4 @@
-﻿# 1グループ分のタスクを、タスクの起動からレビューまで進める(collect 以降の段階は T18 で足す)。
+﻿# 1グループ分のタスクを、タスクの起動からレビュー・collect・品質ゲート・コミットまで進める。
 # 進行中(in_progress / in_review)のタスクを run-phase の段階に応じて1つずつ
 # 進め、next-task で空きの分だけ新しいタスクを起動する。-MaxWait 秒に達するか、グループが
 # 終わるか、止まるまで動く(常駐はしない。呼び直せば state.json と runs/ から続きを再開する)。
@@ -18,12 +18,19 @@
 #   Checked: <ID>-<N>            実装の run が dispatch-check を通った
 #   Review started: <ID>-<N>     レビューの run を起動した
 #   Review: <ID>-<N> <pass|fail> レビューの run の結果
+#   Collected: <ID>-<N>          実装の run を取り込んだ
+#   Undeclared: <ID> <パス>      変更対象に宣言していないファイル
+#   Gate warning: <ID> <ステップ> 非 blocking の品質ゲートが失敗した
+#   Done: <ID> <ハッシュ7桁> retries=<n>  コミットした
 #   Stopped: <ID> reason=<理由>  止まった(タスクIDが無ければ -)
 #   Finished: <Next の値>        グループが終わった
 #   In flight: <ID>-<N> <段階>   実行中のタスク(記録には書かない)
 #   Detail: <last-output.log のパス>  止まったときの詳細(記録には書かない)
-# Started:・Checked:・Review started:・Review:・Stopped:・Finished: は runs/workflow-run/progress.log にも時刻付きで書く。
-# 止まる理由には review-invalid(レビューの完了報告が無効・異常終了・時間超過など)がある。
+# Started:・Checked:・Review started:・Review:・Collected:・Undeclared:・Gate warning:・Done:・
+# Stopped:・Finished: は runs/workflow-run/progress.log にも時刻付きで書く。
+# 止まる理由には review-invalid(レビューの完了報告が無効・異常終了・時間超過など)・
+#   conflict(collect の衝突)・quality-gate(品質ゲートの失敗)・quality-gate-error(品質ゲートの異常終了)・
+#   commit-format(type か要約が不正)・task-state(状態遷移の失敗)がある。
 # ロック: runs/workflow-run/lock/pid に自分の PID を書き、実行する。ロックがあり、そのプロセスが
 #   生きていれば exit 5、死んでいれば引き継ぐ。終了時にロックを消す処理は finally で行う。
 param(
@@ -286,6 +293,107 @@ function Wait-Review {
     }
 }
 
+# config.json の最上位のキー $Key の値を出す(bool は true/false、文字列・数値はそのまま、無ければ空)
+function Get-CfgValue {
+    param([string]$Key)
+    try {
+        $cfg = Get-Content -LiteralPath $ConfigPath -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json
+    } catch {
+        return ''
+    }
+    if ($null -eq $cfg.PSObject.Properties[$Key]) { return '' }
+    $value = $cfg.$Key
+    if ($null -eq $value) { return '' }
+    if ($value -is [bool]) { if ($value) { return 'true' } else { return 'false' } }
+    return "$value"
+}
+
+# 品質ゲートの方式を出す: quality_gate があれば steps、無くて test_command が空でなければ test、どちらも無ければ none
+function Get-GateMode {
+    try {
+        $cfg = Get-Content -LiteralPath $ConfigPath -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json
+    } catch {
+        return 'none'
+    }
+    if ($null -ne $cfg.PSObject.Properties['quality_gate']) { return 'steps' }
+    $testCommand = if ($null -ne $cfg.PSObject.Properties['test_command']) { [string]$cfg.test_command } else { '' }
+    if ($testCommand.Trim() -ne '') { return 'test' }
+    return 'none'
+}
+
+# 合格した run を取り込み、レビュー役の type と要約でコミットする
+function Invoke-Collect {
+    param([string]$TaskId, [int]$Attempt)
+    Invoke-Step -Name 'dispatch-worktree.ps1' -Arguments @('collect', $TaskId, "$Attempt")
+    switch ($script:CallCode) {
+        0 {
+            foreach ($line in @(Get-Content -LiteralPath $Last -Encoding utf8)) {
+                if ($line.StartsWith('Undeclared: ')) {
+                    $path = $line.Substring(12)
+                    if ($path -cne 'none') { Emit "Undeclared: $TaskId $path" }
+                }
+            }
+            Invoke-Step -Name 'task-state.ps1' -Arguments @($TaskId, 'review')
+            if ($script:CallCode -ne 0) { Stop-Run -TaskId $TaskId -Reason 'task-state' }
+            Emit "Collected: $TaskId-$Attempt"
+            Invoke-GateAndCommit -TaskId $TaskId -Attempt $Attempt
+        }
+        40 { Stop-Run -TaskId $TaskId -Reason 'conflict' }        # collect の衝突
+        default { Stop-Run -TaskId $TaskId -Reason (Get-NextReason 'collect') }   # dirty-tree・worktree
+    }
+}
+
+# 品質ゲートを通し、コミットする(状態は in_review で、変更は本体にある)
+function Invoke-GateAndCommit {
+    param([string]$TaskId, [int]$Attempt)
+    $vfile = "$Runs/review-$TaskId-$Attempt/verdict"
+    $lines = if (Test-Path -LiteralPath $vfile -PathType Leaf) { @(Get-Content -LiteralPath $vfile -Encoding utf8) } else { @() }
+    $type = if ($lines.Count -ge 2) { $lines[1] -replace "`r", '' } else { '' }
+    $summary = if ($lines.Count -ge 3) { $lines[2] -replace "`r", '' } else { '' }
+    if ((Get-CfgValue 'verify_before_commit') -ceq 'true') {
+        switch (Get-GateMode) {
+            'steps' {
+                Invoke-Step -Name 'quality-gate.ps1' -Arguments @('-OutDir', "$Runs/$TaskId-$Attempt/gate")
+                switch ($script:CallCode) {
+                    0 {
+                        foreach ($line in @(Get-Content -LiteralPath $Last -Encoding utf8)) {
+                            if ($line -cmatch '^FAIL ([^ ]+) \(non-blocking\)') {
+                                Emit "Gate warning: $TaskId $($Matches[1])"
+                            }
+                        }
+                    }
+                    3 { }                                              # 実行するステップが無い
+                    2 { Stop-Run -TaskId $TaskId -Reason 'quality-gate' }
+                    default { Stop-Run -TaskId $TaskId -Reason 'quality-gate-error' }
+                }
+            }
+            'test' {
+                $gateDir = "$Runs/$TaskId-$Attempt/gate"
+                $null = New-Item -ItemType Directory -Force -Path $gateDir
+                $log = "$gateDir/test_command.log"
+                $null | & pwsh -NoProfile -Command (Get-CfgValue 'test_command') *> $log
+                if ($LASTEXITCODE -ne 0) {
+                    Copy-Item -LiteralPath $log -Destination $Last -Force
+                    Stop-Run -TaskId $TaskId -Reason 'quality-gate'
+                }
+            }
+        }
+    }
+    if (@('feat', 'fix', 'refactor', 'docs', 'test', 'chore', 'perf', 'ci') -cnotcontains $type) {
+        Stop-Run -TaskId $TaskId -Reason 'commit-format'
+    }
+    if ($summary -ceq '' -or $summary -ceq '(list)') { Stop-Run -TaskId $TaskId -Reason 'commit-format' }
+    Invoke-Step -Name 'task-commit.ps1' -Arguments @('-TaskId', $TaskId, '-Type', $type, '-Description', $summary)
+    if ($script:CallCode -ne 0 -or $script:CallNext -cne 'continue') {
+        Stop-Run -TaskId $TaskId -Reason (Get-NextReason 'commit')
+    }
+    $hash = ''
+    foreach ($line in @(Get-Content -LiteralPath $Last -Encoding utf8)) {
+        if ($line -cmatch '^Committed: ([0-9a-f]+) ') { $hash = $Matches[1] }
+    }
+    Emit "Done: $TaskId $hash retries=$(Get-StateField $TaskId 'retries')"
+}
+
 # run-phase の段階に応じて1つ進める
 function Invoke-Task {
     param([string]$TaskId)
@@ -296,8 +404,8 @@ function Invoke-Task {
         'manual' { Stop-Run -TaskId $TaskId -Reason 'manual' -LastLine "Next: review $TaskId" }
         'review-start' { Start-Review -TaskId $TaskId -Attempt $phase.N }
         'reviewing' { Wait-Review -TaskId $TaskId -Attempt $phase.N }
-        'collect' { Stop-Run -TaskId $TaskId -Reason 'not-implemented' }
-        'gate' { Stop-Run -TaskId $TaskId -Reason 'not-implemented' }
+        'collect' { Invoke-Collect -TaskId $TaskId -Attempt $phase.N }
+        'gate' { Invoke-GateAndCommit -TaskId $TaskId -Attempt $phase.N }
         'retry' { Stop-Run -TaskId $TaskId -Reason 'not-implemented' }
         default { Stop-Run -TaskId $TaskId -Reason 'unknown-phase' }
     }

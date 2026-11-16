@@ -26,6 +26,14 @@ function Set-StateBranch {
     Write-Utf8File $path ($state | ConvertTo-Json -Depth 10)
 }
 
+# exit 2(-MaxWait)の間は呼び直す。最大60回
+function Invoke-UntilNotWait {
+    for ($i = 0; $i -lt 60; $i++) {
+        Invoke-Script workflow-run.ps1 -MaxWait 5 -Interval 1
+        if ($script:Code -ne 2) { return }
+    }
+}
+
 # 子のスタブの本文を差し替える(config は同じ絶対パスを指したまま)
 function Set-ChildBody {
     param([string]$Body)
@@ -282,6 +290,83 @@ Invoke-TestCase "run: 全タスク done なら Next: finish" {
     Invoke-Script workflow-run.ps1
     Assert-Eq 0 $script:Code "exit 0: $($script:Err)"
     Assert-Eq "Next: finish" (Get-LastLine $script:Out) "最後の行"
+}
+
+Invoke-TestCase "run: 合格した run を collect してコミットし、Done 行を出す" {
+    Initialize-Runner
+    Set-State 'T1:pending' 'T2:pending'
+    Set-StateBranch develop/t
+    Invoke-UntilNotWait
+    $runs = "$script:Proj/.agents/workflow/runs"
+    Assert-Eq 0 $script:Code "exit 0: $($script:Err)"
+    Assert-Eq "Next: finish" (Get-LastLine $script:Out) "最後の行"
+    Assert-Eq "done" (Get-StateTask T1).status "T1 の状態"
+    Assert-Eq "done" (Get-StateTask T2).status "T2 の状態"
+    $subjects = (Invoke-Git log --format=%s) -join "`n"
+    Assert-Contains $subjects "feat: T1 を変える" "レビュー役の type と要約で T1 をコミット"
+    Assert-Contains $subjects "feat: T2 を変える" "レビュー役の type と要約で T2 をコミット"
+    $progress = [System.IO.File]::ReadAllText("$runs/workflow-run/progress.log")
+    Assert-Contains $progress "Done: T1 " "progress.log に Done を記録"
+    Assert-Contains $progress "retries=0" "progress.log に retries を記録"
+    Assert-FileAbsent "$runs/T1-1/worktree" "collect 後に T1 の worktree が消える"
+}
+
+Invoke-TestCase "run: type が無効なら commit-format で止まり、in_review のまま残る" {
+    Initialize-Runner
+    Set-State 'T1:pending' 'T2:done'
+    Set-StateBranch develop/t
+    Set-ReviewBody @'
+run_name="$(basename "$(dirname "$PWD")")"
+id="${run_name%-*}"
+id="${id#review-}"
+echo "## 完了報告"
+echo "- Verdict: pass"
+echo "- 指摘: 0件(なし)"
+echo "- 要約: $id を変える"
+echo "- type: bogus"
+echo "- fix-notes: なし"
+echo "- 理解確認: なし"
+'@
+    Invoke-UntilNotWait
+    $runs = "$script:Proj/.agents/workflow/runs"
+    Assert-Eq 3 $script:Code "exit 3: $($script:Err)"
+    Assert-Contains $script:Out "Stopped: T1 reason=commit-format" "commit-format で止まる"
+    Assert-Eq "Next: escalate reason=commit-format" (Get-LastLine $script:Out) "最後の行"
+    Assert-Eq "in_review" (Get-StateTask T1).status "T1 の状態は in_review のまま"
+    Assert-FileExists "$runs/T1-1/collected" "collect 済み"
+}
+
+Invoke-TestCase "run: グループの最後で Next: group-advance を返す" {
+    Initialize-Runner
+    Set-Tasks @'
+# タスク一覧: test
+
+<!-- グループ g1 -->
+
+## T1: 一番目
+- **目的**: a
+- **対象**: T1.txt を直す
+- **参照ファイル**:
+  - `T1.txt`(変更対象)
+- **依存**: なし
+
+<!-- グループ g2 -->
+
+## T2: 二番目
+- **目的**: b
+- **対象**: T2.txt を直す
+- **参照ファイル**:
+  - `T2.txt`(変更対象)
+- **依存**: なし
+'@
+    Set-State 'T1:pending' 'T2:pending'
+    Set-StateBranch develop/t
+    Set-StateGroup g1
+    Invoke-UntilNotWait
+    Assert-Eq 0 $script:Code "exit 0: $($script:Err)"
+    Assert-Eq "Next: group-advance" (Get-LastLine $script:Out) "最後の行"
+    Assert-Eq "done" (Get-StateTask T1).status "T1 の状態"
+    Assert-Eq "pending" (Get-StateTask T2).status "T2 の状態"
 }
 
 Show-Summary
