@@ -6,6 +6,8 @@ set -euo pipefail
 # stdout: "Progress: <done>/<全タスク> done"、"Group: <名前> <done>/<数>"(グループ区切りがあるときだけ)、
 #       "Current: <ID> <status> | <title>" / "Current: none"、
 #       "Run: <ID>-<N> running elapsed=<秒>s log_idle=<秒>s" / "Run: <ID>-<N> finished"(in_progress で run があるときだけ)、
+#       "Runner: locked pid=<pid>" / "Runner: idle"、"Runner last: <progress.log の最後の空でない行>"
+#       (runs/workflow-run/progress.log があるときだけ)、
 #       "Failed: T3, T5"(failed があるときだけ)、"PR: <state> <url>" / "PR: none" / "PR: unknown"(finish / group-advance のときだけ)、
 #       "Comprehension: unanswered=<n>[ <ファイル名> ...]"、最後に "Next: ..."
 #       --summary のときは、先頭に "Task <ID> <status> <commit 先頭7文字 | -> retries=<n> | <title>"(全タスク)と
@@ -198,6 +200,26 @@ else:
                     idle = str(int(now - os.path.getmtime(log))) if os.path.isfile(log) else '-'
                     out.append('Run: ' + run_id + ' running elapsed=' + str(int(now - os.path.getmtime(guard)))
                                + 's log_idle=' + idle + 's')
+
+# --- Runner(workflow-run の記録があるときだけ) ---
+runner_dir = os.path.join(runs_dir, 'workflow-run')
+progress_path = os.path.join(runner_dir, 'progress.log')
+if os.path.isfile(progress_path):
+    pid_path = os.path.join(runner_dir, 'lock', 'pid')
+    if os.path.isfile(pid_path):
+        with open(pid_path, encoding='utf-8', errors='replace') as f:
+            pid = f.read().strip()
+        out.append('Runner: locked pid=' + pid)
+    else:
+        out.append('Runner: idle')
+    last_progress = ''
+    with open(progress_path, encoding='utf-8', errors='replace') as f:
+        for line in f:
+            stripped = line.strip()
+            if stripped:
+                last_progress = stripped
+    if last_progress:
+        out.append('Runner last: ' + last_progress)
 
 # --- Failed ---
 failed = [t['id'] for t in st_tasks if t.get('status') == 'failed']

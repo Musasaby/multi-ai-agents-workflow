@@ -89,6 +89,30 @@ Invoke-TestCase "workflow-status: 実行中の子の経過を出し Next: wait �
     Assert-Eq "Next: wait" (Get-LastLine $script:Out) "最後の行"
 }
 
+Invoke-TestCase "workflow-status: workflow-run の記録があれば Runner 行を出す" {
+    Set-Tasks @'
+## T1: T1 title
+- **目的**: a
+- **依存**: なし
+'@
+    Set-State 'T1:pending'
+    $runnerDir = "$script:Proj/.agents/workflow/runs/workflow-run"
+    Write-Utf8File "$runnerDir/progress.log" "2026-11-15T00:00:00Z Started: T1-1`n2026-11-15T00:01:00Z Done: T1 abc1234 retries=0`n"
+    Write-Utf8File "$runnerDir/lock/pid" "12345`n"
+    Invoke-Script workflow-status.ps1
+    Assert-Eq 0 $script:Code "exit: $($script:Err)"
+    Assert-Contains $script:Out "Runner: locked pid=12345" "ロック中の Runner"
+    Assert-Contains $script:Out "Runner last: 2026-11-15T00:01:00Z Done: T1 abc1234 retries=0" "最後の進捗"
+    Remove-Item "$runnerDir/lock" -Recurse -Force
+    Invoke-Script workflow-status.ps1
+    Assert-Eq 0 $script:Code "exit(idle): $($script:Err)"
+    Assert-Contains $script:Out "Runner: idle" "lock が無いときの Runner"
+    Remove-Item $runnerDir -Recurse -Force
+    Invoke-Script workflow-status.ps1
+    Assert-Eq 0 $script:Code "exit(none): $($script:Err)"
+    Assert-NotContains $script:Out "Runner" "記録が無いときは Runner 行を出さない"
+}
+
 Invoke-TestCase "workflow-status: 全タスク完了時に PR の状態から次の操作を出す" {
     Set-Tasks @'
 ## T1: T1 title

@@ -1,5 +1,8 @@
 # 並列の実行
 
+この手順は `workflow-run` を使えないとき、または止まった原因のタスクを親が処理するときに使う。
+通常は `references/runner.md` の手順で進める。
+
 config.json の `max_parallel` が 2 以上のとき、`next-task` は `Next: dispatch A B`(複数 ID)や
 `Next: wait A B` を出す。各 run は専用の worktree で動く。コード例は `.sh` 版だけを示す
 (PowerShell への読み替えは `agent-workflow/SKILL.md` の冒頭と同じ)。

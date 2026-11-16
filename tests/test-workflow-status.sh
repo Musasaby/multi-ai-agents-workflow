@@ -52,6 +52,30 @@ EOT
     assert_eq "Next: wait" "$(last_line "$OUT")" "最後の行"
 }
 
+t_workflow_run_progress() {
+    write_tasks <<'EOT'
+## T1: T1 title
+- **目的**: a
+- **依存**: なし
+EOT
+    write_state "T1:pending"
+    mkdir -p "$PROJ/.agents/workflow/runs/workflow-run/lock"
+    printf '2026-11-15T00:00:00Z Started: T1-1\n2026-11-15T00:01:00Z Done: T1 abc1234 retries=0\n' > "$PROJ/.agents/workflow/runs/workflow-run/progress.log"
+    printf '12345\n' > "$PROJ/.agents/workflow/runs/workflow-run/lock/pid"
+    run_script workflow-status.sh
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_contains "$OUT" "Runner: locked pid=12345" "ロック中の Runner"
+    assert_contains "$OUT" "Runner last: 2026-11-15T00:01:00Z Done: T1 abc1234 retries=0" "最後の進捗"
+    rm -rf "$PROJ/.agents/workflow/runs/workflow-run/lock"
+    run_script workflow-status.sh
+    assert_eq 0 "$CODE" "exit(idle): $ERR"
+    assert_contains "$OUT" "Runner: idle" "lock が無いときの Runner"
+    rm -rf "$PROJ/.agents/workflow/runs/workflow-run"
+    run_script workflow-status.sh
+    assert_eq 0 "$CODE" "exit(none): $ERR"
+    assert_not_contains "$OUT" "Runner" "記録が無いときは Runner 行を出さない"
+}
+
 t_all_done_pr() {
     write_tasks <<'EOT'
 ## T1: T1 title
@@ -185,6 +209,7 @@ t_no_summary() {
 echo "test-workflow-status.sh"
 test_case "workflow-status: 進捗・作業グループ・次のタスクを出す" t_progress_group_next
 test_case "workflow-status: 実行中の子の経過を出し Next: wait にする" t_running_child
+test_case "workflow-status: workflow-run の記録があれば Runner 行を出す" t_workflow_run_progress
 test_case "workflow-status: 全タスク完了時に PR の状態から次の操作を出す" t_all_done_pr
 test_case "workflow-status: PR が OPEN で未 push のコミットがあると update-pr を出す" t_open_unpushed_commit
 test_case "workflow-status: PR が OPEN で追跡ブランチが無いと update-pr を出す" t_open_no_remote
