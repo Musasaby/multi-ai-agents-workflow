@@ -22,15 +22,18 @@
 #   Undeclared: <ID> <パス>      変更対象に宣言していないファイル
 #   Gate warning: <ID> <ステップ> 非 blocking の品質ゲートが失敗した
 #   Done: <ID> <ハッシュ7桁> retries=<n>  コミットした
+#   Retry: <ID> <n>/<上限> (review|quality-gate)  やり直しを起動した
+#   Redo: <ID>-<N> (conflict)    衝突のため最新の HEAD からやり直す試行を起動した
 #   Stopped: <ID> reason=<理由>  止まった(タスクIDが無ければ -)
 #   Finished: <Next の値>        グループが終わった
 #   In flight: <ID>-<N> <段階>   実行中のタスク(記録には書かない)
 #   Detail: <last-output.log のパス>  止まったときの詳細(記録には書かない)
 # Started:・Checked:・Review started:・Review:・Collected:・Undeclared:・Gate warning:・Done:・
-# Stopped:・Finished: は runs/workflow-run/progress.log にも時刻付きで書く。
+# Retry:・Redo:・Stopped:・Finished: は runs/workflow-run/progress.log にも時刻付きで書く。
 # 止まる理由には review-invalid(レビューの完了報告が無効・異常終了・時間超過など)・
-#   conflict(collect の衝突)・quality-gate(品質ゲートの失敗)・quality-gate-error(品質ゲートの異常終了)・
-#   commit-format(type か要約が不正)・task-state(状態遷移の失敗)がある。
+#   conflict(collect の衝突)・quality-gate-error(品質ゲートの異常終了)・
+#   retry-limit(やり直しの上限超過)・commit-format(type か要約が不正)・
+#   task-state(状態遷移の失敗)がある。
 # ロック: runs/workflow-run/lock/pid に自分の PID を書き、実行する。ロックがあり、そのプロセスが
 #   生きていれば exit 5、死んでいれば引き継ぐ。終了時にロックを消す処理は finally で行う。
 param(
@@ -321,6 +324,11 @@ function Get-GateMode {
     return 'none'
 }
 
+# やり直しの上限(config.json の max_fix_retries。無ければ 2。task-state.ps1 と同じ読み方)
+$script:MaxFixRetries = Get-CfgValue 'max_fix_retries'
+if ($script:MaxFixRetries -notmatch '^[0-9]+$') { $script:MaxFixRetries = '2' }
+$script:MaxFixRetries = [int]$script:MaxFixRetries
+
 # 合格した run を取り込み、レビュー役の type と要約でコミットする
 function Invoke-Collect {
     param([string]$TaskId, [int]$Attempt)
@@ -338,7 +346,7 @@ function Invoke-Collect {
             Emit "Collected: $TaskId-$Attempt"
             Invoke-GateAndCommit -TaskId $TaskId -Attempt $Attempt
         }
-        40 { Stop-Run -TaskId $TaskId -Reason 'conflict' }        # collect の衝突
+        40 { Invoke-RedoAfterConflict -TaskId $TaskId -Attempt $Attempt }   # collect の衝突。最新の HEAD からやり直す
         default { Stop-Run -TaskId $TaskId -Reason (Get-NextReason 'collect') }   # dirty-tree・worktree
     }
 }
@@ -363,7 +371,7 @@ function Invoke-GateAndCommit {
                         }
                     }
                     3 { }                                              # 実行するステップが無い
-                    2 { Stop-Run -TaskId $TaskId -Reason 'quality-gate' }
+                    2 { Invoke-RetryAfterGate -TaskId $TaskId -Attempt $Attempt; return }   # FAIL。fix-notes.md を書いてやり直す
                     default { Stop-Run -TaskId $TaskId -Reason 'quality-gate-error' }
                 }
             }
@@ -374,7 +382,8 @@ function Invoke-GateAndCommit {
                 $null | & pwsh -NoProfile -Command (Get-CfgValue 'test_command') *> $log
                 if ($LASTEXITCODE -ne 0) {
                     Copy-Item -LiteralPath $log -Destination $Last -Force
-                    Stop-Run -TaskId $TaskId -Reason 'quality-gate'
+                    Invoke-RetryAfterGate -TaskId $TaskId -Attempt $Attempt
+                    return                                              # FAIL。fix-notes.md を書いてやり直す
                 }
             }
         }
@@ -394,6 +403,79 @@ function Invoke-GateAndCommit {
     Emit "Done: $TaskId $hash retries=$(Get-StateField $TaskId 'retries')"
 }
 
+# 段階 retry(レビュー不合格)。fix-notes.md はレビュー役が書いている
+function Invoke-Retry {
+    param([string]$TaskId, [int]$Attempt)
+    $retries = Get-StateField $TaskId 'retries'
+    if ($retries -eq '') { $retries = '0' }
+    if ((Get-StateField $TaskId 'status') -ceq 'in_progress') {
+        if ([int]$retries -ge $script:MaxFixRetries) {
+            # 上限。親が今の手順(agent-review-commit §4 の上限超過)で続けられるよう、collect して in_review にしてから止まる
+            Invoke-Step -Name 'dispatch-worktree.ps1' -Arguments @('collect', $TaskId, "$Attempt")
+            if ($script:CallCode -ne 0) { Stop-Run -TaskId $TaskId -Reason (Get-NextReason 'collect') }
+            Invoke-Step -Name 'task-state.ps1' -Arguments @($TaskId, 'review')
+            Stop-Run -TaskId $TaskId -Reason 'retry-limit'
+        }
+        Write-LfFile "$Runs/$TaskId-$Attempt/carry" ''
+        Invoke-Step -Name 'task-state.ps1' -Arguments @($TaskId, 'review')
+        if ($script:CallCode -ne 0) { Stop-Run -TaskId $TaskId -Reason 'task-state' }
+    }
+    Invoke-Step -Name 'task-state.ps1' -Arguments @($TaskId, 'retry')
+    if ($script:CallCode -eq 4) { Stop-Run -TaskId $TaskId -Reason 'retry-limit' }
+    if ($script:CallCode -ne 0) { Stop-Run -TaskId $TaskId -Reason 'task-state' }
+    Write-LfFile "$Runs/$TaskId-$Attempt/superseded" ''
+    Emit "Retry: $TaskId $([int]$retries + 1)/$script:MaxFixRetries (review)"
+    Start-Task -TaskId $TaskId -Attempt ($Attempt + 1)
+}
+
+# 品質ゲートが FAIL。last-output.log に品質ゲート(または test_command)の出力がある
+function Invoke-RetryAfterGate {
+    param([string]$TaskId, [int]$Attempt)
+    $next = $Attempt + 1
+    $retries = Get-StateField $TaskId 'retries'
+    if ($retries -eq '') { $retries = '0' }
+    $dir = "$Runs/$TaskId-$next"
+    $null = New-Item -ItemType Directory -Force $dir
+    $body = @()
+    if (Test-Path -LiteralPath $Last -PathType Leaf) {
+        $body = @(Get-Content -LiteralPath $Last -Encoding utf8 |
+            Where-Object { $_ -notmatch '^Next: ' } | Select-Object -Last 80)
+    }
+    $lines = @(
+        '# 修正依頼(原因種別: 品質ゲート FAIL)'
+        ''
+        'コミット前の品質ゲートが失敗しました。下の出力から原因を調べて直し、失敗したコマンドが通ることを確かめてください。'
+        ''
+        '```'
+    ) + $body + @('```')
+    Write-LfFile "$dir/fix-notes.md" (($lines -join "`n") + "`n")
+    Invoke-Step -Name 'task-state.ps1' -Arguments @($TaskId, 'retry')
+    if ($script:CallCode -eq 4) { Stop-Run -TaskId $TaskId -Reason 'retry-limit' }
+    if ($script:CallCode -ne 0) { Stop-Run -TaskId $TaskId -Reason 'task-state' }
+    Emit "Retry: $TaskId $([int]$retries + 1)/$script:MaxFixRetries (quality-gate)"
+    Start-Task -TaskId $TaskId -Attempt $next
+}
+
+# collect が衝突した(状態は in_progress。worktree は残っている)
+function Invoke-RedoAfterConflict {
+    param([string]$TaskId, [int]$Attempt)
+    $next = $Attempt + 1
+    if ($Attempt -gt $script:MaxFixRetries) { Stop-Run -TaskId $TaskId -Reason 'conflict' }   # 試行は MAX + 1 回まで
+    $dir = "$Runs/$TaskId-$next"
+    $null = New-Item -ItemType Directory -Force $dir
+    $root = ((Get-Location).Path -replace '\\', '/')
+    $lines = @(
+        '# 修正依頼(原因種別: 取り込みの衝突)'
+        ''
+        '前の試行の変更は、ほかのタスクのコミットと衝突したため本体に取り込めませんでした。最新の HEAD でやり直してください。'
+        "前の試行の変更は ``$root/$Runs/$TaskId-$Attempt/changes.patch`` にあります。このファイルだけは worktree の外にありますが、読んで構いません(そのままは当たりません)。"
+    )
+    Write-LfFile "$dir/fix-notes.md" (($lines -join "`n") + "`n")
+    Write-LfFile "$Runs/$TaskId-$Attempt/superseded" ''
+    Emit "Redo: $TaskId-$next (conflict)"
+    Start-Task -TaskId $TaskId -Attempt $next
+}
+
 # run-phase の段階に応じて1つ進める
 function Invoke-Task {
     param([string]$TaskId)
@@ -406,7 +488,7 @@ function Invoke-Task {
         'reviewing' { Wait-Review -TaskId $TaskId -Attempt $phase.N }
         'collect' { Invoke-Collect -TaskId $TaskId -Attempt $phase.N }
         'gate' { Invoke-GateAndCommit -TaskId $TaskId -Attempt $phase.N }
-        'retry' { Stop-Run -TaskId $TaskId -Reason 'not-implemented' }
+        'retry' { Invoke-Retry -TaskId $TaskId -Attempt $phase.N }
         default { Stop-Run -TaskId $TaskId -Reason 'unknown-phase' }
     }
 }
