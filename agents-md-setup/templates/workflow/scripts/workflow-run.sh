@@ -1,8 +1,8 @@
 #!/bin/bash
 set -uo pipefail
 
-# 1グループ分のタスクを、タスクの起動と実装の run の完了待ちまで進める(レビュー以降の段階は
-# T13〜T15 で足す)。進行中(in_progress / in_review)のタスクを run-phase の段階に応じて1つずつ
+# 1グループ分のタスクを、タスクの起動からレビュー・collect・品質ゲート・コミットまで進める。
+# 進行中(in_progress / in_review)のタスクを run-phase の段階に応じて1つずつ
 # 進め、next-task で空きの分だけ新しいタスクを起動する。--max-wait 秒に達するか、グループが
 # 終わるか、止まるまで動く(常駐はしない。呼び直せば state.json と runs/ から続きを再開する)。
 # Usage: workflow-run.sh [--max-wait <秒>] [--interval <秒>]
@@ -25,15 +25,18 @@ set -uo pipefail
 #   Undeclared: <ID> <パス>      変更対象に宣言していないファイル
 #   Gate warning: <ID> <ステップ> 非 blocking の品質ゲートが失敗した
 #   Done: <ID> <ハッシュ7桁> retries=<n>  コミットした
+#   Retry: <ID> <n>/<上限> (review|quality-gate)  やり直しを起動した
+#   Redo: <ID>-<N> (conflict)    衝突のため最新の HEAD からやり直す試行を起動した
 #   Stopped: <ID> reason=<理由>  止まった(タスクIDが無ければ -)
 #   Finished: <Next の値>        グループが終わった
 #   In flight: <ID>-<N> <段階>   実行中のタスク(記録には書かない)
 #   Detail: <last-output.log のパス>  止まったときの詳細(記録には書かない)
 # Started:・Checked:・Review started:・Review:・Collected:・Undeclared:・Gate warning:・Done:・
-# Stopped:・Finished: は runs/workflow-run/progress.log にも時刻付きで書く。
+# Retry:・Redo:・Stopped:・Finished: は runs/workflow-run/progress.log にも時刻付きで書く。
 # 止まる理由には review-invalid(レビューの完了報告が無効・異常終了・時間超過など)・
-#   conflict(collect の衝突)・quality-gate(品質ゲートの失敗)・quality-gate-error(品質ゲートの異常終了)・
-#   commit-format(type か要約が不正)・task-state(状態遷移の失敗)がある。
+#   conflict(collect の衝突)・quality-gate-error(品質ゲートの異常終了)・
+#   retry-limit(やり直しの上限超過)・commit-format(type か要約が不正)・
+#   task-state(状態遷移の失敗)がある。
 # ロック: runs/workflow-run/lock/pid に自分の PID を書いて実行する。ロックがあり、そのプロセスが
 #   生きていれば exit 5、死んでいれば引き継ぐ。
 
@@ -265,6 +268,10 @@ else:
 PY
 }
 
+# やり直しの上限(config.json の max_fix_retries。無ければ 2。task-state.sh と同じ読み方)
+MAX="$(cfg_value max_fix_retries)"
+[[ "$MAX" =~ ^[0-9]+$ ]] || MAX=2
+
 # $1=ID $2=試行回数。合格した run を取り込み、レビュー役の type と要約でコミットする
 collect_task() {
     call dispatch-worktree.sh collect "$1" "$2"
@@ -275,7 +282,7 @@ collect_task() {
            [ "$CALL_CODE" -eq 0 ] || stop_run "$1" task-state
            emit "Collected: $1-$2"
            gate_and_commit "$1" "$2" ;;
-        40) stop_run "$1" conflict ;;                          # T15 で redo_after_conflict に置き換える
+        40) redo_after_conflict "$1" "$2" ;;                  # collect の衝突。最新の HEAD からやり直す
         *) stop_run "$1" "$(next_reason collect)" ;;           # dirty-tree・worktree
     esac
 }
@@ -292,14 +299,14 @@ gate_and_commit() {
                     0) tr -d '\r' < "$LAST" | sed -n 's/^FAIL \([^ ]*\) (non-blocking).*/\1/p' | while IFS= read -r s; do
                            emit "Gate warning: $1 $s"; done ;;
                     3) : ;;                               # 実行するステップが無い
-                    2) stop_run "$1" quality-gate ;;      # T15 で retry_after_gate に置き換える
+                    2) retry_after_gate "$1" "$2"; return ;;   # FAIL。fix-notes.md を書いてやり直す
                     *) stop_run "$1" quality-gate-error ;;
                 esac ;;
             test)
                 mkdir -p "$RUNS/$1-$2/gate"
                 if ! bash -c "$(cfg_value test_command)" < /dev/null > "$RUNS/$1-$2/gate/test_command.log" 2>&1; then
                     cp "$RUNS/$1-$2/gate/test_command.log" "$LAST"
-                    stop_run "$1" quality-gate            # T15 で retry_after_gate に置き換える
+                    retry_after_gate "$1" "$2"; return      # FAIL。fix-notes.md を書いてやり直す
                 fi ;;
         esac
     fi
@@ -309,6 +316,67 @@ gate_and_commit() {
     if [ "$CALL_CODE" -ne 0 ] || [ "$CALL_NEXT" != continue ]; then stop_run "$1" "$(next_reason commit)"; fi
     hash="$(tr -d '\r' < "$LAST" | sed -n 's/^Committed: \([0-9a-f]*\) .*/\1/p' | tail -n 1)"
     emit "Done: $1 $hash retries=$(state_field "$1" retries)"
+}
+
+# $1=ID $2=試行回数。段階 retry(レビュー不合格)。fix-notes.md はレビュー役が書いている
+retry_task() {
+    local retries; retries="$(state_field "$1" retries)"
+    [ -n "$retries" ] || retries=0
+    if [ "$(state_field "$1" status)" = in_progress ]; then
+        if [ "$retries" -ge "$MAX" ]; then
+            # 上限。親が今の手順(agent-review-commit §4 の上限超過)で続けられるよう、collect して in_review にしてから止まる
+            call dispatch-worktree.sh collect "$1" "$2"
+            [ "$CALL_CODE" -eq 0 ] || stop_run "$1" "$(next_reason collect)"
+            call task-state.sh "$1" review
+            stop_run "$1" retry-limit
+        fi
+        : > "$RUNS/$1-$2/carry"
+        call task-state.sh "$1" review
+        [ "$CALL_CODE" -eq 0 ] || stop_run "$1" task-state
+    fi
+    call task-state.sh "$1" retry
+    [ "$CALL_CODE" -eq 4 ] && stop_run "$1" retry-limit
+    [ "$CALL_CODE" -eq 0 ] || stop_run "$1" task-state
+    : > "$RUNS/$1-$2/superseded"
+    emit "Retry: $1 $((retries + 1))/$MAX (review)"
+    start_task "$1" "$(( $2 + 1 ))"
+}
+
+# $1=ID $2=試行回数。品質ゲートが FAIL。$LAST に品質ゲート(または test_command)の出力がある
+retry_after_gate() {
+    local retries next=$(( $2 + 1 )); retries="$(state_field "$1" retries)"
+    [ -n "$retries" ] || retries=0
+    mkdir -p "$RUNS/$1-$next"
+    {
+        echo "# 修正依頼(原因種別: 品質ゲート FAIL)"
+        echo
+        echo "コミット前の品質ゲートが失敗しました。下の出力から原因を調べて直し、失敗したコマンドが通ることを確かめてください。"
+        echo
+        echo '```'
+        tr -d '\r' < "$LAST" | grep -v '^Next: ' | tail -n 80
+        echo '```'
+    } > "$RUNS/$1-$next/fix-notes.md"
+    call task-state.sh "$1" retry
+    [ "$CALL_CODE" -eq 4 ] && stop_run "$1" retry-limit
+    [ "$CALL_CODE" -eq 0 ] || stop_run "$1" task-state
+    emit "Retry: $1 $((retries + 1))/$MAX (quality-gate)"
+    start_task "$1" "$next"
+}
+
+# $1=ID $2=試行回数。collect が衝突した(状態は in_progress。worktree は残っている)
+redo_after_conflict() {
+    local next=$(( $2 + 1 ))
+    [ "$2" -gt "$MAX" ] && stop_run "$1" conflict        # 試行は MAX + 1 回まで
+    mkdir -p "$RUNS/$1-$next"
+    {
+        echo "# 修正依頼(原因種別: 取り込みの衝突)"
+        echo
+        echo "前の試行の変更は、ほかのタスクのコミットと衝突したため本体に取り込めませんでした。最新の HEAD でやり直してください。"
+        echo "前の試行の変更は \`$(to_py_path "$PWD")/$RUNS/$1-$2/changes.patch\` にあります。このファイルだけは worktree の外にありますが、読んで構いません(そのままは当たりません)。"
+    } > "$RUNS/$1-$next/fix-notes.md"
+    : > "$RUNS/$1-$2/superseded"
+    emit "Redo: $1-$next (conflict)"
+    start_task "$1" "$next"
 }
 
 # $1=ID。run-phase の段階に応じて1つ進める
@@ -321,7 +389,7 @@ handle_task() {
         reviewing)    poll_review "$1" "$n" ;;
         collect) collect_task "$1" "$n" ;;
         gate)    gate_and_commit "$1" "$n" ;;
-        retry)   stop_run "$1" not-implemented ;;   # T15 で置き換える
+        retry)   retry_task "$1" "$n" ;;
         manual)  stop_run "$1" manual "Next: review $1" ;;
         *)       stop_run "$1" unknown-phase ;;
     esac
