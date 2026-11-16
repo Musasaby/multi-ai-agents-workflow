@@ -32,6 +32,30 @@ function Set-ChildBody {
     Write-Utf8File "$script:Proj/.agents/child-stub.sh" ("#!/bin/bash`n" + ($Body -replace "`r`n", "`n") + "`n")
 }
 
+# レビュー役のスタブの本文を差し替える(config は同じ絶対パスを指したまま)
+function Set-ReviewBody {
+    param([string]$Body)
+    Write-Utf8File "$script:Proj/.agents/review-stub.sh" ("#!/bin/bash`n" + ($Body -replace "`r`n", "`n") + "`n")
+}
+
+# ファイルの Number 行目を返す(1 始まり。無ければ空文字列)
+function Get-FileLine {
+    param([string]$Path, [int]$Number)
+    if (-not (Test-Path $Path)) { return '' }
+    $lines = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) -split "`n"
+    if ($Number -lt 1 -or $Number -gt $lines.Count) { return '' }
+    return ($lines[$Number - 1] -replace "`r", '')
+}
+
+# worktree.txt の `path ` 行の値を返す(無ければ空文字列)
+function Get-WorktreePath {
+    param([string]$Path)
+    $line = @([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) -split "`n" |
+        Where-Object { $_ -like 'path *' } | Select-Object -First 1)
+    if ($line.Count -eq 0) { return '' }
+    return ($line[0].Substring(5) -replace "`r", '')
+}
+
 # 30秒眠ってから完了報告を出す子
 function Set-SlowChild {
     Write-Utf8File "$script:Proj/.agents/child-stub.sh" @'
@@ -98,11 +122,35 @@ echo "## 完了報告"
 echo "- 変更ファイル: $id.txt"
 echo "- テスト結果: 全件パス"
 '@
-    # レビュー役(このタスクの範囲では使わないが、config の条件を満たすために置く)
+    # レビュー役。カレントディレクトリ(worktree)の親ディレクトリ名(review-<ID>-<N>)からタスクIDを取る
     Write-Utf8File "$script:Proj/.agents/review-stub.sh" @'
 #!/bin/bash
+run_name="$(basename "$(dirname "$PWD")")"
+id="${run_name%-*}"
+id="${id#review-}"
+n="${run_name##*-}"
+# .agents/review-fail-<ID> があれば、レビュー不合格として次の試行の fix-notes.md を書く
+root="$(cd "$PWD/../../../.." && pwd)"
+if [ -f "$root/review-fail-$id" ]; then
+    rm -f "$root/review-fail-$id"
+    mkdir -p "$root/workflow/runs/$id-$((n + 1))"
+    printf '# 修正依頼\n\nレビューの指摘を直してください。\n' > "$root/workflow/runs/$id-$((n + 1))/fix-notes.md"
+    echo "## 完了報告"
+    echo "- Verdict: fail"
+    echo "- 指摘: 1件(修正が必要)"
+    echo "- 要約: $id を直す"
+    echo "- type: feat"
+    echo "- fix-notes: あり"
+    echo "- 理解確認: なし"
+    exit 0
+fi
 echo "## 完了報告"
 echo "- Verdict: pass"
+echo "- 指摘: 0件(なし)"
+echo "- 要約: $id を変える"
+echo "- type: feat"
+echo "- fix-notes: なし"
+echo "- 理解確認: なし"
 '@
     $bash = ((Get-Command bash).Source -replace '\\', '/')
     $child = ("$script:Proj/.agents/child-stub.sh" -replace '\\', '/')
@@ -189,6 +237,42 @@ Invoke-TestCase "run: 実装の run が異常終了したら、その理由で�
     $first = Get-Content -LiteralPath "$script:Proj/.agents/workflow/runs/T1-1/done" -TotalCount 1
     Assert-Eq "EXIT:1" "$first" "子が実際に異常終了した"
     Wait-Done T2-1
+}
+
+Invoke-TestCase "run: 子が終わると worktree の中でレビューし、verdict を記録する" {
+    Initialize-Runner
+    Set-State 'T1:pending' 'T2:done'
+    Set-StateBranch develop/t
+    $runs = "$script:Proj/.agents/workflow/runs"
+    for ($i = 0; $i -lt 60; $i++) {
+        Invoke-Script workflow-run.ps1 -MaxWait 2 -Interval 1
+        if (Test-Path "$runs/review-T1-1/verdict") { break }
+    }
+    Assert-FileExists "$runs/T1-1/checked" "実装の run が checked"
+    Assert-FileExists "$runs/review-T1-1/worktree.txt" "レビューの worktree.txt"
+    Assert-Eq "pass" (Get-FileLine "$runs/review-T1-1/verdict" 1) "verdict の1行目"
+    Assert-Eq "feat" (Get-FileLine "$runs/review-T1-1/verdict" 2) "verdict の2行目"
+    Assert-Eq "T1 を変える" (Get-FileLine "$runs/review-T1-1/verdict" 3) "verdict の3行目"
+    Assert-Eq (Get-WorktreePath "$runs/T1-1/worktree.txt") (Get-WorktreePath "$runs/review-T1-1/worktree.txt") `
+        "レビューは実装と同じ worktree の中で行う"
+    $progress = [System.IO.File]::ReadAllText("$runs/workflow-run/progress.log")
+    Assert-Contains $progress "Review: T1-1 pass" "progress.log に記録"
+}
+
+Invoke-TestCase "run: レビューの完了報告が無効なら review-invalid で止まる" {
+    Initialize-Runner
+    Set-State 'T1:pending' 'T2:done'
+    Set-StateBranch develop/t
+    Set-ReviewBody ':'        # 何も出力しないレビュー役
+    $runs = "$script:Proj/.agents/workflow/runs"
+    for ($i = 0; $i -lt 60; $i++) {
+        Invoke-Script workflow-run.ps1 -MaxWait 2 -Interval 1
+        if ($script:Code -eq 3) { break }
+    }
+    Assert-Eq 3 $script:Code "exit 3: $($script:Err)"
+    Assert-Contains $script:Out "Stopped: T1 reason=review-invalid" "無効な完了報告で止まる"
+    Assert-Eq "Next: escalate reason=review-invalid" (Get-LastLine $script:Out) "最後の行"
+    Assert-Eq "in_progress" (Get-StateTask T1).status "T1 の状態は in_progress のまま"
 }
 
 Invoke-TestCase "run: 全タスク done なら Next: finish" {

@@ -1,5 +1,5 @@
-﻿# 1グループ分のタスクを、タスクの起動と実装の run の完了待ちまで進める(レビュー以降の段階は
-# T17〜T18 で足す)。進行中(in_progress / in_review)のタスクを run-phase の段階に応じて1つずつ
+﻿# 1グループ分のタスクを、タスクの起動からレビューまで進める(collect 以降の段階は T18 で足す)。
+# 進行中(in_progress / in_review)のタスクを run-phase の段階に応じて1つずつ
 # 進め、next-task で空きの分だけ新しいタスクを起動する。-MaxWait 秒に達するか、グループが
 # 終わるか、止まるまで動く(常駐はしない。呼び直せば state.json と runs/ から続きを再開する)。
 # Usage: workflow-run.ps1 [-MaxWait <秒>] [-Interval <秒>]
@@ -16,11 +16,14 @@
 # stdout の行(詳細は runs/workflow-run/last-output.log):
 #   Started: <ID>-<N>            実装の run を起動した
 #   Checked: <ID>-<N>            実装の run が dispatch-check を通った
+#   Review started: <ID>-<N>     レビューの run を起動した
+#   Review: <ID>-<N> <pass|fail> レビューの run の結果
 #   Stopped: <ID> reason=<理由>  止まった(タスクIDが無ければ -)
 #   Finished: <Next の値>        グループが終わった
 #   In flight: <ID>-<N> <段階>   実行中のタスク(記録には書かない)
 #   Detail: <last-output.log のパス>  止まったときの詳細(記録には書かない)
-# Started:・Checked:・Stopped:・Finished: は runs/workflow-run/progress.log にも時刻付きで書く。
+# Started:・Checked:・Review started:・Review:・Stopped:・Finished: は runs/workflow-run/progress.log にも時刻付きで書く。
+# 止まる理由には review-invalid(レビューの完了報告が無効・異常終了・時間超過など)がある。
 # ロック: runs/workflow-run/lock/pid に自分の PID を書き、実行する。ロックがあり、そのプロセスが
 #   生きていれば exit 5、死んでいれば引き継ぐ。終了時にロックを消す処理は finally で行う。
 param(
@@ -243,6 +246,46 @@ function Wait-Impl {
     }
 }
 
+# レビューの run を起動する
+function Start-Review {
+    param([string]$TaskId, [int]$Attempt)
+    Invoke-Step -Name 'dispatch-start.ps1' -Arguments @('-Review', '-TaskId', $TaskId, '-Attempt', "$Attempt")
+    if ($script:CallCode -eq 0 -and $script:CallNext -ceq 'wait') {
+        Emit "Review started: $TaskId-$Attempt"
+    } else {
+        Stop-Run -TaskId $TaskId -Reason (Get-NextReason 'review-start')
+    }
+}
+
+# last-output.log から `<見出し>: ` で始まる最後の行の値を出す(例: 見出し "Review type")
+function Get-LastField {
+    param([string]$Heading)
+    if (-not (Test-Path -LiteralPath $Last -PathType Leaf)) { return '' }
+    $line = Get-Content -LiteralPath $Last -Encoding utf8 |
+        Where-Object { $_.StartsWith("${Heading}: ") } | Select-Object -Last 1
+    if ($null -eq $line) { return '' }
+    return $line.Substring($Heading.Length + 2)
+}
+
+# レビューの run の完了を1回だけ確かめる
+function Wait-Review {
+    param([string]$TaskId, [int]$Attempt)
+    $vfile = "$Runs/review-$TaskId-$Attempt/verdict"
+    Invoke-Step -Name 'dispatch-wait.ps1' -Arguments @('-TaskId', "review-$TaskId", '-Attempt', "$Attempt", '-MaxWait', '0')
+    if ($script:CallCode -eq 2) { return }
+    if ($script:CallCode -eq 0 -and $script:CallNext -ceq "commit $TaskId") {
+        $type = Get-LastField 'Review type'
+        $summary = Get-LastField 'Review summary'
+        Write-LfFile $vfile "pass`n$type`n$summary`n"
+        Emit "Review: $TaskId-$Attempt pass"
+    } elseif ($script:CallCode -eq 0 -and $script:CallNext -ceq "retry $TaskId") {
+        Write-LfFile $vfile "fail`n"
+        Emit "Review: $TaskId-$Attempt fail"
+    } else {
+        Stop-Run -TaskId $TaskId -Reason 'review-invalid'      # 完了報告が無効・異常終了・時間超過など
+    }
+}
+
 # run-phase の段階に応じて1つ進める
 function Invoke-Task {
     param([string]$TaskId)
@@ -251,9 +294,8 @@ function Invoke-Task {
         'start' { Start-Task -TaskId $TaskId -Attempt $phase.N }
         'running' { Wait-Impl -TaskId $TaskId -Attempt $phase.N }
         'manual' { Stop-Run -TaskId $TaskId -Reason 'manual' -LastLine "Next: review $TaskId" }
-        # T17〜T18 で実装する段階(それまでは止まる)
-        'review-start' { Stop-Run -TaskId $TaskId -Reason 'not-implemented' }
-        'reviewing' { Stop-Run -TaskId $TaskId -Reason 'not-implemented' }
+        'review-start' { Start-Review -TaskId $TaskId -Attempt $phase.N }
+        'reviewing' { Wait-Review -TaskId $TaskId -Attempt $phase.N }
         'collect' { Stop-Run -TaskId $TaskId -Reason 'not-implemented' }
         'gate' { Stop-Run -TaskId $TaskId -Reason 'not-implemented' }
         'retry' { Stop-Run -TaskId $TaskId -Reason 'not-implemented' }
