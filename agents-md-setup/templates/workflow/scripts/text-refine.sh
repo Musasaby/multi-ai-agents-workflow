@@ -194,6 +194,13 @@ def detect():
     return found
 
 
+def yomiyasu_dir():
+    for place in detect():
+        if place.endswith('skills/yomiyasu/SKILL.md'):
+            return place[:-len('/SKILL.md')]
+    return '.agents/skills/yomiyasu'
+
+
 if not skill_set or target not in targets:
     print('Refine: off')
     if not skill_set and not check:
@@ -215,8 +222,10 @@ output_path = base + '.refined' + ext
 decisions_path = base + '.decisions' + ext
 
 
-def unchecked(reason):
+def unchecked(reason, hint=None):
     print('Unchecked: ' + reason)
+    if hint:
+        print('Hint: ' + hint)
     print('Next: escalate reason=refine-unchecked')
     sys.exit(3)
 
@@ -333,7 +342,11 @@ def run_check():
         if best_key is None or key > best_key:
             best, best_key, best_path = rec, key, rec_path
     if best is None:
-        unchecked('no record for sha256:' + h[:12])
+        unchecked(
+            'no record for sha256:' + h[:12],
+            'run python3 %s/scripts/yomiyasu_check.py run --source %s --final %s, then run this check again'
+            % (yomiyasu_dir(), input_path, output_path),
+        )
     print('Record: ' + os.path.relpath(best_path, state).replace(os.sep, '/'))
 
     def find_report(name):
@@ -416,6 +429,13 @@ request = (
     inp=input_path, skill=skill, out=output_path, kind=KINDS[target],
     reader=READERS[reader], keep=KEEP_BASE + KEEP_EXTRA[target],
 )
+if skill.strip() in ('yomiyasu', 'yomiyasu:yomiyasu'):
+    request += (
+        '書いた後に python3 ' + yomiyasu_dir() +
+        '/scripts/yomiyasu_check.py run --source ' + input_path +
+        ' --final ' + output_path +
+        ' を実行して、検査の記録を残してください(記録が無いと次の確認で止まります)。'
+    )
 
 print('Refine: ' + skill)
 print('Output: ' + output_path)

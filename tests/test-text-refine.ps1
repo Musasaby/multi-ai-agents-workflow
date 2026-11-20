@@ -128,9 +128,22 @@ Invoke-TestCase "text-refine: 有効なら依頼文と出力パスを出す" {
         Assert-Contains $script:Out "PR説明です" "場面"
         Assert-Contains $script:Out "読者は分野は違うが技術に詳しい人です" "読者"
         Assert-Contains $script:Out "要件一覧とテスト計画の項目" "変えない物"
+        Assert-Contains $script:Out "yomiyasu_check.py run --source .agents/workflow/runs/refine/pr_body.md --final .agents/workflow/runs/refine/pr_body.refined.md" "検査のコマンド"
         Assert-Contains $script:Out "Next: refine" "次の操作"
         Assert-FileAbsent "$script:Proj/.agents/workflow/runs/refine/pr_body.refined.md" "前の出力を消す"
         Assert-FileAbsent "$script:Proj/.agents/workflow/runs/refine/pr_body.decisions.md" "前の判断を消す"
+    } finally { Remove-TestHome }
+}
+
+Invoke-TestCase "text-refine: yomiyasu 以外の skill の依頼文には検査のコマンドを入れない" {
+    New-TestHome
+    try {
+        Set-Refine 'other'
+        Write-Utf8File "$script:Proj/.agents/workflow/runs/refine/pr_body.md" "本文`n"
+        Invoke-Script text-refine.ps1 pr_body .agents/workflow/runs/refine/pr_body.md
+        Assert-Eq 0 $script:Code "exit: $($script:Err)"
+        Assert-Contains $script:Out "Request:" "依頼文"
+        Assert-NotContains $script:Out "yomiyasu_check.py" "検査のコマンドを入れない"
     } finally { Remove-TestHome }
 }
 
@@ -178,6 +191,7 @@ Invoke-TestCase "text-refine: チェックは記録が無いか最終稿のハ�
         Invoke-Script text-refine.ps1 pr_body $script:InputF -Check
         Assert-Eq 3 $script:Code "exit 3"
         Assert-Contains $script:Out "Unchecked: output not found" "推敲済みが無い"
+        Assert-NotContains $script:Out "Hint:" "推敲済みが無いときはヒントを出さない"
         Write-Utf8File "$script:Proj/$script:Refined" "推敲済みの本文`n2行目`n"
         Write-Utf8File "$script:Proj/other.md" "別の内容`n"
         Write-Record r1 '2026-01-01T00:00:00Z' "$script:Proj/other.md" @() @()
@@ -185,6 +199,14 @@ Invoke-TestCase "text-refine: チェックは記録が無いか最終稿のハ�
         Assert-Eq 3 $script:Code "exit 3"
         Assert-Contains $script:Out "Unchecked: no record for sha256:" "ハッシュが合わない"
         Assert-Contains $script:Out "Next: escalate reason=refine-unchecked" "エスカレーション"
+        $lines = @($script:Out -split "`n")
+        $next = ''
+        for ($i = 0; $i -lt $lines.Count - 1; $i++) {
+            if ($lines[$i] -like 'Unchecked: no record for sha256:*') { $next = $lines[$i + 1] }
+        }
+        Assert-Eq $true ($next.StartsWith('Hint: run python3 ')) "Hint は Unchecked の次"
+        Assert-Contains $next "yomiyasu_check.py run --source" "Hint のコマンド"
+        Assert-Eq 'Next: escalate reason=refine-unchecked' $lines[-1] "最後の行"
     } finally { Remove-TestHome }
 }
 
