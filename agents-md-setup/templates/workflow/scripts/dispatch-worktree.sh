@@ -251,7 +251,32 @@ if [ "$ATTEMPT" -ge 2 ]; then
 fi
 
 mkdir -p "$RUN"
-if ! ADD_OUT="$(git -c core.longpaths=true worktree add -q -b "$BRANCH" "$WT" HEAD 2>&1)"; then
+ADD_LOG="$RUN/worktree-add.log"
+ADD_OK=0
+ADD_OUT=""
+for ADD_TRY in 1 2 3; do
+    if ADD_OUT="$(git -c core.longpaths=true worktree add -q -b "$BRANCH" "$WT" HEAD 2>&1)"; then
+        ADD_OK=1
+        break
+    fi
+    {
+        echo "--- attempt $ADD_TRY"
+        printf '%s\n' "$ADD_OUT"
+    } >> "$ADD_LOG"
+    if printf '%s\n' "$ADD_OUT" | grep -q '\.lock' && printf '%s\n' "$ADD_OUT" | grep -q 'File exists' && [ "$ADD_TRY" -lt 3 ]; then
+        # 作りかけの WT・ブランチを消してやり直す(本体の変更の復元は最後まで失敗したときだけ)
+        rm -rf "$WT"
+        if git rev-parse --verify -q "refs/heads/$BRANCH" > /dev/null; then
+            git branch -D -q "$BRANCH"
+        fi
+        git worktree prune
+        echo "Retry: git worktree add ($ADD_TRY/2)" >&2
+        sleep 1
+        continue
+    fi
+    break
+done
+if [ "$ADD_OK" -ne 1 ]; then
     # 作りかけの WT・ブランチ・worktree.txt を消し、取り除いた前の試行の変更は本体に戻す
     rm -rf "$WT"
     if git rev-parse --verify -q "refs/heads/$BRANCH" > /dev/null; then
@@ -264,7 +289,14 @@ if ! ADD_OUT="$(git -c core.longpaths=true worktree add -q -b "$BRANCH" "$WT" HE
         rm -f "$RUN/reverted"
     fi
     echo "git worktree add failed: $WT ($BRANCH)" >&2
-    printf '%s\n' "$ADD_OUT" | tr -d '\r' | grep . | tail -n 1 >&2
+    FAIL_LINE="$(printf '%s\n' "$ADD_OUT" | tr -d '\r' | grep -m 1 -E '^(fatal|error):' || true)"
+    if [ -z "$FAIL_LINE" ]; then
+        FAIL_LINE="$(printf '%s\n' "$ADD_OUT" | tr -d '\r' | grep . | tail -n 1)"
+    fi
+    if [ -n "$FAIL_LINE" ]; then
+        echo "$FAIL_LINE" >&2
+    fi
+    echo "Detail: $ADD_LOG" >&2
     echo "Next: escalate reason=worktree"
     exit 30
 fi

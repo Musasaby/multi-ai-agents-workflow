@@ -95,11 +95,33 @@ Invoke-TestCase "dispatch-worktree: worktree add が失敗するとブランチ�
         Add-Result (-not (Test-Branch 'agents-run/T1-1')) "ブランチが残らない"
         Assert-FileAbsent "$run/worktree" "WT が残らない"
         Assert-FileAbsent "$run/worktree.txt" "worktree.txt が残らない"
+        Assert-Contains $script:Err "Detail: " "stderr に Detail: が含まれる"
         Assert-Contains ([System.IO.File]::ReadAllText($script:WrapLog)) "worktree add" "ラッパーが worktree add を受けた"
 
         Invoke-Script dispatch-worktree.ps1 create T1 1
         Assert-Eq 0 $script:Code "ラッパーを外すと同じ試行で create できる: $($script:Err)"
     } finally { Disable-GitWrap }
+}
+
+Invoke-TestCase "dispatch-worktree: worktree add がロックで失敗すると 3 回試して exit 30、ロックを消すと create できる" {
+    $run = "$script:Proj/.agents/workflow/runs/T1-1"
+    $null = New-Item -ItemType Directory -Force "$script:Proj/.git/refs/heads/agents-run"
+    Write-Plain "$script:Proj/.git/refs/heads/agents-run/T1-1.lock" ''
+    Invoke-Script dispatch-worktree.ps1 create T1 1
+    Assert-Eq 30 $script:Code "ロックがあると exit 30"
+    Assert-Eq "Next: escalate reason=worktree" (Get-LastLine) "escalate reason=worktree"
+    Assert-Contains $script:Err "Retry: git worktree add (2/2)" "やり直しのメッセージ"
+    Assert-Contains $script:Err "fatal: cannot lock ref" "stderr に fatal: cannot lock ref"
+    Assert-Contains $script:Err "Detail: " "stderr に Detail: が含まれる"
+    Assert-FileExists "$run/worktree-add.log" "worktree-add.log ができる"
+    $log = [System.IO.File]::ReadAllText("$run/worktree-add.log")
+    Assert-Contains $log "--- attempt 3" "ログに attempt 3"
+    Assert-Contains $log "cannot lock ref" "ログに cannot lock ref"
+    Add-Result (-not (Test-Branch 'agents-run/T1-1')) "ブランチが残らない"
+
+    Remove-Item -LiteralPath "$script:Proj/.git/refs/heads/agents-run/T1-1.lock" -Force
+    Invoke-Script dispatch-worktree.ps1 create T1 1
+    Assert-Eq 0 $script:Code "ロックを消すと create できる: $($script:Err)"
 }
 
 Invoke-TestCase "dispatch-worktree: 試行 2 の worktree add が失敗すると前の変更が本体に戻る" {
