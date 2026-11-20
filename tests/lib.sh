@@ -257,12 +257,14 @@ assert_file_absent() { if [ ! -e "$1" ]; then _record ok; else _record ng "$2 (f
 
 # test_case <name> <function>
 test_case() {
+    local start=$SECONDS
     CURRENT_TEST="$1"
     echo "  - $1"
     gh_stub_reset
     new_project
     "$2"
     cleanup_project
+    echo "    time: $((SECONDS - start))s"
 }
 
 summary() {
