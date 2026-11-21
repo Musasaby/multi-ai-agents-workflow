@@ -973,6 +973,13 @@ run の完了をポーリングで待つ。1回の呼び出しで `--max-wait` �
   本体に無いので持ち越さない。stdout に `Carried: <パッチ>` / `Carried: none` /
   `Carried: none (not collected: <前のパッチのパス>)` のどれかと、`Worktree: <パス>`、`Branch: <名前>` を出す。
   持ち越しが衝突したら exit 40 で、WT・ブランチを残さず、取り除いた変更を本体に戻す
+  - `git worktree add` の失敗は、失敗ごとに stderr の全文を `$RUN/worktree-add.log` に残す
+    (`--- attempt <n>` の行に続けて書く)。stderr に `.lock` と `File exists` の両方が含まれる失敗は
+    worktree のロックの取り合いなので、作りかけの WT・ブランチを消して `Retry: git worktree add (<n>/2)` を
+    stderr に出し、1 秒待ってやり直す(やり直しは 2 回まで)
+  - やり直しても失敗したときは、後片付けの後に stderr へ `git worktree add failed:` の行、失敗の
+    最初の `fatal:` / `error:` の行(無ければ最後の非空行)、`Detail: <worktree-add.log のパス>` の
+    3 行を出して exit 30 で終わる
 - `collect`: WT の変更(未追跡・WT でコミットした変更を含む。`.agents/workflow` は除く)の、`worktree.txt` の
   `base` との差分を `$RUN/changes.patch` にして本体へ `git apply` し、空の `$RUN/collected` を作って
   WT・ブランチ・`worktree.txt` を消す(`base` の行が無ければ `HEAD` との差分)。tasks.md の `changed` に無い
@@ -1463,6 +1470,9 @@ Next: refine
   同名のファイルが既にあれば先に削除する(`.decisions` のファイルも削除する)
 - 依頼文には、場面ごとの文章の種類、読み手(`text_refine.reader`)、変えてはいけないもの
   (コマンド・パス・タスクID・コミットハッシュ・URL・括弧書きの補足、場面によって構成や改行)を入れる
+- `skill` が `yomiyasu` / `yomiyasu:yomiyasu` のときは、依頼文に検査のコマンド
+  (`python3 <yomiyasu のディレクトリ>/scripts/yomiyasu_check.py run --source <入力> --final <出力>`)を
+  入れる。子は推敲の後にこのコマンドを実行して検査の記録を残す(記録が無いと `--check` で止まる)
 
 推敲の後のチェック(`--check`。ps1 は `-Check`):
 
@@ -1495,7 +1505,9 @@ Next: decide-candidates
 - 判断のファイルは入力ファイルの拡張子の前に `.decisions` を足したもの(`report.md` → `report.decisions.md`)。
   各候補のキーが含まれていれば判断済みとみなす。判断が無い候補は `Undecided:` で出し、`Next: decide-candidates`
 - 確かめられないとき(推敲済みファイル・記録・lint の報告が無い等)は `Unchecked: <理由>` と
-  `Next: escalate reason=refine-unchecked`
+  `Next: escalate reason=refine-unchecked`。`--check` が `no record`(推敲済みファイルの SHA-256 に
+  一致する記録が無い)で止まったときは、その間に `Hint:` の行に、記録を作るための
+  `yomiyasu_check.py run` のコマンドを出す
 - `tasks` の `--check` は、yomiyasu の記録を確かめる前に、推敲前後の構造を比べる。構造は見出し(`#` 始まり)・
   コメント行(`<!--` 始まり)・`依存`・`要件`・`グループ`・`参照ファイル` の行と参照ファイルの箇条・要件ID(`- R1:` 等)・
   コードブロックの中身で、行末の空白は無視する。この比較は yomiyasu 以外の skill でも行う
