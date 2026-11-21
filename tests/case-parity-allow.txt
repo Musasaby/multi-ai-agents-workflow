@@ -28,11 +28,3 @@ test-skill-size.ps1: *
 # 端末の出力コードページの切り替えは ps1(workflow-logs.ps1)専用。リダイレクト時にバイト列が変わらないことの確認
 test-workflow-logs.ps1: logs: リダイレクトで受けた日本語は BOM なしの UTF-8 のバイト列になる
 
-# T3 で消す(#141 の分割の途中)
-test-workflow-run-retry.sh: *
-test-workflow-run.ps1: run: type が無効なら commit-format で止まり、in_review のまま残る
-test-workflow-run.ps1: run: レビュー不合格なら変更を持ち越して再 dispatch する
-test-workflow-run.ps1: run: 品質ゲートが FAIL なら fix-notes.md を機械的に書いて再 dispatch する
-test-workflow-run.ps1: run: リトライの上限でレビュー不合格なら collect して retry-limit で止まる
-test-workflow-run.ps1: run: collect が衝突したら最新の HEAD からやり直す
-
