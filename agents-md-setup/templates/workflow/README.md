@@ -671,7 +671,8 @@ Windows にはシグナルの仕組みが無いため、PowerShell 版での強�
 
 子の一時ファイルの置き場所も `dispatch-run` が設定する: 子プロセスには `TMPDIR`・`TEMP`・`TMP`
 を `runs/<タスクID>-<試行回数>/tmp/`(起動時に作成する)に設定するため、子が `mktemp` 等で作る
-一時ファイルはプロジェクト内の `tmp/` に置かれる。`GIT_CEILING_DIRECTORIES` には `tmp/` の親である
+一時ファイルはプロジェクト内の `tmp/` に置かれる。あわせて `PYTHONDONTWRITEBYTECODE=1` も設定し、
+子が Python を実行しても `__pycache__`(`.pyc`)を残さないようにする。`GIT_CEILING_DIRECTORIES` には `tmp/` の親である
 `runs/<タスクID>-<試行回数>/` を設定する(`tmp/` そのものではない)。git は ceiling と同じ
 ディレクトリが cwd のときも探索を止めないため、その下の `tmp/` で実行された `git` が本物の
 リポジトリを探索でたどり着かないようにする。PowerShell 版は
@@ -684,6 +685,12 @@ WT 側にする。`guard.sha256` の対象のうち `state.json`・`tasks.md` �
 (`runs/<ID>-<N>/worktree/.agents/workflow/` の下)にする(`prompt.md`・`config.json`・`child-profiles.json` は本体のまま)。
 `git-state.txt` は WT の中で `git-state --run <branch> --parent <親の作業ブランチ>` を実行した値を記録する。`output.log`・`done` などの
 記録は本体の `runs/<ID>-<N>/` に書く。
+
+**本体で動くレビューの run**(`review-*` で `worktree.txt` が無い run)の `guard.sha256`: 親が並列中に
+`state.json` を更新するため、`state.json` の全体のハッシュは入れない。代わりに、レビュー対象のタスク
+(`review-` を除いた ID)の欄(`status`・`retries`・`commit`)を `runs/<ID>-<N>/state-entry.txt` に、全タスクの
+同じ欄を `state-tasks.json` に記録し、`dispatch-check` がレビュー対象の欄と、ほかのタスクの欄の変化を
+確かめる(下記 dispatch-check の「レビューの run」)。
 
 起動時の git 状態(HEAD・ブランチ・参照・config の SHA-256。「git-state」節の4行)を
 `runs/<タスクID>-<試行回数>/git-state.txt` に記録する(失敗しても起動は止めない)。
@@ -738,7 +745,8 @@ sh 版では位置引数の前でも後でも指定できる。
   `runs/<タスクID>-<試行回数>/main-tree.txt` に記録する。`dispatch-check` は今の
   `git-state --main-tree` の出力と比べ、起動時に無かったパスとハッシュが変わったパスを
   `changed: main worktree: <パス>` として改ざん検知の問題に加える(`.agents/workflow/` の下は
-  対象外)。起動時にあって今は無いパス(親がコミットした場合など)は問題にしない。
+  対象外)。`runs/<ID>-<N>/done` より後に更新されたファイルには ` (modified after the run ended)` を
+  付ける(子の終了後の変化か、実行中からの変化かの切り分け用)。起動時にあって今は無いパス(親がコミットした場合など)は問題にしない。
   `main-tree.txt` が無い worktree の run は `main-tree.txt not found` を問題にする。
   並列中に親がほかの run を collect して本体に未コミットの変更ができた場合は、自分の
   `main-tree.txt` より新しい `collected` を持つほかの run の `changes.patch` の
@@ -863,10 +871,17 @@ exit code(複数に当たる場合は上の行を優先する):
 - **変更0件の判定**: 行わない(`pr-*` と同じく exit 7 にしない)
 - **プロファイル**: `review.profile` と `review-<ID>` のプロファイルで判定する(launcher が `subagent` なら
   `subagent` プロファイル)
+- **本体で動くレビューの run の `state.json`**: レビューの run(`worktree.txt` が無い `review-*`)では、
+  `guard.sha256` に `state.json` の全体のハッシュは無い。代わりに、レビュー対象のタスク
+  (`review-` を除いた ID)の欄を `state-entry.txt` と比べ(`state-entry.txt` が無いのも改ざん)、
+  ほかのタスクの欄を `state-tasks.json` と比べて変化が正規の遷移かを確かめる(worktree の run と同じ。
+  `task-state`・`state-sync --insert` による遷移だけを許し、不正なら
+  `changed: .agents/workflow/state.json (<ID>)` を出す)
 - **本体の変更の検知**: `dispatch-run` はレビューの run でも起動時に `main-tree.txt`
   (`git-state --main-tree` の値)を記録する。`dispatch-check` は今の値と比べ、起動時に無かったパスと
   ハッシュが変わったパスを `changed: main worktree: <パス>` として `Guard:` に加える
-  (`main-tree.txt` が無いのも改ざん)。レビュー役はコードを変えないため、本体の変更は tampered(exit 8)
+  (`main-tree.txt` が無いのも改ざん)。`done` より後に更新されたファイルには
+  ` (modified after the run ended)` が付く。レビュー役はコードを変えないため、本体の変更は tampered(exit 8)
   になる
 - **出力**: 通常の行に加えて `Review verdict:`(pass / fail)・`Review findings:`(`指摘` の値)・
   `Review summary:`(`要約` の値)・`Review type:`(feat / fix / refactor / docs / test / chore / perf / ci の
