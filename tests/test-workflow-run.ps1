@@ -80,8 +80,10 @@ Invoke-TestCase "run: 子が終わると worktree の中でレビューし、ver
     Set-State 'T1:pending' 'T2:done'
     Set-StateBranch develop/t
     $runs = "$script:Proj/.agents/workflow/runs"
+    $implWt = ''
     for ($i = 0; $i -lt 60; $i++) {
         Invoke-Script workflow-run.ps1 -MaxWait 2 -Interval 1
+        if (Test-Path "$runs/T1-1/worktree.txt") { $implWt = Get-WorktreePath "$runs/T1-1/worktree.txt" }
         if (Test-Path "$runs/review-T1-1/verdict") { break }
     }
     Assert-FileExists "$runs/T1-1/checked" "実装の run が checked"
@@ -89,7 +91,8 @@ Invoke-TestCase "run: 子が終わると worktree の中でレビューし、ver
     Assert-Eq "pass" (Get-FileLine "$runs/review-T1-1/verdict" 1) "verdict の1行目"
     Assert-Eq "feat" (Get-FileLine "$runs/review-T1-1/verdict" 2) "verdict の2行目"
     Assert-Eq "T1 を変える" (Get-FileLine "$runs/review-T1-1/verdict" 3) "verdict の3行目"
-    Assert-Eq (Get-WorktreePath "$runs/T1-1/worktree.txt") (Get-WorktreePath "$runs/review-T1-1/worktree.txt") `
+    Assert-Eq $true ($implWt -ne '') "実装の worktree のパスを取れた"
+    Assert-Eq $implWt (Get-WorktreePath "$runs/review-T1-1/worktree.txt") `
         "レビューは実装と同じ worktree の中で行う"
     $progress = [System.IO.File]::ReadAllText("$runs/workflow-run/progress.log")
     Assert-Contains $progress "Review: T1-1 pass" "progress.log に記録"

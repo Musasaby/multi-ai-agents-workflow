@@ -78,9 +78,10 @@ t_review_pass() {
     setup_runner
     write_state "T1:pending" "T2:done"
     set_state_branch develop/t
-    local i
+    local i impl_wt=""
     for i in $(seq 1 60); do
         run_script workflow-run.sh --max-wait 2 --interval 1
+        [ -f "$PROJ/.agents/workflow/runs/T1-1/worktree.txt" ] && impl_wt="$(sed -n 's/^path //p' "$PROJ/.agents/workflow/runs/T1-1/worktree.txt" | head -n 1 | tr -d '\r')"
         [ -f "$PROJ/.agents/workflow/runs/review-T1-1/verdict" ] && break
     done
     local runs="$PROJ/.agents/workflow/runs"
@@ -89,7 +90,8 @@ t_review_pass() {
     assert_eq "pass" "$(sed -n '1p' "$runs/review-T1-1/verdict" | tr -d '\r')" "verdict の1行目"
     assert_eq "feat" "$(sed -n '2p' "$runs/review-T1-1/verdict" | tr -d '\r')" "verdict の2行目"
     assert_eq "T1 を変える" "$(sed -n '3p' "$runs/review-T1-1/verdict" | tr -d '\r')" "verdict の3行目"
-    assert_eq "$(sed -n 's/^path //p' "$runs/T1-1/worktree.txt" | head -n 1 | tr -d '\r')" \
+    assert_eq 0 "$([ -n "$impl_wt" ]; echo $?)" "実装の worktree のパスを取れた"
+    assert_eq "$impl_wt" \
         "$(sed -n 's/^path //p' "$runs/review-T1-1/worktree.txt" | head -n 1 | tr -d '\r')" \
         "レビューは実装と同じ worktree の中で行う"
     assert_contains "$(cat "$runs/workflow-run/progress.log")" "Review: T1-1 pass" "progress.log に記録"
