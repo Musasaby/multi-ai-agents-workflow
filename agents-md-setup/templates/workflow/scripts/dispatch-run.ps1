@@ -35,10 +35,16 @@ if (Test-Path -LiteralPath "$runDir/worktree.txt") {
 }
 $guardState = '.agents/workflow/state.json'
 $guardTasks = '.agents/workflow/tasks.md'
+# 守る欄のタスクID(entryId): worktree の run は自分のタスク、本体で動くレビューの run は
+# レビュー対象のタスク。それ以外は空(state-entry.txt を書かない)
+$entryId = ''
 if ($wtPath) {
     # worktree の run では、子が触れる worktree 側のコピーを守る
     $guardState = "$runDir/worktree/.agents/workflow/state.json"
     $guardTasks = "$runDir/worktree/.agents/workflow/tasks.md"
+    $entryId = $TaskId
+} elseif ($TaskId.StartsWith('review-', [StringComparison]::Ordinal)) {
+    $entryId = $TaskId.Substring(7)
 }
 function Get-StateEntryText {
     param([string]$TaskId)
@@ -70,16 +76,22 @@ function Get-OtherRunIds {
     } catch {}
     return ''
 }
-$guardFiles = @($promptPath, $guardState, $guardTasks, '.agents/workflow/config.json', '.agents/workflow/child-profiles.json')
 # worktree の run は本体の tasks.md も守る(state.json は親が並列中に更新するため、自分のタスクの欄だけを state-entry.txt で守る)
+if ($entryId -and -not $wtPath -and $TaskId.StartsWith('review-', [StringComparison]::Ordinal)) {
+    # 本体で動くレビューの run では、state.json の全体のハッシュは記録しない
+    # (親が並列中に更新するため、レビュー対象の欄だけを state-entry.txt で守る)
+    $guardFiles = @($promptPath, $guardTasks, '.agents/workflow/config.json', '.agents/workflow/child-profiles.json')
+} else {
+    $guardFiles = @($promptPath, $guardState, $guardTasks, '.agents/workflow/config.json', '.agents/workflow/child-profiles.json')
+}
 if ($wtPath) { $guardFiles += '.agents/workflow/tasks.md' }
 $guardLines = foreach ($f in $guardFiles) {
     $h = if (Test-Path -LiteralPath $f -PathType Leaf) { (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash.ToLowerInvariant() } else { '-' }
     "$h  $f"
 }
 [System.IO.File]::WriteAllText((Join-Path (Get-Location) "$runDir/guard.sha256"), (($guardLines -join "`n") + "`n"), [System.Text.UTF8Encoding]::new($false))
-if ($wtPath) {
-    [System.IO.File]::WriteAllText((Join-Path (Get-Location) "$runDir/state-entry.txt"), ((Get-StateEntryText $TaskId) + "`n"), [System.Text.UTF8Encoding]::new($false))
+if ($entryId) {
+    [System.IO.File]::WriteAllText((Join-Path (Get-Location) "$runDir/state-entry.txt"), ((Get-StateEntryText $entryId) + "`n"), [System.Text.UTF8Encoding]::new($false))
     # 全タスクの {id, status, retries, commit} も記録する(dispatch-check が、ほかのタスクの欄の不正な変更を検知する)
     $allTasks = @()
     try {
@@ -221,9 +233,11 @@ $childCeiling = $childBase
 # 同じプロセス内で & dispatch-run.ps1 と呼ばれたとき(tests/test-exitcode.ps1 等)に呼び出し元に書き換えが
 # 残らないよう、finally で戻す(catch の exit 1 でも実行される)
 $savedEnv = @{}
-foreach ($name in @('TMPDIR', 'TEMP', 'TMP', 'GIT_CEILING_DIRECTORIES')) {
+foreach ($name in @('TMPDIR', 'TEMP', 'TMP', 'GIT_CEILING_DIRECTORIES', 'PYTHONDONTWRITEBYTECODE')) {
     $savedEnv[$name] = [System.Environment]::GetEnvironmentVariable($name)
-    $value = if ($name -eq 'GIT_CEILING_DIRECTORIES') { $childCeiling } else { $childTmp }
+    $value = if ($name -eq 'GIT_CEILING_DIRECTORIES') { $childCeiling }
+             elseif ($name -eq 'PYTHONDONTWRITEBYTECODE') { '1' }
+             else { $childTmp }
     [System.Environment]::SetEnvironmentVariable($name, $value)
 }
 

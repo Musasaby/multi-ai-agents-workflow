@@ -88,6 +88,13 @@ POSIX 版のシグナル終了のテスト(Python 経由の経路)は Linux で�
   `tests/` の共通部分(`lib.*`・`run-all.*`)を変えたときなど影響が広いときだけ、並列で実行する
 - GitHub Actions: テスト一式
 
+`test-workflow-run.*` と `test-workflow-run-retry.*` は、どちらも 1 回に数分かかります
+(sh 版で `test-workflow-run.sh` 231 秒・`test-workflow-run-retry.sh` 265 秒、ps1 版で
+`test-workflow-run.ps1` 238 秒・`test-workflow-run-retry.ps1` 243 秒)。そのため、タスクの
+受け入れ基準では、テストを 2 回続けて実行する指示や、複数のテストファイルの実行を 1 つの
+コマンドにまとめる指示を書かないでください(1 回の実行ごとに別のコマンドにします)。
+どのケースが遅いかは、各ケースの後に出る `    time: <秒>s` の行で分かります。
+
 ## 品質ゲートと skill のサイズ
 
 構文・改行コード・BOM は `tests/syntax-check.ps1` で検査します(本リポジトリで workflow を回すときの

@@ -139,15 +139,18 @@ function Get-OtherRunIds {
     } catch {}
     return ''
 }
-# worktree の run は、本体の state.json の自分のタスクの欄が起動時から変わっていないかも確かめる
-if (Test-Path -LiteralPath "$runDir/worktree.txt") {
+# worktree の run と、本体で動くレビューの run(review-* かつ worktree.txt が無い run)は、
+# 本体の state.json の自分のタスクの欄が起動時から変わっていないかも確かめる
+if ((Test-Path -LiteralPath "$runDir/worktree.txt") -or $TaskId.StartsWith('review-', [StringComparison]::Ordinal)) {
+    # 比べる欄のタスクID: worktree.txt があれば自分のタスク、無ければレビュー対象(レビューの run)
+    $entryId = if (Test-Path -LiteralPath "$runDir/worktree.txt") { $TaskId } else { $TaskId.Substring(7) }
     $entryPath = "$runDir/state-entry.txt"
     if (-not (Test-Path -LiteralPath $entryPath -PathType Leaf)) {
         $guardIssues += 'state-entry.txt not found'
     } else {
         $recordedEntry = ([System.IO.File]::ReadAllText((Resolve-Path $entryPath), [System.Text.Encoding]::UTF8) -split "`r?`n")[0]
-        if ((Get-StateEntryText $TaskId) -ne $recordedEntry) {
-            $guardIssues += "changed: .agents/workflow/state.json ($TaskId)"
+        if ((Get-StateEntryText $entryId) -ne $recordedEntry) {
+            $guardIssues += "changed: .agents/workflow/state.json ($entryId)"
         }
     }
     # 自分以外のタスクの欄は、親の正規の遷移(task-state・state-sync --insert)だけを許す
@@ -165,7 +168,7 @@ if (Test-Path -LiteralPath "$runDir/worktree.txt") {
             foreach ($e in @($stNow.tasks)) { $nowMap["$($e.id)"] = $e }
         } catch {}
         if ($null -eq $before) {
-            $guardIssues += "changed: .agents/workflow/state.json ($TaskId)"
+            $guardIssues += "changed: .agents/workflow/state.json ($entryId)"
         } else {
             $badTasks = @()
             $beforeIds = @{}
@@ -173,7 +176,7 @@ if (Test-Path -LiteralPath "$runDir/worktree.txt") {
                 if ($null -eq $b) { continue }
                 $tid = "$($b.id)"
                 $beforeIds[$tid] = $true
-                if ($tid -eq $TaskId) { continue }
+                if ($tid -eq $entryId) { continue }
                 $n = $nowMap[$tid]
                 if ($null -eq $n) { $badTasks += $tid; continue }
                 if ("$($b.status)" -eq 'done') {
@@ -214,6 +217,12 @@ function Test-MainTree {
         $recordedMain[$line.Substring($idx + 2)] = $line.Substring(0, $idx)
     }
     $recordedMtime = [System.IO.File]::GetLastWriteTimeUtc((Resolve-Path -LiteralPath $mainTreePath).Path)
+    # run の終了(done)より後に更新されたパスには、その旨を付ける
+    $doneMtime = $null
+    $donePath = "$runDir/done"
+    if (Test-Path -LiteralPath $donePath -PathType Leaf) {
+        $doneMtime = [System.IO.File]::GetLastWriteTimeUtc((Resolve-Path -LiteralPath $donePath).Path)
+    }
     $excludedMain = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     $runsDir = [System.IO.Path]::GetDirectoryName($runDir)
     $ownRunDir = [System.IO.Path]::GetFullPath($runDir)
@@ -246,7 +255,12 @@ function Test-MainTree {
             $p = $l.Substring($idx + 2)
             if ($excludedMain.Contains($p)) { continue }
             if (-not $recordedMain.ContainsKey($p) -or $recordedMain[$p] -cne $h) {
-                $script:guardIssues += "changed: main worktree: $p"
+                $late = $false
+                if ($null -ne $doneMtime) {
+                    try { $late = ([System.IO.File]::GetLastWriteTimeUtc((Join-Path (Get-Location).Path $p)) -gt $doneMtime) } catch { $late = $false }
+                }
+                $suffix = if ($late) { ' (modified after the run ended)' } else { '' }
+                $script:guardIssues += "changed: main worktree: $p$suffix"
             }
         }
     }

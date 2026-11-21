@@ -77,6 +77,13 @@ state.json は `in_progress` のまま)。ユーザーに状況(利用上限・�
 記録と現在の git 状態の比較で検出)は、`git log` / `git reflog` / `git config --local --list` で
 変化の内容(どのコミット・参照・設定が変わったか)を確かめ、ユーザーに報告して復旧の要否を確認する。
 
+`Guard:` 欄に `changed: main worktree:` がある場合(worktree の run と、本体で動くレビューの run で、
+本体の未コミットの変更が起動時と変わった)は、並列中に本体でレビューを行ったレビュー役が残した
+生成物(`__pycache__` の `.pyc` 等)でも出る。` (modified after the run ended)` が付いていれば、
+子の終了後に更新されたファイルなので、同じ時間帯に本体で動いていた run(レビューの run)や親の操作を
+疑う。生成物を消してから `dispatch-check` をやり直すと `Guard: ok` になる(子の作業ツリーの変更や
+git 状態の変化が別に無ければ)。
+
 ### permission-denied
 
 子CLIがプロジェクト外へのアクセス等を拒否されて終わった。`Permission denied:` 欄の拒否された

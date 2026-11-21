@@ -4,6 +4,8 @@
 .agents/settings.local.json
 # 本リポジトリでは .agents/ はローカル実行状態のため未追跡
 .agents/
+# Python のバイトコードのキャッシュ(レビュー役が残すと並列中の run が tampered になる。#132)
+__pycache__/
 # 直下の CLAUDE.md(@AGENTS.md)は開発用で未追跡
 # (直下の AGENTS.md は本リポジトリの開発用ルールとして追跡する。どちらも npx skills では配られない)
 /CLAUDE.md

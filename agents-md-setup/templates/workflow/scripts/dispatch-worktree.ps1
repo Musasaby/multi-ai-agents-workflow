@@ -248,8 +248,32 @@ if ($Attempt -ge 2) {
 }
 
 New-Item -ItemType Directory -Force -Path $run | Out-Null
-$addOut = git -c core.longpaths=true worktree add -q -b $branch $wt HEAD 2>&1
-if ($LASTEXITCODE -ne 0) {
+$addLog = "$run/worktree-add.log"
+$addOk = $false
+$addOut = @()
+for ($addTry = 1; $addTry -le 3; $addTry++) {
+    $addOut = @(git -c core.longpaths=true worktree add -q -b $branch $wt HEAD 2>&1)
+    if ($LASTEXITCODE -eq 0) {
+        $addOk = $true
+        break
+    }
+    $addText = (($addOut | ForEach-Object { [string]$_ }) -join "`n")
+    [System.IO.File]::AppendAllText((Join-Path (Get-Location).Path $addLog), "--- attempt $addTry`n$addText`n", (New-Object System.Text.UTF8Encoding($false)))
+    if ($addText.Contains('.lock') -and $addText.Contains('File exists') -and $addTry -lt 3) {
+        # 作りかけの WT・ブランチを消してやり直す(本体の変更の復元は最後まで失敗したときだけ)
+        Remove-Item -LiteralPath $wt -Recurse -Force -ErrorAction SilentlyContinue
+        git rev-parse --verify -q "refs/heads/$branch" *> $null
+        if ($LASTEXITCODE -eq 0) {
+            git branch -D -q $branch
+        }
+        git worktree prune
+        [Console]::Error.WriteLine("Retry: git worktree add ($addTry/2)")
+        Start-Sleep -Seconds 1
+        continue
+    }
+    break
+}
+if (-not $addOk) {
     # 作りかけの WT・ブランチ・worktree.txt を消し、取り除いた前の試行の変更は本体に戻す
     Remove-Item -LiteralPath $wt -Recurse -Force -ErrorAction SilentlyContinue
     git rev-parse --verify -q "refs/heads/$branch" *> $null
@@ -263,8 +287,12 @@ if ($LASTEXITCODE -ne 0) {
         Remove-Item -LiteralPath "$run/reverted" -Force -ErrorAction SilentlyContinue
     }
     [Console]::Error.WriteLine("git worktree add failed: $wt ($branch)")
-    $lastLine = @($addOut | ForEach-Object { "$_".TrimEnd("`r") } | Where-Object { $_ }) | Select-Object -Last 1
-    if ($lastLine) { [Console]::Error.WriteLine($lastLine) }
+    $failLine = @($addOut | ForEach-Object { "$_".TrimEnd("`r") } | Where-Object { $_ -cmatch '^(fatal|error):' }) | Select-Object -First 1
+    if (-not $failLine) {
+        $failLine = @($addOut | ForEach-Object { "$_".TrimEnd("`r") } | Where-Object { $_ }) | Select-Object -Last 1
+    }
+    if ($failLine) { [Console]::Error.WriteLine($failLine) }
+    [Console]::Error.WriteLine("Detail: $addLog")
     Write-Output "Next: escalate reason=worktree"
     exit 30
 }

@@ -161,6 +161,15 @@ function Find-Yomiyasu {
     return @($found)
 }
 
+function Resolve-YomiyasuDir {
+    foreach ($place in @(Find-Yomiyasu)) {
+        if ($place.EndsWith('skills/yomiyasu/SKILL.md', [StringComparison]::Ordinal)) {
+            return $place.Substring(0, $place.Length - '/SKILL.md'.Length)
+        }
+    }
+    return '.agents/skills/yomiyasu'
+}
+
 if (-not $skillSet -or ($targets -cnotcontains $Target)) {
     Write-Output 'Refine: off'
     if (-not $skillSet -and -not $Check) {
@@ -192,8 +201,9 @@ if ($dotIdx -gt 0 -and $fileName.Substring(0, $dotIdx).Trim('.') -ne '') {
 $OutputPath = $InputPath.Substring(0, $splitAt) + '.refined' + $InputPath.Substring($splitAt)
 $DecisionsPath = $InputPath.Substring(0, $splitAt) + '.decisions' + $InputPath.Substring($splitAt)
 
-function Exit-Unchecked([string]$Reason) {
+function Exit-Unchecked([string]$Reason, [string]$Hint = '') {
     Write-Output "Unchecked: $Reason"
+    if ($Hint -ne '') { Write-Output "Hint: $Hint" }
     Write-Output 'Next: escalate reason=refine-unchecked'
     exit 3
 }
@@ -347,7 +357,11 @@ function Invoke-Check {
             $best = $rec; $bestFile = $file; $bestCreated = $created; $bestAttempt = $attempt
         }
     }
-    if ($null -eq $best) { Exit-Unchecked ('no record for sha256:' + $hash.Substring(0, 12)) }
+    if ($null -eq $best) {
+        $hint = 'run python3 ' + (Resolve-YomiyasuDir) + '/scripts/yomiyasu_check.py run --source ' +
+            $InputPath + ' --final ' + $OutputPath + ', then run this check again'
+        Exit-Unchecked ('no record for sha256:' + $hash.Substring(0, 12)) $hint
+    }
     Write-Output ('Record: runs/' + $bestFile.Directory.Name + '/' + $bestFile.Name)
 
     $lint = Find-Report $best 'lint'
@@ -421,6 +435,11 @@ foreach ($stale in @($OutputPath, $DecisionsPath)) {
 $keep = $KeepBase + $KeepExtra[$Target]
 $requestText = "$InputPath を $skill で推敲し、本文だけを $OutputPath に書いてください。$($Kinds[$Target])。読者は$($Readers[$reader])です。" +
     "質問はせず、意味・条件・数値を変えないでください。次のものは変えないでください: $keep。"
+if (@('yomiyasu', 'yomiyasu:yomiyasu') -ccontains $skill.Trim()) {
+    $requestText += '書いた後に python3 ' + (Resolve-YomiyasuDir) +
+        '/scripts/yomiyasu_check.py run --source ' + $InputPath + ' --final ' + $OutputPath +
+        ' を実行して、検査の記録を残してください(記録が無いと次の確認で止まります)。'
+}
 
 Write-Output "Refine: $skill"
 Write-Output "Output: $OutputPath"

@@ -233,12 +233,14 @@ function Assert-FileAbsent { param([string]$Path, [string]$Message) Add-Result (
 
 function Invoke-TestCase {
     param([string]$Name, [scriptblock]$Body)
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $script:CurrentTest = $Name
     Write-Host "  - $Name"
     Reset-GhStub
     New-TestProject
     try { & $Body } catch { Add-Result $false "exception: $($_.Exception.Message)" }
     Remove-TestProject
+    Write-Host "    time: $([int][Math]::Floor($sw.Elapsed.TotalSeconds))s"
 }
 
 function Show-Summary {

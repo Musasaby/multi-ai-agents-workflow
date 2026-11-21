@@ -35,6 +35,23 @@ function New-ReviewRun {
     Invoke-Script dispatch-run.ps1 '-TaskId' 'review-T1' '-Attempt' '1'
 }
 
+# 子が本体の state.json の 1 タスクの欄を書き換えるためのスクリプトを置く
+# 使い方(子から): pwsh -NoProfile -File ./setstate.ps1 <state.json> <ID> <status> [<retries>]
+function Set-ChildStateScript {
+    $body = @'
+param([string]$Path, [string]$Id, [string]$Status, [int]$Retries = -1)
+$s = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+foreach ($e in $s.tasks) {
+    if ("$($e.id)" -eq $Id) {
+        $e.status = $Status
+        if ($Retries -ge 0) { $e.retries = $Retries }
+    }
+}
+[System.IO.File]::WriteAllText($Path, ($s | ConvertTo-Json -Depth 10), [System.Text.UTF8Encoding]::new($false))
+'@
+    Write-Utf8File "$script:Proj/setstate.ps1" $body
+}
+
 Write-Host "test-review.ps1"
 
 Invoke-TestCase "review のプロンプトを生成する" {
@@ -150,6 +167,49 @@ Invoke-TestCase "レビューの run が作業ツリーを変えたら tampered"
     Invoke-Script dispatch-check.ps1 '-TaskId' 'review-T1' '-Attempt' '1'
     Assert-Eq 8 $script:Code "main tree changed -> exit 8"
     Assert-Contains $script:Out "changed: main worktree: a.txt" "changed main worktree"
+}
+
+Invoke-TestCase "レビューの run の子がほかのタスクの欄を変えても tampered にならない" {
+    Set-ReviewTasks
+    Set-State 'T1:in_progress' 'T2:pending'
+    Set-ChildStateScript
+    New-ReviewRun "## 完了報告`n- Verdict: pass`n- 指摘: なし`n- 要約: 問題なし`n- fix-notes: なし`n- 理解確認: 対象外" `
+        "& pwsh -NoProfile -File ./setstate.ps1 .agents/workflow/state.json T2 in_progress"
+    Invoke-Script dispatch-check.ps1 '-TaskId' 'review-T1' '-Attempt' '1'
+    Assert-Eq 0 $script:Code "ほかのタスクの欄を変えても tampered にならない: $($script:Out)"
+    Assert-NotContains $script:Out "changed" "changed は出ない"
+    Assert-Eq "Next: commit T1" (($script:Out -split "`n")[-1]).Trim() "最後の行は Next: commit T1"
+}
+
+Invoke-TestCase "レビューの run の子が対象タスクの retries を変えると tampered" {
+    Set-ReviewTasks
+    Set-State 'T1:in_progress' 'T2:pending'
+    Set-ChildStateScript
+    New-ReviewRun "## 完了報告`n- Verdict: pass`n- 指摘: なし`n- 要約: 問題なし`n- fix-notes: なし`n- 理解確認: 対象外" `
+        "& pwsh -NoProfile -File ./setstate.ps1 .agents/workflow/state.json T1 in_progress 5"
+    Invoke-Script dispatch-check.ps1 '-TaskId' 'review-T1' '-Attempt' '1'
+    Assert-Eq 8 $script:Code "対象タスクの retries を変えると exit 8: $($script:Out)"
+    Assert-Contains $script:Out "changed: .agents/workflow/state.json (T1)" "state.json (T1) の changed"
+}
+
+Invoke-TestCase "レビューの run の子に PYTHONDONTWRITEBYTECODE=1 が渡る" {
+    Set-ReviewTasks
+    New-ReviewRun "## 完了報告`n- Verdict: pass`n- 指摘: なし`n- 要約: 問題なし`n- fix-notes: なし`n- 理解確認: 対象外" `
+        'Write-Output "PYC=$env:PYTHONDONTWRITEBYTECODE"'
+    Invoke-Script dispatch-check.ps1 '-TaskId' 'review-T1' '-Attempt' '1'
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    $log = [System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/review-T1-1/output.log")
+    Assert-Contains $log "PYC=1" "PYTHONDONTWRITEBYTECODE=1 が子に渡る"
+}
+
+Invoke-TestCase "レビューの run の後に本体を更新したファイルは modified after the run ended" {
+    Set-ReviewTasks
+    New-ReviewRun "## 完了報告`n- Verdict: pass`n- 指摘: なし`n- 要約: 問題なし`n- fix-notes: なし`n- 理解確認: 対象外"
+    Write-Utf8File "$script:Proj/late.txt" "late`n"
+    (Get-Item "$script:Proj/late.txt").LastWriteTime = (Get-Date).AddSeconds(60)
+    Invoke-Script dispatch-check.ps1 '-TaskId' 'review-T1' '-Attempt' '1'
+    Assert-Eq 8 $script:Code "終了後の変更 -> exit 8"
+    Assert-Contains $script:Out "changed: main worktree: late.txt (modified after the run ended)" "modified after the run ended"
 }
 
 Show-Summary

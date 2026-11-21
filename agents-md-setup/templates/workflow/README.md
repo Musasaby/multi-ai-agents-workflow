@@ -671,7 +671,8 @@ Windows にはシグナルの仕組みが無いため、PowerShell 版での強�
 
 子の一時ファイルの置き場所も `dispatch-run` が設定する: 子プロセスには `TMPDIR`・`TEMP`・`TMP`
 を `runs/<タスクID>-<試行回数>/tmp/`(起動時に作成する)に設定するため、子が `mktemp` 等で作る
-一時ファイルはプロジェクト内の `tmp/` に置かれる。`GIT_CEILING_DIRECTORIES` には `tmp/` の親である
+一時ファイルはプロジェクト内の `tmp/` に置かれる。あわせて `PYTHONDONTWRITEBYTECODE=1` も設定し、
+子が Python を実行しても `__pycache__`(`.pyc`)を残さないようにする。`GIT_CEILING_DIRECTORIES` には `tmp/` の親である
 `runs/<タスクID>-<試行回数>/` を設定する(`tmp/` そのものではない)。git は ceiling と同じ
 ディレクトリが cwd のときも探索を止めないため、その下の `tmp/` で実行された `git` が本物の
 リポジトリを探索でたどり着かないようにする。PowerShell 版は
@@ -684,6 +685,12 @@ WT 側にする。`guard.sha256` の対象のうち `state.json`・`tasks.md` �
 (`runs/<ID>-<N>/worktree/.agents/workflow/` の下)にする(`prompt.md`・`config.json`・`child-profiles.json` は本体のまま)。
 `git-state.txt` は WT の中で `git-state --run <branch> --parent <親の作業ブランチ>` を実行した値を記録する。`output.log`・`done` などの
 記録は本体の `runs/<ID>-<N>/` に書く。
+
+**本体で動くレビューの run**(`review-*` で `worktree.txt` が無い run)の `guard.sha256`: 親が並列中に
+`state.json` を更新するため、`state.json` の全体のハッシュは入れない。代わりに、レビュー対象のタスク
+(`review-` を除いた ID)の欄(`status`・`retries`・`commit`)を `runs/<ID>-<N>/state-entry.txt` に、全タスクの
+同じ欄を `state-tasks.json` に記録し、`dispatch-check` がレビュー対象の欄と、ほかのタスクの欄の変化を
+確かめる(下記 dispatch-check の「レビューの run」)。
 
 起動時の git 状態(HEAD・ブランチ・参照・config の SHA-256。「git-state」節の4行)を
 `runs/<タスクID>-<試行回数>/git-state.txt` に記録する(失敗しても起動は止めない)。
@@ -738,7 +745,8 @@ sh 版では位置引数の前でも後でも指定できる。
   `runs/<タスクID>-<試行回数>/main-tree.txt` に記録する。`dispatch-check` は今の
   `git-state --main-tree` の出力と比べ、起動時に無かったパスとハッシュが変わったパスを
   `changed: main worktree: <パス>` として改ざん検知の問題に加える(`.agents/workflow/` の下は
-  対象外)。起動時にあって今は無いパス(親がコミットした場合など)は問題にしない。
+  対象外)。`runs/<ID>-<N>/done` より後に更新されたファイルには ` (modified after the run ended)` を
+  付ける(子の終了後の変化か、実行中からの変化かの切り分け用)。起動時にあって今は無いパス(親がコミットした場合など)は問題にしない。
   `main-tree.txt` が無い worktree の run は `main-tree.txt not found` を問題にする。
   並列中に親がほかの run を collect して本体に未コミットの変更ができた場合は、自分の
   `main-tree.txt` より新しい `collected` を持つほかの run の `changes.patch` の
@@ -863,10 +871,17 @@ exit code(複数に当たる場合は上の行を優先する):
 - **変更0件の判定**: 行わない(`pr-*` と同じく exit 7 にしない)
 - **プロファイル**: `review.profile` と `review-<ID>` のプロファイルで判定する(launcher が `subagent` なら
   `subagent` プロファイル)
+- **本体で動くレビューの run の `state.json`**: レビューの run(`worktree.txt` が無い `review-*`)では、
+  `guard.sha256` に `state.json` の全体のハッシュは無い。代わりに、レビュー対象のタスク
+  (`review-` を除いた ID)の欄を `state-entry.txt` と比べ(`state-entry.txt` が無いのも改ざん)、
+  ほかのタスクの欄を `state-tasks.json` と比べて変化が正規の遷移かを確かめる(worktree の run と同じ。
+  `task-state`・`state-sync --insert` による遷移だけを許し、不正なら
+  `changed: .agents/workflow/state.json (<ID>)` を出す)
 - **本体の変更の検知**: `dispatch-run` はレビューの run でも起動時に `main-tree.txt`
   (`git-state --main-tree` の値)を記録する。`dispatch-check` は今の値と比べ、起動時に無かったパスと
   ハッシュが変わったパスを `changed: main worktree: <パス>` として `Guard:` に加える
-  (`main-tree.txt` が無いのも改ざん)。レビュー役はコードを変えないため、本体の変更は tampered(exit 8)
+  (`main-tree.txt` が無いのも改ざん)。`done` より後に更新されたファイルには
+  ` (modified after the run ended)` が付く。レビュー役はコードを変えないため、本体の変更は tampered(exit 8)
   になる
 - **出力**: 通常の行に加えて `Review verdict:`(pass / fail)・`Review findings:`(`指摘` の値)・
   `Review summary:`(`要約` の値)・`Review type:`(feat / fix / refactor / docs / test / chore / perf / ci の
@@ -958,6 +973,13 @@ run の完了をポーリングで待つ。1回の呼び出しで `--max-wait` �
   本体に無いので持ち越さない。stdout に `Carried: <パッチ>` / `Carried: none` /
   `Carried: none (not collected: <前のパッチのパス>)` のどれかと、`Worktree: <パス>`、`Branch: <名前>` を出す。
   持ち越しが衝突したら exit 40 で、WT・ブランチを残さず、取り除いた変更を本体に戻す
+  - `git worktree add` の失敗は、失敗ごとに stderr の全文を `$RUN/worktree-add.log` に残す
+    (`--- attempt <n>` の行に続けて書く)。stderr に `.lock` と `File exists` の両方が含まれる失敗は
+    worktree のロックの取り合いなので、作りかけの WT・ブランチを消して `Retry: git worktree add (<n>/2)` を
+    stderr に出し、1 秒待ってやり直す(やり直しは 2 回まで)
+  - やり直しても失敗したときは、後片付けの後に stderr へ `git worktree add failed:` の行、失敗の
+    最初の `fatal:` / `error:` の行(無ければ最後の非空行)、`Detail: <worktree-add.log のパス>` の
+    3 行を出して exit 30 で終わる
 - `collect`: WT の変更(未追跡・WT でコミットした変更を含む。`.agents/workflow` は除く)の、`worktree.txt` の
   `base` との差分を `$RUN/changes.patch` にして本体へ `git apply` し、空の `$RUN/collected` を作って
   WT・ブランチ・`worktree.txt` を消す(`base` の行が無ければ `HEAD` との差分)。tasks.md の `changed` に無い
@@ -1448,6 +1470,9 @@ Next: refine
   同名のファイルが既にあれば先に削除する(`.decisions` のファイルも削除する)
 - 依頼文には、場面ごとの文章の種類、読み手(`text_refine.reader`)、変えてはいけないもの
   (コマンド・パス・タスクID・コミットハッシュ・URL・括弧書きの補足、場面によって構成や改行)を入れる
+- `skill` が `yomiyasu` / `yomiyasu:yomiyasu` のときは、依頼文に検査のコマンド
+  (`python3 <yomiyasu のディレクトリ>/scripts/yomiyasu_check.py run --source <入力> --final <出力>`)を
+  入れる。子は推敲の後にこのコマンドを実行して検査の記録を残す(記録が無いと `--check` で止まる)
 
 推敲の後のチェック(`--check`。ps1 は `-Check`):
 
@@ -1480,7 +1505,9 @@ Next: decide-candidates
 - 判断のファイルは入力ファイルの拡張子の前に `.decisions` を足したもの(`report.md` → `report.decisions.md`)。
   各候補のキーが含まれていれば判断済みとみなす。判断が無い候補は `Undecided:` で出し、`Next: decide-candidates`
 - 確かめられないとき(推敲済みファイル・記録・lint の報告が無い等)は `Unchecked: <理由>` と
-  `Next: escalate reason=refine-unchecked`
+  `Next: escalate reason=refine-unchecked`。`--check` が `no record`(推敲済みファイルの SHA-256 に
+  一致する記録が無い)で止まったときは、その間に `Hint:` の行に、記録を作るための
+  `yomiyasu_check.py run` のコマンドを出す
 - `tasks` の `--check` は、yomiyasu の記録を確かめる前に、推敲前後の構造を比べる。構造は見出し(`#` 始まり)・
   コメント行(`<!--` 始まり)・`依存`・`要件`・`グループ`・`参照ファイル` の行と参照ファイルの箇条・要件ID(`- R1:` 等)・
   コードブロックの中身で、行末の空白は無視する。この比較は yomiyasu 以外の skill でも行う

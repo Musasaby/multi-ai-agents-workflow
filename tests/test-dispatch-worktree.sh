@@ -112,11 +112,34 @@ t_create_fail() {
     assert_eq 0 "$(has_branch agents-run/T1-1 && echo 1 || echo 0)" "ブランチが残らない"
     assert_file_absent "$PROJ/$run/worktree" "WT が残らない"
     assert_file_absent "$PROJ/$run/worktree.txt" "worktree.txt が残らない"
+    assert_contains "$ERR" "Detail: " "stderr に Detail: が含まれる"
     assert_contains "$(cat "$GIT_WRAP_LOG")" "worktree add" "ラッパーが worktree add を受けた"
 
     run_script dispatch-worktree.sh create T1 1
     assert_eq 0 "$CODE" "ラッパーを外すと同じ試行で create できる: $ERR"
     wrap_git_off
+}
+
+t_create_fail_lock() {
+    local run=".agents/workflow/runs/T1-1"
+    mkdir -p "$PROJ/.git/refs/heads/agents-run"
+    : > "$PROJ/.git/refs/heads/agents-run/T1-1.lock"
+    run_script dispatch-worktree.sh create T1 1
+    assert_eq 30 "$CODE" "ロックがあると exit 30"
+    assert_eq "Next: escalate reason=worktree" "$(last_line)" "escalate reason=worktree"
+    assert_contains "$ERR" "Retry: git worktree add (2/2)" "やり直しのメッセージ"
+    assert_contains "$ERR" "fatal: cannot lock ref" "stderr に fatal: cannot lock ref"
+    assert_contains "$ERR" "Detail: " "stderr に Detail: が含まれる"
+    assert_file_exists "$PROJ/$run/worktree-add.log" "worktree-add.log ができる"
+    local log
+    log="$(cat "$PROJ/$run/worktree-add.log")"
+    assert_contains "$log" "--- attempt 3" "ログに attempt 3"
+    assert_contains "$log" "cannot lock ref" "ログに cannot lock ref"
+    assert_eq 0 "$(has_branch agents-run/T1-1 && echo 1 || echo 0)" "ブランチが残らない"
+
+    rm -f "$PROJ/.git/refs/heads/agents-run/T1-1.lock"
+    run_script dispatch-worktree.sh create T1 1
+    assert_eq 0 "$CODE" "ロックを消すと create できる: $ERR"
 }
 
 t_create_fail_restore() {
@@ -620,6 +643,7 @@ test_case "dispatch-worktree: create で worktree・ブランチ・worktree.txt 
 test_case "dispatch-worktree: remove で worktree とブランチが消える" t_remove
 test_case "dispatch-worktree: 試行 2 の create で前の変更を持ち越す" t_carry
 test_case "dispatch-worktree: worktree add が失敗するとブランチ・WT・worktree.txt が残らず exit 30" t_create_fail
+test_case "dispatch-worktree: worktree add がロックで失敗すると 3 回試して exit 30、ロックを消すと create できる" t_create_fail_lock
 test_case "dispatch-worktree: 試行 2 の worktree add が失敗すると前の変更が本体に戻る" t_create_fail_restore
 test_case "dispatch-worktree: worktree add に -c core.longpaths=true が付く" t_create_longpaths
 test_case "dispatch-worktree: collect で変更が本体に入り worktree が消える" t_collect

@@ -134,9 +134,22 @@ t_enabled_request() {
     assert_contains "$OUT" "PR説明です" "場面"
     assert_contains "$OUT" "読者は分野は違うが技術に詳しい人です" "読者"
     assert_contains "$OUT" "要件一覧とテスト計画の項目" "変えない物"
+    assert_contains "$OUT" "yomiyasu_check.py run --source .agents/workflow/runs/refine/pr_body.md --final .agents/workflow/runs/refine/pr_body.refined.md" "検査のコマンド"
     assert_contains "$OUT" "Next: refine" "次の操作"
     assert_file_absent "$PROJ/.agents/workflow/runs/refine/pr_body.refined.md" "前の出力を消す"
     assert_file_absent "$PROJ/.agents/workflow/runs/refine/pr_body.decisions.md" "前の判断を消す"
+    cleanup_home
+}
+
+t_request_other_skill() {
+    new_home
+    set_refine other
+    mkdir -p "$PROJ/.agents/workflow/runs/refine"
+    echo "本文" > "$PROJ/.agents/workflow/runs/refine/pr_body.md"
+    HOME="$TEST_HOME" run_script text-refine.sh pr_body .agents/workflow/runs/refine/pr_body.md
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_contains "$OUT" "Request:" "依頼文"
+    assert_not_contains "$OUT" "yomiyasu_check.py" "検査のコマンドを入れない"
     cleanup_home
 }
 
@@ -180,6 +193,7 @@ t_check_no_record() {
     HOME="$TEST_HOME" run_script text-refine.sh pr_body "$INPUTF" --check
     assert_eq 3 "$CODE" "exit 3"
     assert_contains "$OUT" "Unchecked: output not found" "推敲済みが無い"
+    assert_not_contains "$OUT" "Hint:" "推敲済みが無いときはヒントを出さない"
     printf '推敲済みの本文\n2行目\n' > "$PROJ/$REFINED"
     printf '別の内容\n' > "$PROJ/other.md"
     write_record r1 2026-01-01T00:00:00Z "$PROJ/other.md" '[]' '[]'
@@ -187,6 +201,19 @@ t_check_no_record() {
     assert_eq 3 "$CODE" "exit 3"
     assert_contains "$OUT" "Unchecked: no record for sha256:" "ハッシュが合わない"
     assert_contains "$OUT" "Next: escalate reason=refine-unchecked" "エスカレーション"
+    local next_line="" line found=0
+    while IFS= read -r line; do
+        if [ "$found" = 1 ]; then
+            next_line="$line"
+            found=0
+        fi
+        case "$line" in
+            "Unchecked: no record for sha256:"*) found=1 ;;
+        esac
+    done <<< "$OUT"
+    assert_eq 1 "$(case "$next_line" in "Hint: run python3 "*) echo 1 ;; *) echo 0 ;; esac)" "Hint は Unchecked の次"
+    assert_contains "$next_line" "yomiyasu_check.py run --source" "Hint のコマンド"
+    assert_eq "Next: escalate reason=refine-unchecked" "${OUT##*$'\n'}" "最後の行"
     cleanup_home
 }
 
@@ -348,6 +375,7 @@ echo "test-text-refine.sh"
 test_case "text-refine: skill が null なら Refine: off と Next: continue" t_off_when_null
 test_case "text-refine: 未設定ならエージェントを問わず導入を見つけて知らせる" t_detect_installed
 test_case "text-refine: 有効なら依頼文と出力パスを出す" t_enabled_request
+test_case "text-refine: yomiyasu 以外の skill の依頼文には検査のコマンドを入れない" t_request_other_skill
 test_case "text-refine: targets に無い場面は推敲しない" t_target_not_listed
 test_case "text-refine: 有効で入力が無ければ exit 1" t_missing_input
 test_case "text-refine: チェックは推敲しないときと yomiyasu 以外のとき確かめずに続ける" t_check_skip
