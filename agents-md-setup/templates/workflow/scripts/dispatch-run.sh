@@ -58,7 +58,7 @@ if command -v cygpath > /dev/null 2>&1; then
   CHILD_TMP="$(cygpath -m "$CHILD_TMP")"
   CHILD_CEILING="$(cygpath -m "$CHILD_CEILING")"
 fi
-export TMPDIR="$CHILD_TMP" TEMP="$CHILD_TMP" TMP="$CHILD_TMP" GIT_CEILING_DIRECTORIES="$CHILD_CEILING"
+export TMPDIR="$CHILD_TMP" TEMP="$CHILD_TMP" TMP="$CHILD_TMP" GIT_CEILING_DIRECTORIES="$CHILD_CEILING" PYTHONDONTWRITEBYTECODE=1
 LOG_PATH="$RUN_DIR/output.log"
 JSONL_PATH="$RUN_DIR/output.jsonl"
 DONE_PATH="$RUN_DIR/done"
@@ -75,12 +75,24 @@ GUARD_PATH="$RUN_DIR/guard.sha256"
 : > "$GUARD_PATH"
 GUARD_STATE=.agents/workflow/state.json
 GUARD_TASKS=.agents/workflow/tasks.md
+# 守る欄のタスクID(ENTRY_ID): worktree の run は自分のタスク、本体で動くレビューの run は
+# レビュー対象のタスク。それ以外は空(state-entry.txt を書かない)
+ENTRY_ID=""
 if [ -n "$WT_PATH" ]; then
   # worktree の run では、子が触れる worktree 側のコピーを守る
   GUARD_STATE="$RUN_DIR/worktree/.agents/workflow/state.json"
   GUARD_TASKS="$RUN_DIR/worktree/.agents/workflow/tasks.md"
+  ENTRY_ID="$TASK_ID"
+elif [[ "$TASK_ID" == review-* ]]; then
+  ENTRY_ID="${TASK_ID#review-}"
 fi
-GUARD_FILES=("$PROMPT_PATH" "$GUARD_STATE" "$GUARD_TASKS" .agents/workflow/config.json .agents/workflow/child-profiles.json)
+if [ -n "$ENTRY_ID" ] && [ -z "$WT_PATH" ] && [[ "$TASK_ID" == review-* ]]; then
+  # 本体で動くレビューの run では、state.json の全体のハッシュは記録しない
+  # (親が並列中に更新するため、レビュー対象の欄だけを state-entry.txt で守る)
+  GUARD_FILES=("$PROMPT_PATH" "$GUARD_TASKS" .agents/workflow/config.json .agents/workflow/child-profiles.json)
+else
+  GUARD_FILES=("$PROMPT_PATH" "$GUARD_STATE" "$GUARD_TASKS" .agents/workflow/config.json .agents/workflow/child-profiles.json)
+fi
 if [ -n "$WT_PATH" ]; then
   # 本体の tasks.md も守る(state.json は親が並列中に更新するため、自分のタスクの欄だけを state-entry.txt で守る)
   GUARD_FILES+=(.agents/workflow/tasks.md)
@@ -95,7 +107,7 @@ for f in "${GUARD_FILES[@]}"; do
   fi
   printf '%s  %s\n' "$h" "$f" >> "$GUARD_PATH"
 done
-if [ -n "$WT_PATH" ]; then
+if [ -n "$ENTRY_ID" ]; then
   python3 -c "
 import json, sys
 try:
@@ -109,7 +121,7 @@ try:
         print('-')
 except Exception:
     print('-')
-" "$TASK_ID" 2> /dev/null | tr -d '\r' > "$RUN_DIR/state-entry.txt"
+" "$ENTRY_ID" 2> /dev/null | tr -d '\r' > "$RUN_DIR/state-entry.txt"
   # 全タスクの {id, status, retries, commit} も記録する(dispatch-check が、ほかのタスクの欄の不正な変更を検知する)
   python3 -c "
 import json

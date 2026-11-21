@@ -130,8 +130,14 @@ else
     done < <(LC_ALL=C tr -d '\r' < "$GUARD_PATH")
 fi
 
-# worktree の run は、本体の state.json の自分のタスクの欄が起動時から変わっていないかも確かめる
-if [ -f "$RUN_DIR/worktree.txt" ]; then
+# worktree の run と、本体で動くレビューの run(review-* かつ worktree.txt が無い run)は、
+# 本体の state.json の自分のタスクの欄が起動時から変わっていないかも確かめる
+if [ -f "$RUN_DIR/worktree.txt" ] || [[ "$TASK_ID" == review-* ]]; then
+    # 比べる欄のタスクID: worktree.txt があれば自分のタスク、無ければレビュー対象(レビューの run)
+    ENTRY_ID="$TASK_ID"
+    if [ ! -f "$RUN_DIR/worktree.txt" ]; then
+        ENTRY_ID="${TASK_ID#review-}"
+    fi
     if [ ! -f "$RUN_DIR/state-entry.txt" ]; then
         GUARD_ISSUES="${GUARD_ISSUES}state-entry.txt not found
 "
@@ -149,9 +155,9 @@ try:
         print('-')
 except Exception:
     print('-')
-" "$TASK_ID" 2> /dev/null | tr -d '\r')"
+" "$ENTRY_ID" 2> /dev/null | tr -d '\r')"
         if [ "$CURRENT_ENTRY" != "$(LC_ALL=C tr -d '\r' < "$RUN_DIR/state-entry.txt" | head -n 1)" ]; then
-            GUARD_ISSUES="${GUARD_ISSUES}changed: .agents/workflow/state.json ($TASK_ID)
+            GUARD_ISSUES="${GUARD_ISSUES}changed: .agents/workflow/state.json ($ENTRY_ID)
 "
         fi
     fi
@@ -199,7 +205,7 @@ for tid, n in now.items():
     if tid not in before and n.get('status') != 'pending':
         bad.append(tid)
 print(' '.join(bad))
-" "$TASK_ID" "$RUN_DIR/state-tasks.json" 2> /dev/null | tr -d '\r')"
+" "$ENTRY_ID" "$RUN_DIR/state-tasks.json" 2> /dev/null | tr -d '\r')"
         for bad_id in $BAD_TASKS; do
             GUARD_ISSUES="${GUARD_ISSUES}changed: .agents/workflow/state.json ($bad_id)
 "
@@ -239,6 +245,11 @@ try:
     recorded_mtime = os.path.getmtime(recorded_path)
 except OSError:
     recorded_mtime = 0
+# run の終了(done)より後に更新されたパスには、その旨を付ける
+try:
+    done_mtime = os.path.getmtime(os.path.join(run_dir, 'done'))
+except OSError:
+    done_mtime = None
 
 excluded = set()
 runs_dir = os.path.dirname(run_dir)
@@ -277,7 +288,11 @@ for line in sys.stdin.read().split('\n'):
     if not sep or p in excluded:
         continue
     if p not in recorded or recorded[p] != h:
-        print(p)
+        try:
+            late = done_mtime is not None and os.path.getmtime(p) > done_mtime
+        except OSError:
+            late = False
+        print(p + (' (modified after the run ended)' if late else ''))
 " "$RUN_DIR" "$main_tree_path" 2> /dev/null | tr -d '\r')"
     while IFS= read -r changed_path; do
         [ -n "$changed_path" ] || continue
