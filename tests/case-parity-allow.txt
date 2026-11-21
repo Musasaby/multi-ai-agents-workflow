@@ -28,9 +28,3 @@ test-skill-size.ps1: *
 # 端末の出力コードページの切り替えは ps1(workflow-logs.ps1)専用。リダイレクト時にバイト列が変わらないことの確認
 test-workflow-logs.ps1: logs: リダイレクトで受けた日本語は BOM なしの UTF-8 のバイト列になる
 
-# T6 で消す: sh 版にだけ足したレビューの run の確認
-test-review.sh: レビューの run の子がほかのタスクの欄を変えても tampered にならない
-test-review.sh: レビューの run の子が対象タスクの retries を変えると tampered
-test-review.sh: レビューの run の子に PYTHONDONTWRITEBYTECODE=1 が渡る
-test-review.sh: レビューの run の後に本体を更新したファイルは modified after the run ended
-
