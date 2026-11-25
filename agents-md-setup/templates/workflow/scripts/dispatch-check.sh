@@ -427,18 +427,22 @@ DENIED_LINES="$(printf '%s\n' "$RAW_LOG" | DENIED_RE="$DENIED_RE" LC_ALL=C awk -
 # home_re はホームディレクトリ(~/・$HOME・${HOME}・$env:USERPROFILE・%USERPROFILE% 等)と
 # Windows のユーザー一時ディレクトリ(AppData の Temp)への参照。大文字小文字を区別しないため、
 # ANSI エスケープを除いた行を tolower() してから当てる。$env:TEMP・%TEMP%・$TMPDIR は
-# dispatch-run によりプロジェクト内を指すため検出しない
+# dispatch-run によりプロジェクト内を指すため検出しない。
+# yomiyasu の skill は ~/.agents/skills/yomiyasu/scripts/ の lint・検査スクリプトを子に実行させる。
+# そのパスはホーム配下だが意図した実行なので、判定の前に yomiyasu_re で取り除く(同じ行の他の参照は残す)。
 OUTSIDE_LINES="$(printf '%s\n' "$RAW_LOG" | TOOL_CALL_RE="$TOOL_CALL_RE" LC_ALL=C awk -v esc="$ESC" '
     BEGIN {
         call_re = ENVIRON["TOOL_CALL_RE"]
         outside_re = "(^|[ \t\"'\''=(<>])\\/(var\\/)?tmp([\\/ \t\"'\'');]|$)"
         home_re = "(^|[ \t\"'\''=(<>])~\\/|\\$(\\{home\\}|home([^a-z0-9_]|$)|env:(home|userprofile)([^a-z0-9_]|$))|%userprofile%|appdata[\\\\/]local[\\\\/]temp"
+        yomiyasu_re = "~\\/[^ \t\"'\''<>|;&]*\\/skills\\/yomiyasu\\/scripts\\/yomiyasu_[a-z_]+\\.py"
     }
     {
         raw = $0
         if (call_re == "" || raw !~ call_re) next
         line = raw; gsub(esc "\\[[0-9;]*[A-Za-z]", "", line)
-        if (line ~ outside_re || tolower(line) ~ home_re) print line
+        chk = line; gsub(yomiyasu_re, " ", chk)
+        if (chk ~ outside_re || tolower(chk) ~ home_re) print line
     }')"
 
 # --- 子CLI自身のログのエラー検出(利用上限・エンドポイント障害などの切り分け用) ---

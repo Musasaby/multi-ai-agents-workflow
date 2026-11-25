@@ -1098,6 +1098,26 @@ $REPORT"
     assert_contains "$OUT" "Outside access: no" "flag"
 }
 
+# T7(#146): yomiyasu の skill の検査スクリプトの ~/ の実行は検出しない
+t_check_outside_access_yomiyasu_script_ok() {
+    make_run 0 "${ESC}[0m\$ ${ESC}[0mpython3 ~/.agents/skills/yomiyasu/scripts/yomiyasu_check.py run --stdin
+$REPORT"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 0 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Outside access: no" "flag"
+}
+
+# T7(#146): 同じ行にある yomiyasu 以外のホームの参照は検出する
+t_check_outside_access_yomiyasu_same_line_home() {
+    make_run 0 "$REPORT
+${ESC}[0m\$ ${ESC}[0mpython3 ~/.agents/skills/yomiyasu/scripts/yomiyasu_lint.py x.md >~/out.log"
+    printf 'x\n' > "$PROJ/a.txt"
+    run_script dispatch-check.sh T1 1
+    assert_eq 6 "$CODE" "exit code: $OUT"
+    assert_contains "$OUT" "Verdict: outside-access" "verdict"
+}
+
 # T7(#53): 子CLIのログの利用上限エラーを Provider error: yes にする
 # (cli_log は guard.sha256 の対象なので make_run の前に設定する)
 t_check_cli_log_provider_error() {
@@ -1271,6 +1291,8 @@ test_case "check: リダイレクト直後の ~/ は exit 6" t_check_outside_acc
 test_case "check: tool_use 行のホームディレクトリ参照は exit 6" t_check_outside_access_tool_use_home
 test_case "check: 色付きツール実行行の USERPROFILE・AppData の Temp 参照は exit 6" t_check_outside_access_userprofile_temp
 test_case "check: HOMEBREW_PREFIX や env:TEMP は検出しない" t_check_outside_access_home_not_detected
+test_case "check: yomiyasu のスクリプトの ~/ の実行は検出しない" t_check_outside_access_yomiyasu_script_ok
+test_case "check: yomiyasu のスクリプトと同じ行のほかのホームの参照は exit 6" t_check_outside_access_yomiyasu_same_line_home
 test_case "check: CLI ログの利用上限エラーを Provider error: yes にする" t_check_cli_log_provider_error
 test_case "check: CLI ログの ProviderHeaderTimeoutError をプロバイダー起因とする" t_check_cli_log_provider_header_timeout
 test_case "check: CLI ログの Insufficient account funds をプロバイダー起因とする" t_check_cli_log_insufficient_account_funds

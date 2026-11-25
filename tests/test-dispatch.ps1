@@ -914,6 +914,24 @@ Invoke-TestCase "check: HOMEBREW_PREFIX や env:TEMP は検出しない" {
     Assert-Contains $script:Out "Outside access: no" "flag"
 }
 
+# T7(#146): yomiyasu の skill の検査スクリプトの ~/ の実行は検出しない
+Invoke-TestCase "check: yomiyasu のスクリプトの ~/ の実行は検出しない" {
+    New-Run 0 ("$esc[0m`$ $esc[0mpython3 ~/.agents/skills/yomiyasu/scripts/yomiyasu_check.py run --stdin`n" + $report)
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 0 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Outside access: no" "flag"
+}
+
+# T7(#146): 同じ行にある yomiyasu 以外のホームの参照は検出する
+Invoke-TestCase "check: yomiyasu のスクリプトと同じ行のほかのホームの参照は exit 6" {
+    New-Run 0 ($report + "`n" + "$esc[0m`$ $esc[0mpython3 ~/.agents/skills/yomiyasu/scripts/yomiyasu_lint.py x.md >~/out.log")
+    Write-Utf8File "$script:Proj/a.txt" "x`n"
+    Invoke-Script dispatch-check.ps1 -TaskId T1 -Attempt 1
+    Assert-Eq 6 $script:Code "exit code: $($script:Out)"
+    Assert-Contains $script:Out "Verdict: outside-access" "verdict"
+}
+
 # T8(#53): sh 版(test-dispatch.sh)と同じ名前の3ケース
 # (cli_log は guard.sha256 の対象なので New-Run の前に設定する)
 Invoke-TestCase "check: CLI ログの利用上限エラーを Provider error: yes にする" {

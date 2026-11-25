@@ -401,13 +401,17 @@ $toolFlags = @($rawLines | ForEach-Object { [bool]($childProfile.ToolActivityPat
 # 条件の正規表現は $outsidePattern と $homePattern にまとめる(条件を足したくなったらここへ追記する)。
 # $homePattern はホームディレクトリ(~/・$HOME・${HOME}・$env:USERPROFILE・%USERPROFILE% 等)と
 # Windows のユーザー一時ディレクトリ(AppData の Temp)への参照(大文字小文字を区別しない)。
-# $env:TEMP・%TEMP%・$TMPDIR は dispatch-run によりプロジェクト内を指すため検出しない
+# $env:TEMP・%TEMP%・$TMPDIR は dispatch-run によりプロジェクト内を指すため検出しない。
+# yomiyasu の skill は ~/.agents/skills/yomiyasu/scripts/ の lint・検査スクリプトを子に実行させる。
+# そのパスはホーム配下だが意図した実行なので、判定の前に $yomiyasuPattern で取り除く(同じ行の他の参照は残す)。
 $outsidePattern = '(^|[ \t"''=(<>])/(var/)?tmp([/ \t"'');]|$)'
 $homePattern = '(?i)(^|[ \t"''=(<>])~/|\$(\{home\}|home(?![a-z0-9_])|env:(home|userprofile)(?![a-z0-9_]))|%userprofile%|appdata[\\/]local[\\/]temp'
+$yomiyasuPattern = '~/[^ \t"''<>|;&]*/skills/yomiyasu/scripts/yomiyasu_[a-z_]+\.py'
 $outsideLines = @()
 for ($i = 0; $i -lt $rawLines.Count; $i++) {
     $isToolExec = $childProfile.ToolCallPattern -and ($rawLines[$i] -cmatch $childProfile.ToolCallPattern)
-    if ($isToolExec -and (($cleanLines[$i] -cmatch $outsidePattern) -or ($cleanLines[$i] -match $homePattern))) { $outsideLines += $cleanLines[$i] }
+    $chk = $cleanLines[$i] -creplace $yomiyasuPattern, ' '
+    if ($isToolExec -and (($chk -cmatch $outsidePattern) -or ($chk -match $homePattern))) { $outsideLines += $cleanLines[$i] }
 }
 
 # --- 子CLI自身のログのエラー検出(利用上限・エンドポイント障害などの切り分け用) ---
