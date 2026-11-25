@@ -86,11 +86,11 @@ PR 作成の前に、要件が満たされているかを親が確かめる。�
   `gh api -X PATCH` で更新する。このとき親が yomiyasu の skill 本文を読み込み、コンテキストを
   多く使うことを、確かめるときに伝える
 
-`Unchecked: no record` の主な原因は、子が yomiyasu の検査(`yomiyasu_check.py run`)を飛ばしたこと。
+`Unchecked: no record` の主な原因は、子が yomiyasu の検査(`text-refine --yomiyasu-check`)を飛ばしたこと。
 次の2つで見分けられる。
 
 - `.yomiyasu/runs/` に、推敲した時刻あたりの記録が無い(記録が飛ばした分だけ欠けている)
-- run の `output.log` に `yomiyasu_check.py` の実行が無い
+- run の `output.log` に `--yomiyasu-check` の実行が無い
 
 親が推敲し直すときは、検査のコマンドも実行して記録を残す(`text-refine --request` の `Request:` に
 含まれる)。
