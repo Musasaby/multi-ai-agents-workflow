@@ -245,7 +245,7 @@ Git Bash を使うなら `"C:/Program Files/Git/usr/bin/bash.exe" ./x.sh "{promp
 
 `- **依存**:` 行は `state-sync` / `next-task` / `dispatch-prompt-gen` が機械的にパースする
 機械可読フォーマットである。`なし` またはカンマ区切りのタスクID列(`T1, T2`)以外は書かない。
-依存欄に挙げたタスクは dispatch 時に完了報告が自動結合される対象になるため、真に前提となる
+依存欄に挙げたタスクは dispatch 時に完了報告のパスがプロンプトに載る対象になるため、真に前提となる
 タスクのみ記載する。
 
 - 依存行はすべてのタスクに必須(依存が無ければ `なし`)
@@ -404,6 +404,11 @@ tasks.md・config.json・依存タスクの完了報告(直接依存のみ)か�
 プロンプトを機械的に組み立てて `runs/<タスクID>-<試行回数>/prompt.md` に書き出す。
 定型文(実装ルール・テスト検証指示・完了報告フォーマット)は `dispatch-prompt-template.md`
 から展開する。
+
+依存タスクの完了報告は全文を載せず、「前提タスクの成果(引き継ぎ)」の節に各
+`runs/<依存ID>-<最新の試行番号>/report.md` のパスを載せ、子に作業の前に読ませる。
+worktree の run では本体の絶対パスにする(worktree の中には `runs/` が無いため)。
+プロンプトの本文は一時ファイルを通して python3 に渡す(コマンドライン長の上限に当たらないように)。
 
 worktree の run(`runs/<タスクID>-<試行回数>/worktree.txt` があるとき)は、prompt.md の末尾に
 作業ディレクトリの節も足す。節は `dispatch-worktree-template.md` から展開し、`{workdir}` に
