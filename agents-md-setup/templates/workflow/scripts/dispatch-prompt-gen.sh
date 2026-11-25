@@ -312,6 +312,11 @@ if [ "$REVIEW_MODE" = true ]; then
         exit 2
     fi
     TASK_SECTION="$(extract_task_section "$TASK_ID")"
+    # 本文はコマンドライン引数で python3 に渡さない(長さの上限に当たるため)。一時ディレクトリのパスだけを渡す
+    PARTS_DIR="$(mktemp -d)"
+    trap 'rm -rf "$PARTS_DIR"' EXIT
+    PARTS_DIR_PY="$(to_py_path "$PARTS_DIR")"
+    printf '%s' "$TASK_SECTION" > "$PARTS_DIR/task_section"
     # 理解確認の指示: config の comprehension_check.enabled で切り替える
     COMPREHENSION_INSTRUCTION="$(python3 - "$CONFIG_PATH_PY" "$TASK_ID" "$PATH_PREFIX" <<'PY'
 import json, sys
@@ -334,15 +339,20 @@ else:
     print('質問ファイルは作らない(完了報告の理解確認は なし)')
 PY
 )" || exit 1
+    printf '%s' "$COMPREHENSION_INSTRUCTION" > "$PARTS_DIR/comprehension"
     REVIEW_PROMPT_PATH="$REVIEW_RUN_DIR/prompt.md"
     mkdir -p "$REVIEW_RUN_DIR"
     python3 - "$(to_py_path "$SCRIPT_DIR/dispatch-review-template.md")" "$(to_py_path "$REVIEW_PROMPT_PATH")" \
-        "$TASK_ID" "$ATTEMPT" "$TASK_SECTION" "${PATH_PREFIX}${REPORT_REL}" \
-        "${PATH_PREFIX}.agents/workflow/runs/${TASK_ID}-$((ATTEMPT + 1))/fix-notes.md" "$COMPREHENSION_INSTRUCTION" <<'PY' || { rmdir "$REVIEW_RUN_DIR" 2>/dev/null; exit 1; }
+        "$TASK_ID" "$ATTEMPT" "$PARTS_DIR_PY/task_section" "${PATH_PREFIX}${REPORT_REL}" \
+        "${PATH_PREFIX}.agents/workflow/runs/${TASK_ID}-$((ATTEMPT + 1))/fix-notes.md" "$PARTS_DIR_PY/comprehension" <<'PY' || { rmdir "$REVIEW_RUN_DIR" 2>/dev/null; exit 1; }
 import sys
-template_path, prompt_path, task_id, attempt, task_section, report_path, fix_notes_path, comprehension = sys.argv[1:9]
+template_path, prompt_path, task_id, attempt, task_section_path, report_path, fix_notes_path, comprehension_path = sys.argv[1:9]
 with open(template_path, encoding='utf-8') as f:
     text = f.read()
+with open(task_section_path, encoding='utf-8', newline='') as f:
+    task_section = f.read()
+with open(comprehension_path, encoding='utf-8', newline='') as f:
+    comprehension = f.read()
 for key, value in (('{task_id}', task_id), ('{attempt}', attempt), ('{task_section}', task_section),
                    ('{report_path}', report_path), ('{fix_notes_path}', fix_notes_path),
                    ('{comprehension_instruction}', comprehension)):
