@@ -28,3 +28,8 @@ test-skill-size.ps1: *
 # 端末の出力コードページの切り替えは ps1(workflow-logs.ps1)専用。リダイレクト時にバイト列が変わらないことの確認
 test-workflow-logs.ps1: logs: リダイレクトで受けた日本語は BOM なしの UTF-8 のバイト列になる
 
+# T2 で消す(#143 の sh 版のケースの先行)
+test-tasks.sh: gen: 引き継ぎは report.md のパスだけを載せる
+test-tasks.sh: gen: worktree の run の引き継ぎは本体の絶対パスにする
+test-tasks.sh: gen: 140KB の fix-notes でもプロンプトを生成する
+

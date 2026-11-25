@@ -402,6 +402,13 @@ fi
 
 TASK_SECTION=$(extract_task_section "$TASK_ID")
 
+# 本文はコマンドライン引数で python3 に渡さない(Windows の 1 コマンドライン 32,767 文字、
+# Linux の 1 引数 128KB の上限に当たるため)。一時ディレクトリに書き、python3 にはパスだけを渡す
+PARTS_DIR="$(mktemp -d)"
+trap 'rm -rf "$PARTS_DIR"' EXIT
+PARTS_DIR_PY="$(to_py_path "$PARTS_DIR")"
+printf '%s' "$TASK_SECTION" > "$PARTS_DIR/task_section"
+
 # Extract title
 TASK_TITLE=""
 if echo "$TASK_SECTION" | head -1 | grep -qE "^## ${TASK_ID}:"; then
@@ -461,10 +468,12 @@ read -r MAX_AC MAX_CHANGED MAX_REFS <<< "$SIZING"
 # `- **参照ファイル**:` の下の箇条書き(`` - `<パス>` `` + 任意の説明。`<パス>:10-40` のような
 # 行範囲は可)を、子が最初に読むファイルとして扱う。存在しないパスはエラー、欄が無い・
 # しきい値(max_reference_files)を超える場合は警告のみ。値に `なし` と書いた場合は検証しない。
-python3 - "$TASK_ID" "$TASK_SECTION" "$MAX_REFS" <<'PY' || exit 1
+python3 - "$TASK_ID" "$PARTS_DIR_PY/task_section" "$MAX_REFS" <<'PY' || exit 1
 import os, re, sys
-task_id, section = sys.argv[1:3]
+task_id, section_path = sys.argv[1:3]
 max_refs = int(sys.argv[3])
+with open(section_path, encoding='utf-8') as f:
+    section = f.read()
 lines = section.split('\n')
 field_re = re.compile(r'^(\s*)-\s+\*\*参照ファイル\*\*:\s*(.*?)\s*$')
 start = None
@@ -502,10 +511,12 @@ PY
 # --- 作業量の警告(タスクが1応答で処理しきれなそうなら計画の段階で気付けるようにする) ---
 # 1) 受け入れ基準がしきい値(max_acceptance_criteria)を超える、2) (変更対象)の参照ファイルが
 # しきい値(max_changed_files)を超える。どちらも警告のみで生成は続ける。
-python3 - "$TASK_ID" "$TASK_SECTION" "$MAX_AC" "$MAX_CHANGED" <<'PY' || exit 1
+python3 - "$TASK_ID" "$PARTS_DIR_PY/task_section" "$MAX_AC" "$MAX_CHANGED" <<'PY' || exit 1
 import re, sys
-task_id, section = sys.argv[1:3]
+task_id, section_path = sys.argv[1:3]
 max_ac, max_changed = int(sys.argv[3]), int(sys.argv[4])
+with open(section_path, encoding='utf-8') as f:
+    section = f.read()
 lines = section.split('\n')
 
 def field_start(field):
@@ -618,11 +629,19 @@ print('missing')
 fi
 
 # --- Build handoff reports ---
+# report.md の中身は載せず、パスだけを示す(本文が大きいとプロンプトが肥大するため)。
+# worktree の run は、report.md を本体の絶対パスで示す(append_worktree_section と同じ読み方)
 HANDOFF_REPORTS=""
 if [ -n "$DEPS" ]; then
+    HANDOFF_PREFIX=""
+    if [ -f "$RUN_DIR/worktree.txt" ]; then
+        HANDOFF_WT="$(sed -n 's/^path //p' "$RUN_DIR/worktree.txt" | head -n 1 | tr -d '\r')"
+        [ -n "$HANDOFF_WT" ] && HANDOFF_PREFIX="$(to_py_path "$ROOT")/"
+    fi
     HANDOFF_REPORTS="## 前提タスクの成果(引き継ぎ)
+
+依存タスクの完了報告です。タスクの「参照ファイル」欄のファイルと同じく、作業を始める前に次の report.md を読んでください(読み取りのみ)。
 "
-    FIRST_DEP=true
     IFS=',' read -ra DEP_ARRAY <<< "$DEPS"
     for dep_id in "${DEP_ARRAY[@]}"; do
         dep_title=$(get_task_title "$dep_id")
@@ -637,20 +656,11 @@ if [ -n "$DEPS" ]; then
                 fi
             done
         fi
-        REPORT_PATH="$RUNS_BASE/${dep_id}-${MAX_ATTEMPT}/report.md"
-        REPORT_CONTENT=$(cat "$REPORT_PATH")
-        if [ "$FIRST_DEP" = true ]; then
-            FIRST_DEP=false
-        else
-            HANDOFF_REPORTS="${HANDOFF_REPORTS}
-"
-        fi
         HANDOFF_REPORTS="${HANDOFF_REPORTS}
 ### ${dep_id}: ${dep_title}
-${REPORT_CONTENT}"
-    done
-    HANDOFF_REPORTS="${HANDOFF_REPORTS}
+- 完了報告: \`${HANDOFF_PREFIX}.agents/workflow/runs/${dep_id}-${MAX_ATTEMPT}/report.md\`
 "
+    done
 fi
 
 # --- Fix notes (retry mode) ---
@@ -698,21 +708,32 @@ PY
 mkdir -p "$RUN_DIR"
 rm -f "$PROMPT_PATH"
 
-python3 -c "
+# 本文はコマンドライン引数で python3 に渡さない(長さの上限に当たるため)。一時ディレクトリのパスだけを渡す
+printf '%s' "$FIX_NOTES" > "$PARTS_DIR/fix_notes"
+printf '%s' "$HANDOFF_REPORTS" > "$PARTS_DIR/handoff_reports"
+printf '%s' "$VERIFY_LINES" > "$PARTS_DIR/verify_lines"
+
+python3 - "$TEMPLATE_PATH_PY" "$PROMPT_PATH_PY" "$PARTS_DIR_PY/task_section" \
+    "$PARTS_DIR_PY/fix_notes" "$PARTS_DIR_PY/handoff_reports" "$PARTS_DIR_PY/verify_lines" <<'PY'
 import sys
-with open('$TEMPLATE_PATH_PY', encoding='utf-8') as f:
+template_path, prompt_path, task_section_path, fix_notes_path, handoff_path, verify_path = sys.argv[1:7]
+with open(template_path, encoding='utf-8') as f:
     template = f.read()
-fix_notes = sys.argv[1]
-task_section = sys.argv[2]
-handoff_reports = sys.argv[3]
-verify_instruction = sys.argv[4]
+with open(task_section_path, encoding='utf-8', newline='') as f:
+    task_section = f.read()
+with open(fix_notes_path, encoding='utf-8', newline='') as f:
+    fix_notes = f.read()
+with open(handoff_path, encoding='utf-8', newline='') as f:
+    handoff_reports = f.read()
+with open(verify_path, encoding='utf-8', newline='') as f:
+    verify_instruction = f.read()
 result = template.replace('{fix_notes}', fix_notes)
 result = result.replace('{task_section}', task_section)
 result = result.replace('{handoff_reports}', handoff_reports)
 result = result.replace('{verify_instruction}', verify_instruction)
-with open('$PROMPT_PATH_PY', 'w', encoding='utf-8', newline='\n') as f:
+with open(prompt_path, 'w', encoding='utf-8', newline='\n') as f:
     f.write(result)
-" "$FIX_NOTES" "$TASK_SECTION" "$HANDOFF_REPORTS" "$VERIFY_LINES"
+PY
 
 append_worktree_section "$RUN_DIR"
 append_subagent_section "$RUN_DIR"

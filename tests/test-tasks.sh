@@ -94,6 +94,54 @@ t_gen_handoff_guard_still_exit2() {
     assert_eq 2 "$CODE" "missing report -> exit 2"
 }
 
+t_gen_handoff_reports_only_path() {
+    basic_tasks
+    write_state "T1:done" "T2:done" "T3:pending" "T4:pending"
+    write_report T1 1; write_report T2 1
+    run_script dispatch-prompt-gen.sh T3
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    local prompt
+    prompt="$(cat "$PROJ/.agents/workflow/runs/T3-1/prompt.md")"
+    assert_contains "$prompt" "### T2:" "handoff includes T2 heading"
+    assert_contains "$prompt" '- 完了報告: `.agents/workflow/runs/T2-1/report.md`' "handoff shows report path"
+    assert_not_contains "$prompt" "- 変更ファイル: a" "report body is not embedded"
+}
+
+t_gen_handoff_worktree_abs_path() {
+    basic_tasks
+    write_state "T1:done" "T2:done" "T3:pending" "T4:pending"
+    write_report T1 1; write_report T2 1
+    mkdir -p "$PROJ/.agents/workflow/runs/T3-1"
+    printf 'path %s\n' "$PROJ/.agents/workflow/runs/T3-1/worktree" > "$PROJ/.agents/workflow/runs/T3-1/worktree.txt"
+    run_script dispatch-prompt-gen.sh T3
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    local prompt
+    prompt="$(cat "$PROJ/.agents/workflow/runs/T3-1/prompt.md")"
+    if printf '%s\n' "$prompt" | grep -qE '^- 完了報告: `[^`]+/\.agents/workflow/runs/T2-1/report\.md`$'; then
+        _record ok
+    else
+        _record ng "handoff path is not an absolute path"
+    fi
+    assert_not_contains "$prompt" '- 完了報告: `.agents/' "relative handoff path is not used"
+}
+
+t_gen_large_fix_notes() {
+    write_tasks <<'EOF'
+## T1: a
+- **目的**: x
+- **依存**: なし
+EOF
+    write_state "T1:pending:1"
+    mkdir -p "$PROJ/.agents/workflow/runs/T1-2"
+    {
+        head -c 140000 /dev/zero | tr '\0' 'x'
+        printf '\nEND-OF-FIX-NOTES\n'
+    } > "$PROJ/.agents/workflow/runs/T1-2/fix-notes.md"
+    run_script dispatch-prompt-gen.sh T1 2
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    assert_contains "$(cat "$PROJ/.agents/workflow/runs/T1-2/prompt.md")" "END-OF-FIX-NOTES" "large fix-notes is embedded"
+}
+
 # ---------- state-sync: 依存欄の検証 (#14) ----------
 
 t_sync_init_valid() {
@@ -1132,6 +1180,9 @@ test_case "gen: 存在しないIDはexit 1" t_gen_unknown_id_rejected
 test_case "gen: 自己依存はexit 1" t_gen_self_dep_rejected
 test_case "gen: 依存行なしはexit 1" t_gen_missing_dep_line_rejected
 test_case "gen: 引き継ぎガードはexit 2のまま" t_gen_handoff_guard_still_exit2
+test_case "gen: 引き継ぎは report.md のパスだけを載せる" t_gen_handoff_reports_only_path
+test_case "gen: worktree の run の引き継ぎは本体の絶対パスにする" t_gen_handoff_worktree_abs_path
+test_case "gen: 140KB の fix-notes でもプロンプトを生成する" t_gen_large_fix_notes
 test_case "sync: init 正常" t_sync_init_valid
 test_case "sync: init 注記はexit 1" t_sync_init_annotation_rejected
 test_case "sync: init 依存行なしはexit 1" t_sync_init_missing_line_rejected
