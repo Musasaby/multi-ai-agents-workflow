@@ -2,10 +2,11 @@
 set -euo pipefail
 
 # yomiyasu(文章推敲 skill)への依頼文を config.json の text_refine から機械生成する(推敲そのものは親が行う)。
-# 引数: <target> <input> [--check|--request]
+# 引数: <target> <input> [--check|--request|--yomiyasu-check]
 #       target は summary / confirm / commit / pr_body / task_done / tasks のいずれか
 #       --check は推敲済みファイルに対する yomiyasu の記録を探し、判断が要る候補を出す
 #       --request は text_refine.mode が dispatch でも依頼文を出す(PR 作成の子が使う)
+#       --yomiyasu-check は原文と推敲後を区切りの行で標準入力から渡して yomiyasu の検査を実行する(exit は検査の exit code)
 # stdout: 推敲しないとき "Refine: off"、(skill 未設定なら導入検出の "Found: <場所>" と "Hint: ..."、)"Next: continue"。
 #       text_refine.mode が dispatch で --check も --request も無く、場面が tasks でなければ "Refine: dispatch"、"Next: continue"。
 #       推敲するとき "Refine: <skill>"、"Output: <出力パス>"、"Request: <依頼文>"、"Next: refine"
@@ -22,7 +23,7 @@ export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
 export PYTHONDONTWRITEBYTECODE=1
 
-USAGE="Usage: text-refine.sh <summary|confirm|commit|pr_body|task_done|tasks> <input> [--check|--request]"
+USAGE="Usage: text-refine.sh <summary|confirm|commit|pr_body|task_done|tasks> <input> [--check|--request|--yomiyasu-check]"
 
 if [ "$#" -ne 2 ] && [ "$#" -ne 3 ]; then
     echo "$USAGE" >&2
@@ -33,10 +34,12 @@ TARGET="$1"
 INPUT="$2"
 CHECK=0
 REQUEST=0
+YCHECK=0
 if [ "$#" -eq 3 ]; then
     case "$3" in
         --check) CHECK=1 ;;
         --request) REQUEST=1 ;;
+        --yomiyasu-check) YCHECK=1 ;;
         *)
             echo "$USAGE" >&2
             exit 1
@@ -66,14 +69,15 @@ to_py_path() {
     fi
 }
 
-python3 - "$TARGET" "$INPUT" "$(to_py_path "$ROOT")" "$(to_py_path "$CONFIG_PATH")" "$(to_py_path "$HOME")" "$CHECK" "$REQUEST" <<'PY'
-import glob, hashlib, json, os, re, sys
+python3 - "$TARGET" "$INPUT" "$(to_py_path "$ROOT")" "$(to_py_path "$CONFIG_PATH")" "$(to_py_path "$HOME")" "$CHECK" "$REQUEST" "$YCHECK" <<'PY'
+import glob, hashlib, json, os, re, subprocess, sys
 
 sys.stdout.reconfigure(newline='\n')
 
 target, input_path, root, config_path, home = sys.argv[1:6]
 check = sys.argv[6] == '1'
 request_opt = sys.argv[7] == '1'
+ycheck = sys.argv[8] == '1'
 
 DEFAULT_TARGETS = ['summary', 'confirm', 'commit', 'pr_body', 'task_done', 'tasks']
 READERS = {
@@ -212,7 +216,7 @@ if not skill_set or target not in targets:
     print('Next: continue')
     sys.exit(0)
 
-if not check and mode == 'dispatch' and target != 'tasks' and not request_opt:
+if not check and mode == 'dispatch' and target != 'tasks' and not request_opt and not ycheck:
     print('Refine: dispatch')
     print('Next: continue')
     sys.exit(0)
@@ -344,8 +348,8 @@ def run_check():
     if best is None:
         unchecked(
             'no record for sha256:' + h[:12],
-            'run python3 %s/scripts/yomiyasu_check.py run --source %s --final %s, then run this check again'
-            % (yomiyasu_dir(), input_path, output_path),
+            'run .agents/workflow/scripts/text-refine.sh %s %s --yomiyasu-check, then run this check again'
+            % (target, input_path),
         )
     print('Record: ' + os.path.relpath(best_path, state).replace(os.sep, '/'))
 
@@ -410,8 +414,41 @@ def run_check():
     sys.exit(0)
 
 
+def run_yomiyasu_check():
+    if skill.strip() not in ('yomiyasu', 'yomiyasu:yomiyasu'):
+        print('text_refine.skill is not yomiyasu: ' + skill, file=sys.stderr)
+        sys.exit(1)
+    for p in (input_path, output_path):
+        if not os.path.isfile(p):
+            print('not found: ' + p, file=sys.stderr)
+            sys.exit(1)
+    d = yomiyasu_dir()
+    if d.startswith('~/'):
+        d = os.path.join(home, d[2:])
+    elif not os.path.isabs(d):
+        d = os.path.join(root, d)
+    script = os.path.join(d, 'scripts', 'yomiyasu_check.py')
+    if not os.path.isfile(script):
+        print('not found: ' + script, file=sys.stderr)
+        sys.exit(1)
+    with open(input_path, 'rb') as f:
+        src = f.read()
+    with open(output_path, 'rb') as f:
+        fin = f.read()
+    data = (b'<<<yomiyasu:original>>>\n' + src + (b'' if src.endswith(b'\n') else b'\n')
+            + b'<<<yomiyasu:final>>>\n' + fin)
+    state = os.environ.get('YOMIYASU_STATE_DIR') or os.path.join(root, '.yomiyasu')
+    sys.stdout.flush()
+    rc = subprocess.run([sys.executable, script, 'run', '--stdin', '--state-dir', state],
+                        input=data, cwd=root).returncode
+    sys.exit(rc)
+
+
 if check:
     run_check()
+
+if ycheck:
+    run_yomiyasu_check()
 
 if not os.path.exists(input_path):
     print('not found: ' + input_path, file=sys.stderr)
@@ -431,10 +468,8 @@ request = (
 )
 if skill.strip() in ('yomiyasu', 'yomiyasu:yomiyasu'):
     request += (
-        '書いた後に python3 ' + yomiyasu_dir() +
-        '/scripts/yomiyasu_check.py run --source ' + input_path +
-        ' --final ' + output_path +
-        ' を実行して、検査の記録を残してください(記録が無いと次の確認で止まります)。'
+        '書いた後に .agents/workflow/scripts/text-refine.sh ' + target + ' ' + input_path +
+        ' --yomiyasu-check を実行して、検査の記録を残してください(記録が無いと次の確認で止まります)。'
     )
 
 print('Refine: ' + skill)

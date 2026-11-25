@@ -85,6 +85,29 @@ setup_check() {
     INPUTF=".agents/workflow/runs/refine/pr_body.md"
 }
 
+# yomiyasu_check.py のスタブを置く: --state-dir のディレクトリに引数と標準入力を書く
+write_yomiyasu_check_stub() {
+    mkdir -p "$TEST_HOME/.agents/skills/yomiyasu/scripts"
+    cat > "$TEST_HOME/.agents/skills/yomiyasu/scripts/yomiyasu_check.py" <<'PY'
+import os, sys
+args = sys.argv[1:]
+if '--state-dir' in args:
+    i = args.index('--state-dir')
+    state = args[i + 1]
+    before = args[:i]
+else:
+    state = ''
+    before = args
+os.makedirs(state, exist_ok=True)
+with open(os.path.join(state, 'stub-argv.txt'), 'w', encoding='utf-8', newline='\n') as f:
+    f.write(' '.join(before))
+with open(os.path.join(state, 'stub-stdin.bin'), 'wb') as f:
+    f.write(sys.stdin.buffer.read())
+print('stub-ok')
+sys.exit(0)
+PY
+}
+
 LINT1='[{"rule":"excess_list","line":1,"snippet":"- 項目"}]'
 RISK1='[{"kind":"protected","subkind":"inline_code","new_line":4,"new":"`code`"}]'
 
@@ -134,7 +157,8 @@ t_enabled_request() {
     assert_contains "$OUT" "PR説明です" "場面"
     assert_contains "$OUT" "読者は分野は違うが技術に詳しい人です" "読者"
     assert_contains "$OUT" "要件一覧とテスト計画の項目" "変えない物"
-    assert_contains "$OUT" "yomiyasu_check.py run --source .agents/workflow/runs/refine/pr_body.md --final .agents/workflow/runs/refine/pr_body.refined.md" "検査のコマンド"
+    assert_contains "$OUT" ".agents/workflow/scripts/text-refine.sh pr_body .agents/workflow/runs/refine/pr_body.md --yomiyasu-check" "検査のコマンド"
+    assert_not_contains "$OUT" "yomiyasu_check.py" "検査の python を直接呼ばない"
     assert_contains "$OUT" "Next: refine" "次の操作"
     assert_file_absent "$PROJ/.agents/workflow/runs/refine/pr_body.refined.md" "前の出力を消す"
     assert_file_absent "$PROJ/.agents/workflow/runs/refine/pr_body.decisions.md" "前の判断を消す"
@@ -149,7 +173,7 @@ t_request_other_skill() {
     HOME="$TEST_HOME" run_script text-refine.sh pr_body .agents/workflow/runs/refine/pr_body.md
     assert_eq 0 "$CODE" "exit: $ERR"
     assert_contains "$OUT" "Request:" "依頼文"
-    assert_not_contains "$OUT" "yomiyasu_check.py" "検査のコマンドを入れない"
+    assert_not_contains "$OUT" "--yomiyasu-check" "検査のコマンドを入れない"
     cleanup_home
 }
 
@@ -211,8 +235,8 @@ t_check_no_record() {
             "Unchecked: no record for sha256:"*) found=1 ;;
         esac
     done <<< "$OUT"
-    assert_eq 1 "$(case "$next_line" in "Hint: run python3 "*) echo 1 ;; *) echo 0 ;; esac)" "Hint は Unchecked の次"
-    assert_contains "$next_line" "yomiyasu_check.py run --source" "Hint のコマンド"
+    assert_eq 1 "$(case "$next_line" in "Hint: run .agents/workflow/scripts/text-refine.sh "*) echo 1 ;; *) echo 0 ;; esac)" "Hint は Unchecked の次"
+    assert_contains "$next_line" "--yomiyasu-check" "Hint のコマンド"
     assert_eq "Next: escalate reason=refine-unchecked" "${OUT##*$'\n'}" "最後の行"
     cleanup_home
 }
@@ -371,6 +395,39 @@ t_dispatch_tasks_request() {
     cleanup_home
 }
 
+t_yomiyasu_check_pipes() {
+    new_home
+    set_refine yomiyasu
+    write_skill_md "$TEST_HOME/.agents/skills/yomiyasu/SKILL.md" yomiyasu
+    write_yomiyasu_check_stub
+    mkdir -p "$PROJ/.agents/workflow/runs/refine"
+    printf '本文\n' > "$PROJ/.agents/workflow/runs/refine/pr_body.md"
+    printf '推敲済み' > "$PROJ/.agents/workflow/runs/refine/pr_body.refined.md"
+    HOME="$TEST_HOME" run_script text-refine.sh pr_body .agents/workflow/runs/refine/pr_body.md --yomiyasu-check
+    assert_eq 0 "$CODE" "exit: $ERR"
+    assert_contains "$OUT" "stub-ok" "検査の出力"
+    assert_eq "run --stdin" "$(cat "$PROJ/.yomiyasu/stub-argv.txt")" "検査の引数"
+    local expected
+    expected="$(mktemp)"
+    printf '<<<yomiyasu:original>>>\n本文\n<<<yomiyasu:final>>>\n推敲済み' > "$expected"
+    assert_eq 0 "$(cmp -s "$PROJ/.yomiyasu/stub-stdin.bin" "$expected" && echo 0 || echo 1)" "標準入力のバイト列"
+    rm -f "$expected"
+    cleanup_home
+}
+
+t_yomiyasu_check_missing_final() {
+    new_home
+    set_refine yomiyasu
+    write_skill_md "$TEST_HOME/.agents/skills/yomiyasu/SKILL.md" yomiyasu
+    write_yomiyasu_check_stub
+    mkdir -p "$PROJ/.agents/workflow/runs/refine"
+    printf '本文\n' > "$PROJ/.agents/workflow/runs/refine/pr_body.md"
+    HOME="$TEST_HOME" run_script text-refine.sh pr_body .agents/workflow/runs/refine/pr_body.md --yomiyasu-check
+    assert_eq 1 "$CODE" "exit 1"
+    assert_contains "$ERR" "not found: .agents/workflow/runs/refine/pr_body.refined.md" "推敲後が無い"
+    cleanup_home
+}
+
 echo "test-text-refine.sh"
 test_case "text-refine: skill が null なら Refine: off と Next: continue" t_off_when_null
 test_case "text-refine: 未設定ならエージェントを問わず導入を見つけて知らせる" t_detect_installed
@@ -389,4 +446,6 @@ test_case "text-refine: tasks のチェックは機械パースする行が同�
 test_case "text-refine: dispatch では --request が無ければ依頼文を出さない" t_dispatch_skip_request
 test_case "text-refine: dispatch でも --request なら依頼文を出す" t_dispatch_request
 test_case "text-refine: dispatch でも tasks は依頼文を出す" t_dispatch_tasks_request
+test_case "text-refine: --yomiyasu-check は原文と推敲後を区切りの行で標準入力から渡す" t_yomiyasu_check_pipes
+test_case "text-refine: --yomiyasu-check は推敲後のファイルが無いと exit 1" t_yomiyasu_check_missing_final
 summary
