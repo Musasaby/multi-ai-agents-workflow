@@ -245,7 +245,7 @@ Git Bash を使うなら `"C:/Program Files/Git/usr/bin/bash.exe" ./x.sh "{promp
 
 `- **依存**:` 行は `state-sync` / `next-task` / `dispatch-prompt-gen` が機械的にパースする
 機械可読フォーマットである。`なし` またはカンマ区切りのタスクID列(`T1, T2`)以外は書かない。
-依存欄に挙げたタスクは dispatch 時に完了報告が自動結合される対象になるため、真に前提となる
+依存欄に挙げたタスクは dispatch 時に完了報告のパスがプロンプトに載る対象になるため、真に前提となる
 タスクのみ記載する。
 
 - 依存行はすべてのタスクに必須(依存が無ければ `なし`)
@@ -404,6 +404,11 @@ tasks.md・config.json・依存タスクの完了報告(直接依存のみ)か�
 プロンプトを機械的に組み立てて `runs/<タスクID>-<試行回数>/prompt.md` に書き出す。
 定型文(実装ルール・テスト検証指示・完了報告フォーマット)は `dispatch-prompt-template.md`
 から展開する。
+
+依存タスクの完了報告は全文を載せず、「前提タスクの成果(引き継ぎ)」の節に各
+`runs/<依存ID>-<最新の試行番号>/report.md` のパスを載せ、子に作業の前に読ませる。
+worktree の run では本体の絶対パスにする(worktree の中には `runs/` が無いため)。
+プロンプトの本文は一時ファイルを通して python3 に渡す(コマンドライン長の上限に当たらないように)。
 
 worktree の run(`runs/<タスクID>-<試行回数>/worktree.txt` があるとき)は、prompt.md の末尾に
 作業ディレクトリの節も足す。節は `dispatch-worktree-template.md` から展開し、`{workdir}` に
@@ -770,7 +775,9 @@ sh 版では位置引数の前でも後でも指定できる。
   ANSI エスケープを除いた行に対して判定する。検出条件は次の3つ:
   1) `/tmp`・`/var/tmp` の参照、2) ホームディレクトリの参照(`~/`・`$HOME`・`${HOME}`・
   `$env:HOME`・`$env:USERPROFILE`・`%USERPROFILE%`)、3) Windows のユーザー一時ディレクトリの参照
-  (`AppData\Local\Temp`・`AppData/Local/Temp`)。2 と 3 は大文字小文字を区別しない。`$env:TEMP`・`%TEMP%`・
+  (`AppData\Local\Temp`・`AppData/Local/Temp`)。2 と 3 は大文字小文字を区別しない。2 のホームディレクトリの
+  参照のうち、`~/<…>/skills/yomiyasu/scripts/yomiyasu_*.py`(yomiyasu の skill が子に実行させる
+  スクリプト)は除いて判定する。同じ行にほかの参照があれば検出する。`$env:TEMP`・`%TEMP%`・
   `$TMPDIR` は `dispatch-run` がプロジェクト内の `tmp/` を指させるため検出しない。
   stream-json の `[tool_use]` 行には Edit・Write 等の本文が載らないため、ファイル本文中の `~/` 等には反応しない
   (上記「stream-json の逐次変換」を参照)
@@ -1422,10 +1429,10 @@ exit code: `0`=出力あり、`1`=使い方不備・tasks.md/state.json 不在�
 サマリー報告・確認依頼・コミットメッセージ・PR説明・タスク完了報告・tasks.md を、利用者に見せる前に整えるために使う。
 
 ```powershell
-.agents/workflow/scripts/text-refine.ps1 <summary|confirm|commit|pr_body|task_done|tasks> <入力ファイル> [-Check|-Request]
+.agents/workflow/scripts/text-refine.ps1 <summary|confirm|commit|pr_body|task_done|tasks> <入力ファイル> [-Check|-Request|-YomiyasuCheck]
 ```
 ```bash
-.agents/workflow/scripts/text-refine.sh <summary|confirm|commit|pr_body|task_done|tasks> <入力ファイル> [--check|--request]
+.agents/workflow/scripts/text-refine.sh <summary|confirm|commit|pr_body|task_done|tasks> <入力ファイル> [--check|--request|--yomiyasu-check]
 ```
 
 - 第1引数は推敲する場面(`text_refine.targets` と同じ6つの値)、第2引数は推敲前の文章のファイル
@@ -1455,6 +1462,11 @@ Next: continue
 - `--request` を付けると、`mode` に関係なく「推敲するとき」の出力になる
 - `--request` は PR 作成の子が使う(親が使うのは、子が推敲できずに親が推敲し直すときだけ)
 - `--check` は `mode` の影響を受けない
+- `--yomiyasu-check`(ps1 は `-YomiyasuCheck`)は、入力と推敲済みのファイル(`Output:`)を
+  `<<<yomiyasu:original>>>`・`<<<yomiyasu:final>>>` の行で区切って
+  `yomiyasu_check.py run --stdin --state-dir <状態ディレクトリ>` に標準入力で渡し、終了コードは
+  yomiyasu のものを返す。`skill` が yomiyasu でない・ファイルが無いときは exit 1。
+  記録の最終稿の SHA-256 は推敲済みファイルと一致するので、そのまま `--check` で使える
 
 推敲するとき:
 
@@ -1471,8 +1483,10 @@ Next: refine
 - 依頼文には、場面ごとの文章の種類、読み手(`text_refine.reader`)、変えてはいけないもの
   (コマンド・パス・タスクID・コミットハッシュ・URL・括弧書きの補足、場面によって構成や改行)を入れる
 - `skill` が `yomiyasu` / `yomiyasu:yomiyasu` のときは、依頼文に検査のコマンド
-  (`python3 <yomiyasu のディレクトリ>/scripts/yomiyasu_check.py run --source <入力> --final <出力>`)を
-  入れる。子は推敲の後にこのコマンドを実行して検査の記録を残す(記録が無いと `--check` で止まる)
+  (`text-refine <場面> <入力> --yomiyasu-check`。ps1 は `-YomiyasuCheck`)を
+  入れる。子は推敲の後にこのコマンドを実行して検査の記録を残す(記録が無いと `--check` で止まる)。
+  yomiyasu は名前が点で始まるフォルダの中のファイルを読まないため、検査は yomiyasu のスクリプトに
+  直接ファイルを渡さず、このコマンドで標準入力から渡す
 
 推敲の後のチェック(`--check`。ps1 は `-Check`):
 
@@ -1507,7 +1521,7 @@ Next: decide-candidates
 - 確かめられないとき(推敲済みファイル・記録・lint の報告が無い等)は `Unchecked: <理由>` と
   `Next: escalate reason=refine-unchecked`。`--check` が `no record`(推敲済みファイルの SHA-256 に
   一致する記録が無い)で止まったときは、その間に `Hint:` の行に、記録を作るための
-  `yomiyasu_check.py run` のコマンドを出す
+  `text-refine --yomiyasu-check` のコマンドを出す
 - `tasks` の `--check` は、yomiyasu の記録を確かめる前に、推敲前後の構造を比べる。構造は見出し(`#` 始まり)・
   コメント行(`<!--` 始まり)・`依存`・`要件`・`グループ`・`参照ファイル` の行と参照ファイルの箇条・要件ID(`- R1:` 等)・
   コードブロックの中身で、行末の空白は無視する。この比較は yomiyasu 以外の skill でも行う

@@ -109,6 +109,16 @@ t_review_report_missing() {
     assert_eq 2 "$CODE" "missing report -> exit 2"
 }
 
+t_review_long_task_section() {
+    { printf '## T1: レビュー対象のタスク\n- **目的**: '; head -c 140000 /dev/zero | tr '\0' 'x'; printf '\nEND-OF-TASK-SECTION\n- **依存**: なし\n'; } > "$PROJ/.agents/workflow/tasks.md"
+    write_report T1 1
+    run_script dispatch-prompt-gen.sh --review T1 1
+    assert_eq 0 "$CODE" "exit code: $ERR"
+    local prompt
+    prompt="$(cat "$PROJ/.agents/workflow/runs/review-T1-1/prompt.md")"
+    assert_contains "$prompt" "END-OF-TASK-SECTION" "task section end"
+}
+
 t_review_comprehension_enabled() {
     write_review_tasks
     write_report T1 1
@@ -240,6 +250,7 @@ echo "test-review.sh"
 test_case "review のプロンプトを生成する" t_review_generates
 test_case "worktree の run のレビューは絶対パスと追加の節を入れる" t_review_worktree
 test_case "report.md が無いと exit 2" t_review_report_missing
+test_case "review: 長いタスクの節でもプロンプトを生成する" t_review_long_task_section
 test_case "理解確認が有効なら質問ファイルの指示を入れる" t_review_comprehension_enabled
 test_case "合格なら commit を出す" t_check_review_pass
 test_case "type が決まった値なら Review type に出す" t_check_review_type_valid

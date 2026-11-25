@@ -91,6 +91,16 @@ Invoke-TestCase "report.md が無いと exit 2" {
     Assert-Eq 2 $script:Code "missing report -> exit 2"
 }
 
+Invoke-TestCase "review: 長いタスクの節でもプロンプトを生成する" {
+    $body = "## T1: レビュー対象のタスク`n- **目的**: " + [string]::new('x', 140000) + "`nEND-OF-TASK-SECTION`n- **依存**: なし`n"
+    [System.IO.File]::WriteAllText("$script:Proj/.agents/workflow/tasks.md", $body, [System.Text.UTF8Encoding]::new($false))
+    Set-Report -TaskId 'T1' -Attempt 1
+    Invoke-Script dispatch-prompt-gen.ps1 '-Review' '-TaskId' 'T1' '-Attempt' '1'
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    $prompt = [System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/review-T1-1/prompt.md")
+    Assert-Contains $prompt "END-OF-TASK-SECTION" "task section end"
+}
+
 Invoke-TestCase "理解確認が有効なら質問ファイルの指示を入れる" {
     Set-ReviewTasks
     Set-Report -TaskId 'T1' -Attempt 1

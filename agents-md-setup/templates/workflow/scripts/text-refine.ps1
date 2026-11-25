@@ -1,8 +1,9 @@
 ﻿# yomiyasu(文章推敲 skill)への依頼文を config.json の text_refine から機械生成する(推敲そのものは親が行う)。
-# 引数: <target> <input> [-Check|-Request]
+# 引数: <target> <input> [-Check|-Request|-YomiyasuCheck]
 #       target は summary / confirm / commit / pr_body / task_done / tasks のいずれか
 #       -Check は推敲済みファイルに対する yomiyasu の記録を探し、判断が要る候補を出す
 #       -Request は text_refine.mode が dispatch でも依頼文を出す(PR 作成の子が使う)
+#       -YomiyasuCheck は原文と推敲後を区切りの行で標準入力から渡して yomiyasu の検査を実行する(exit は検査の exit code)
 # stdout: 推敲しないとき "Refine: off"、(skill 未設定なら導入検出の "Found: <場所>" と "Hint: ..."、)"Next: continue"。
 #       text_refine.mode が dispatch で -Check も -Request も無く、場面が tasks でなければ "Refine: dispatch"、"Next: continue"。
 #       推敲するとき "Refine: <skill>"、"Output: <出力パス>"、"Request: <依頼文>"、"Next: refine"
@@ -14,12 +15,13 @@
 #       同じなら "Structure: same"(yomiyasu なら続けて記録を確かめ、候補が全部判断済みのとき "Next: continue" だけで "Text:" は出さない)、
 #       違えば "Changed: L<行> <抜粋>"、"Refined: L<行> <抜粋>"、"Next: escalate reason=refine-structure-changed"
 # exit: 0=出力あり / 1=使い方・入力不備 / 2=-Check で判断待ちの候補あり / 3=-Check で確かめられない / 4=-Check で tasks の構造が変わった
-param([string]$Target, [string]$InputPath, [switch]$Check, [switch]$Request)
+param([string]$Target, [string]$InputPath, [switch]$Check, [switch]$Request, [switch]$YomiyasuCheck)
 
-$Usage = 'Usage: text-refine.ps1 <summary|confirm|commit|pr_body|task_done|tasks> <input> [-Check|-Request]'
+$Usage = 'Usage: text-refine.ps1 <summary|confirm|commit|pr_body|task_done|tasks> <input> [-Check|-Request|-YomiyasuCheck]'
 
+$modeCount = @(@($Check.IsPresent, $Request.IsPresent, $YomiyasuCheck.IsPresent) | Where-Object { $_ }).Count
 if ($args.Count -gt 0 -or -not $PSBoundParameters.ContainsKey('Target') -or -not $PSBoundParameters.ContainsKey('InputPath') -or
-    ($Check -and $Request)) {
+    $modeCount -ge 2) {
     [Console]::Error.WriteLine($Usage)
     exit 1
 }
@@ -183,7 +185,7 @@ if (-not $skillSet -or ($targets -cnotcontains $Target)) {
     exit 0
 }
 
-if (-not $Check -and $mode -ceq 'dispatch' -and $Target -cne 'tasks' -and -not $Request) {
+if (-not $Check -and $mode -ceq 'dispatch' -and $Target -cne 'tasks' -and -not $Request -and -not $YomiyasuCheck) {
     Write-Output 'Refine: dispatch'
     Write-Output 'Next: continue'
     exit 0
@@ -358,8 +360,8 @@ function Invoke-Check {
         }
     }
     if ($null -eq $best) {
-        $hint = 'run python3 ' + (Resolve-YomiyasuDir) + '/scripts/yomiyasu_check.py run --source ' +
-            $InputPath + ' --final ' + $OutputPath + ', then run this check again'
+        $hint = 'run pwsh -NoProfile -File .agents/workflow/scripts/text-refine.ps1 ' +
+            $Target + ' ' + $InputPath + ' -YomiyasuCheck, then run this check again'
         Exit-Unchecked ('no record for sha256:' + $hash.Substring(0, 12)) $hint
     }
     Write-Output ('Record: runs/' + $bestFile.Directory.Name + '/' + $bestFile.Name)
@@ -421,6 +423,52 @@ $StateDir = if ($env:YOMIYASU_STATE_DIR) { $env:YOMIYASU_STATE_DIR } else { "$Ro
 
 if ($Check) { Invoke-Check }
 
+if ($YomiyasuCheck) {
+    if (@('yomiyasu', 'yomiyasu:yomiyasu') -cnotcontains $skill.Trim()) {
+        [Console]::Error.WriteLine("text_refine.skill is not yomiyasu: $skill")
+        exit 1
+    }
+    foreach ($p in @($InputPath, $OutputPath)) {
+        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) {
+            [Console]::Error.WriteLine("not found: $p")
+            exit 1
+        }
+    }
+    $yomiyasuDir = Resolve-YomiyasuDir
+    if ($yomiyasuDir.StartsWith('~/', [StringComparison]::Ordinal)) {
+        $yomiyasuDir = Join-Path $HomeDir $yomiyasuDir.Substring(2)
+    } elseif (-not [System.IO.Path]::IsPathRooted($yomiyasuDir)) {
+        $yomiyasuDir = Join-Path $Root $yomiyasuDir
+    }
+    $script = Join-Path $yomiyasuDir 'scripts/yomiyasu_check.py'
+    if (-not (Test-Path -LiteralPath $script -PathType Leaf)) {
+        [Console]::Error.WriteLine("not found: $script")
+        exit 1
+    }
+    $src = [System.IO.File]::ReadAllBytes($InputPath)
+    $fin = [System.IO.File]::ReadAllBytes($OutputPath)
+    $ms = New-Object System.IO.MemoryStream
+    $prefix = [System.Text.Encoding]::UTF8.GetBytes("<<<yomiyasu:original>>>`n")
+    $ms.Write($prefix, 0, $prefix.Length)
+    $ms.Write($src, 0, $src.Length)
+    if ($src.Length -eq 0 -or $src[$src.Length - 1] -ne 10) { $ms.WriteByte(10) }
+    $mid = [System.Text.Encoding]::UTF8.GetBytes("<<<yomiyasu:final>>>`n")
+    $ms.Write($mid, 0, $mid.Length)
+    $ms.Write($fin, 0, $fin.Length)
+    $data = $ms.ToArray()
+
+    $psi = [System.Diagnostics.ProcessStartInfo]::new('python3')
+    foreach ($a in @($script, 'run', '--stdin', '--state-dir', $StateDir)) { $psi.ArgumentList.Add($a) }
+    $psi.WorkingDirectory = $Root
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardInput = $true
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $proc.StandardInput.BaseStream.Write($data, 0, $data.Length)
+    $proc.StandardInput.Close()
+    $proc.WaitForExit()
+    exit $proc.ExitCode
+}
+
 if (-not $InputPath -or -not (Test-Path -LiteralPath $InputPath)) {
     [Console]::Error.WriteLine("not found: $InputPath")
     exit 1
@@ -436,9 +484,8 @@ $keep = $KeepBase + $KeepExtra[$Target]
 $requestText = "$InputPath を $skill で推敲し、本文だけを $OutputPath に書いてください。$($Kinds[$Target])。読者は$($Readers[$reader])です。" +
     "質問はせず、意味・条件・数値を変えないでください。次のものは変えないでください: $keep。"
 if (@('yomiyasu', 'yomiyasu:yomiyasu') -ccontains $skill.Trim()) {
-    $requestText += '書いた後に python3 ' + (Resolve-YomiyasuDir) +
-        '/scripts/yomiyasu_check.py run --source ' + $InputPath + ' --final ' + $OutputPath +
-        ' を実行して、検査の記録を残してください(記録が無いと次の確認で止まります)。'
+    $requestText += '書いた後に pwsh -NoProfile -File .agents/workflow/scripts/text-refine.ps1 ' +
+        $Target + ' ' + $InputPath + ' -YomiyasuCheck を実行して、検査の記録を残してください(記録が無いと次の確認で止まります)。'
 }
 
 Write-Output "Refine: $skill"
