@@ -79,6 +79,39 @@ Invoke-TestCase "gen: 引き継ぎガードはexit 2のまま" {
     Assert-Eq 2 $script:Code "missing report -> exit 2"
 }
 
+Invoke-TestCase "gen: 引き継ぎは report.md のパスだけを載せる" {
+    Set-Tasks $basicTasks
+    Set-State 'T1:done' 'T2:done' 'T3:pending' 'T4:pending'
+    Set-Report T1 1; Set-Report T2 1
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T3
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    $prompt = [System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T3-1/prompt.md")
+    Assert-Contains $prompt "### T2:" "handoff includes T2 heading"
+    Assert-Contains $prompt '- 完了報告: `.agents/workflow/runs/T2-1/report.md`' "handoff shows report path"
+    Assert-NotContains $prompt "- 変更ファイル: a" "report body is not embedded"
+}
+
+Invoke-TestCase "gen: worktree の run の引き継ぎは本体の絶対パスにする" {
+    Set-Tasks $basicTasks
+    Set-State 'T1:done' 'T2:done' 'T3:pending' 'T4:pending'
+    Set-Report T1 1; Set-Report T2 1
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/T3-1/worktree.txt" "path $script:Proj/.agents/workflow/runs/T3-1/worktree`n"
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T3
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    $prompt = [System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T3-1/prompt.md")
+    Add-Result ([regex]::IsMatch($prompt, '(?m)^- 完了報告: `[^`]+/\.agents/workflow/runs/T2-1/report\.md`$')) "handoff path is not an absolute path"
+    Assert-NotContains $prompt '- 完了報告: `.agents/' "relative handoff path is not used"
+}
+
+Invoke-TestCase "gen: 140KB の fix-notes でもプロンプトを生成する" {
+    Set-Tasks "## T1: a`n- **目的**: x`n- **依存**: なし`n"
+    Set-State 'T1:pending:1'
+    Write-Utf8File "$script:Proj/.agents/workflow/runs/T1-2/fix-notes.md" ([string]::new('x', 140000) + "`nEND-OF-FIX-NOTES`n")
+    Invoke-Script dispatch-prompt-gen.ps1 -TaskId T1 -Attempt 2
+    Assert-Eq 0 $script:Code "exit code: $($script:Err)"
+    Assert-Contains ([System.IO.File]::ReadAllText("$script:Proj/.agents/workflow/runs/T1-2/prompt.md")) "END-OF-FIX-NOTES" "large fix-notes is embedded"
+}
+
 # ---------- state-sync: 依存欄の検証 (#14) ----------
 
 Invoke-TestCase "sync: init 正常" {

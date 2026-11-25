@@ -518,9 +518,24 @@ if ($deps.Count -gt 0) {
     }
 }
 
+# report.md の中身は載せず、パスだけを示す(本文が大きいとプロンプトが肥大するため)。
+# worktree の run は、report.md を本体の絶対パスで示す(Add-WorktreeSection と同じ読み方)
 $handoffReports = ''
 if ($deps.Count -gt 0) {
-    $handoffLines = @('## 前提タスクの成果(引き継ぎ)', '')
+    $handoffPrefix = ''
+    $wtFile = "$RunDir/worktree.txt"
+    if (Test-Path -LiteralPath $wtFile -PathType Leaf) {
+        $wtPath = ''
+        foreach ($l in (Get-Content -LiteralPath $wtFile -Encoding UTF8)) {
+            if ($l -match '^path (.+)$') { $wtPath = $Matches[1].Trim(); break }
+        }
+        if ($wtPath) { $handoffPrefix = "$Root".Replace('\', '/').TrimEnd('/') + '/' }
+    }
+    $handoffLines = @(
+        '## 前提タスクの成果(引き継ぎ)',
+        '',
+        '依存タスクの完了報告です。タスクの「参照ファイル」欄のファイルと同じく、作業を始める前に次の report.md を読んでください(読み取りのみ)。'
+    )
     foreach ($depId in $deps) {
         $depTitle = ''
         $stateData = $null
@@ -538,13 +553,11 @@ if ($deps.Count -gt 0) {
                 if ($n -gt $maxAttempt) { $maxAttempt = $n }
             }
         }
-        $reportPath = "$RunsBase/$depId-$maxAttempt/report.md"
-        $reportContent = Get-Content $reportPath -Raw -Encoding UTF8
-        $handoffLines += "### ${depId}: ${depTitle}"
-        $handoffLines += $reportContent.TrimEnd()
         $handoffLines += ''
+        $handoffLines += "### ${depId}: ${depTitle}"
+        $handoffLines += "- 完了報告: ``${handoffPrefix}.agents/workflow/runs/${depId}-${maxAttempt}/report.md``"
     }
-    $handoffReports = $handoffLines -join "`n"
+    $handoffReports = ($handoffLines -join "`n") + "`n"
 }
 
 $fixNotes = ''
