@@ -28,7 +28,3 @@ test-skill-size.ps1: *
 # 端末の出力コードページの切り替えは ps1(workflow-logs.ps1)専用。リダイレクト時にバイト列が変わらないことの確認
 test-workflow-logs.ps1: logs: リダイレクトで受けた日本語は BOM なしの UTF-8 のバイト列になる
 
-# T6 で消す(#146 の sh 版のケースの先行)
-test-text-refine.sh: text-refine: -YomiyasuCheck は原文と推敲後を区切りの行で標準入力から渡す
-test-text-refine.sh: text-refine: -YomiyasuCheck は推敲後のファイルが無いと exit 1
-

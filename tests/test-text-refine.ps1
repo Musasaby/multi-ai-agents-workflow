@@ -44,6 +44,28 @@ function Write-SkillMd {
     Write-Utf8File $Path "---`nname: $Name`n---`n"
 }
 
+# yomiyasu_check.py のスタブを置く: --state-dir のディレクトリに引数と標準入力を書く
+function Write-YomiyasuCheckStub {
+    Write-Utf8File "$script:TestHome/.agents/skills/yomiyasu/scripts/yomiyasu_check.py" @'
+import os, sys
+args = sys.argv[1:]
+if '--state-dir' in args:
+    i = args.index('--state-dir')
+    state = args[i + 1]
+    before = args[:i]
+else:
+    state = ''
+    before = args
+os.makedirs(state, exist_ok=True)
+with open(os.path.join(state, 'stub-argv.txt'), 'w', encoding='utf-8', newline='\n') as f:
+    f.write(' '.join(before))
+with open(os.path.join(state, 'stub-stdin.bin'), 'wb') as f:
+    f.write(sys.stdin.buffer.read())
+print('stub-ok')
+sys.exit(0)
+'@
+}
+
 # yomiyasu の記録を書く: Write-Record <run> <created_at> <final_file> <findings> <meaning_risks>
 function Write-Record {
     param([string]$Run, [string]$Created, [string]$Final, $Findings, $Risks)
@@ -128,7 +150,8 @@ Invoke-TestCase "text-refine: 有効なら依頼文と出力パスを出す" {
         Assert-Contains $script:Out "PR説明です" "場面"
         Assert-Contains $script:Out "読者は分野は違うが技術に詳しい人です" "読者"
         Assert-Contains $script:Out "要件一覧とテスト計画の項目" "変えない物"
-        Assert-Contains $script:Out "yomiyasu_check.py run --source .agents/workflow/runs/refine/pr_body.md --final .agents/workflow/runs/refine/pr_body.refined.md" "検査のコマンド"
+        Assert-Contains $script:Out "pwsh -NoProfile -File .agents/workflow/scripts/text-refine.ps1 pr_body .agents/workflow/runs/refine/pr_body.md -YomiyasuCheck" "検査のコマンド"
+        Assert-NotContains $script:Out "yomiyasu_check.py" "検査の python を直接呼ばない"
         Assert-Contains $script:Out "Next: refine" "次の操作"
         Assert-FileAbsent "$script:Proj/.agents/workflow/runs/refine/pr_body.refined.md" "前の出力を消す"
         Assert-FileAbsent "$script:Proj/.agents/workflow/runs/refine/pr_body.decisions.md" "前の判断を消す"
@@ -143,7 +166,7 @@ Invoke-TestCase "text-refine: yomiyasu 以外の skill の依頼文には検査�
         Invoke-Script text-refine.ps1 pr_body .agents/workflow/runs/refine/pr_body.md
         Assert-Eq 0 $script:Code "exit: $($script:Err)"
         Assert-Contains $script:Out "Request:" "依頼文"
-        Assert-NotContains $script:Out "yomiyasu_check.py" "検査のコマンドを入れない"
+        Assert-NotContains $script:Out "-YomiyasuCheck" "検査のコマンドを入れない"
     } finally { Remove-TestHome }
 }
 
@@ -204,8 +227,8 @@ Invoke-TestCase "text-refine: チェックは記録が無いか最終稿のハ�
         for ($i = 0; $i -lt $lines.Count - 1; $i++) {
             if ($lines[$i] -like 'Unchecked: no record for sha256:*') { $next = $lines[$i + 1] }
         }
-        Assert-Eq $true ($next.StartsWith('Hint: run python3 ')) "Hint は Unchecked の次"
-        Assert-Contains $next "yomiyasu_check.py run --source" "Hint のコマンド"
+        Assert-Eq $true ($next.StartsWith('Hint: run pwsh -NoProfile -File .agents/workflow/scripts/text-refine.ps1 ')) "Hint は Unchecked の次"
+        Assert-Contains $next "-YomiyasuCheck" "Hint のコマンド"
         Assert-Eq 'Next: escalate reason=refine-unchecked' $lines[-1] "最後の行"
     } finally { Remove-TestHome }
 }
@@ -338,6 +361,37 @@ Invoke-TestCase "text-refine: dispatch でも tasks は依頼文を出す" {
         Invoke-Script text-refine.ps1 tasks .agents/workflow/runs/refine/tasks.md
         Assert-Eq 0 $script:Code "exit: $($script:Err)"
         Assert-Eq "Next: refine" (@($script:Out -split "`n")[-1]) "最後の行"
+    } finally { Remove-TestHome }
+}
+
+Invoke-TestCase "text-refine: -YomiyasuCheck は原文と推敲後を区切りの行で標準入力から渡す" {
+    New-TestHome
+    try {
+        Set-Refine 'yomiyasu'
+        Write-SkillMd "$script:TestHome/.agents/skills/yomiyasu/SKILL.md" 'yomiyasu'
+        Write-YomiyasuCheckStub
+        Write-Utf8File "$script:Proj/.agents/workflow/runs/refine/pr_body.md" "本文`n"
+        Write-Utf8File "$script:Proj/.agents/workflow/runs/refine/pr_body.refined.md" "推敲済み"
+        Invoke-Script text-refine.ps1 pr_body .agents/workflow/runs/refine/pr_body.md -YomiyasuCheck
+        Assert-Eq 0 $script:Code "exit: $($script:Err)"
+        Assert-Contains $script:Out "stub-ok" "検査の出力"
+        Assert-Eq "run --stdin" ([System.IO.File]::ReadAllText("$script:Proj/.yomiyasu/stub-argv.txt")) "検査の引数"
+        $expected = [System.Text.Encoding]::UTF8.GetBytes("<<<yomiyasu:original>>>`n本文`n<<<yomiyasu:final>>>`n推敲済み")
+        $actual = [System.IO.File]::ReadAllBytes("$script:Proj/.yomiyasu/stub-stdin.bin")
+        Assert-Eq ([Convert]::ToBase64String($expected)) ([Convert]::ToBase64String($actual)) "標準入力のバイト列"
+    } finally { Remove-TestHome }
+}
+
+Invoke-TestCase "text-refine: -YomiyasuCheck は推敲後のファイルが無いと exit 1" {
+    New-TestHome
+    try {
+        Set-Refine 'yomiyasu'
+        Write-SkillMd "$script:TestHome/.agents/skills/yomiyasu/SKILL.md" 'yomiyasu'
+        Write-YomiyasuCheckStub
+        Write-Utf8File "$script:Proj/.agents/workflow/runs/refine/pr_body.md" "本文`n"
+        Invoke-Script text-refine.ps1 pr_body .agents/workflow/runs/refine/pr_body.md -YomiyasuCheck
+        Assert-Eq 1 $script:Code "exit 1"
+        Assert-Contains $script:Err "not found: .agents/workflow/runs/refine/pr_body.refined.md" "推敲後が無い"
     } finally { Remove-TestHome }
 }
 
